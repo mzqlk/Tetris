@@ -20,7 +20,7 @@ export function calculateHardDropScore(cellsDropped: number): number {
   return cellsDropped * 2;
 }
 
-export function calculateLevel(totalLines: number): number {
+export function calculateLevel(_currentLevel: number, totalLines: number): number {
   const newLevel = Math.floor(totalLines / LINES_PER_LEVEL) + 1;
   return Math.min(newLevel, MAX_LEVEL);
 }

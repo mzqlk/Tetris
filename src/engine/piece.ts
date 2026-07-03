@@ -1,6 +1,5 @@
 import type { Piece, PieceType, Board } from '../types';
 import {
-  PIECE_MATRICES,
   WALL_KICK_JLSTZ,
   WALL_KICK_I,
   BOARD_WIDTH,
