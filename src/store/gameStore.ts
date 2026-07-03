@@ -179,32 +179,21 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const state = get();
     if (state.status !== 'playing' || !state.currentPiece) return;
 
-    // Update flash timer
-    if (state.flashTimer > 0) {
-      const newFlashTimer = state.flashTimer - deltaTime;
-      if (newFlashTimer <= 0) {
-        set({ flashRows: [], flashTimer: 0 });
-      } else {
-        set({ flashTimer: newFlashTimer });
-      }
-    }
+    // Calculate timer updates
+    const newFlashTimer = state.flashTimer > 0 ? state.flashTimer - deltaTime : 0;
+    const flashRows = newFlashTimer > 0 ? state.flashRows : [];
+    const flashTimer = Math.max(newFlashTimer, 0);
 
-    // Update trail timer
-    if (state.trailTimer > 0) {
-      const newTrailTimer = state.trailTimer - deltaTime;
-      if (newTrailTimer <= 0) {
-        set({ hardDropTrail: [], trailTimer: 0 });
-      } else {
-        set({ trailTimer: newTrailTimer });
-      }
-    }
+    const newTrailTimer = state.trailTimer > 0 ? state.trailTimer - deltaTime : 0;
+    const hardDropTrail = newTrailTimer > 0 ? state.hardDropTrail : [];
+    const trailTimer = Math.max(newTrailTimer, 0);
 
     // Gravity
     const { shouldDrop: drop, newTimer } = shouldDrop(state.dropTimer, state.level, deltaTime);
     if (drop) {
       const moved = movePiece(state.board, state.currentPiece, 0, 1);
       if (moved) {
-        set({ currentPiece: moved, dropTimer: newTimer });
+        set({ currentPiece: moved, dropTimer: newTimer, flashRows, flashTimer, hardDropTrail, trailTimer });
       } else {
         // Piece can't move down — lock it
         const newBoard = lockPiece(state.board, state.currentPiece);
@@ -227,11 +216,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
           dropTimer: 0,
           flashRows: clearedRows,
           flashTimer: 300,
+          hardDropTrail: [],
+          trailTimer: 0,
           status: result.gameOver ? 'gameover' : 'playing',
         });
       }
     } else {
-      set({ dropTimer: newTimer });
+      set({ dropTimer: newTimer, flashRows, flashTimer, hardDropTrail, trailTimer });
     }
   },
 
