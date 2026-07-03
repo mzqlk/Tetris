@@ -1,0 +1,46 @@
+.board {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 160px;
+}
+
+.label {
+  font-family: 'Fira Code', 'JetBrains Mono', 'Courier New', monospace;
+  font-size: 12px;
+  color: #4488aa;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  margin-bottom: 4px;
+}
+
+.value {
+  font-family: 'Fira Code', 'JetBrains Mono', 'Courier New', monospace;
+  font-size: 28px;
+  color: #00f0ff;
+  text-shadow: 0 0 10px rgba(0, 240, 255, 0.5), 0 0 20px rgba(0, 240, 255, 0.3);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+}
+
+.nextLabel {
+  font-family: 'Fira Code', 'JetBrains Mono', 'Courier New', monospace;
+  font-size: 12px;
+  color: #4488aa;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  margin-bottom: 8px;
+}
+
+.nextCanvasWrapper {
+  background: #0a0e1a;
+  border: 1px solid #1a1e3a;
+  border-radius: 4px;
+  padding: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}

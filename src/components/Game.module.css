@@ -1,0 +1,17 @@
+.gameContainer {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 40px;
+  min-height: 100vh;
+  background: #0a0e1a;
+}
+
+.canvasWrapper {
+  position: relative;
+  border: 2px solid #00f0ff;
+  box-shadow: 0 0 15px rgba(0, 240, 255, 0.3), 0 0 30px rgba(0, 240, 255, 0.1),
+    inset 0 0 15px rgba(0, 240, 255, 0.1);
+  border-radius: 2px;
+}
