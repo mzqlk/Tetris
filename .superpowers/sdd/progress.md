@@ -6,4 +6,7 @@ Task 3: complete (piece engine, review clean)
 Task 4: complete (scorer + gravity, review clean)
 Task 5: complete (Zustand game store, review clean)
 Task 6: complete (canvas renderer, review clean)
+Task 7: complete (game loop hook, review clean)
+Task 8: complete (React components, review clean)
+Task 9: complete (polish + integration, tick fix committed)
 
