@@ -30,7 +30,8 @@ function drawFromBag(bag: PieceType[]): { type: PieceType; newBag: PieceType[] }
   return { type, newBag: currentBag };
 }
 
-function spawnNextPiece(bag: PieceType[], board: Board): {
+/** Initial spawn: draw two pieces — one to play, one to preview. */
+function spawnInitial(bag: PieceType[], board: Board): {
   currentPiece: Piece;
   nextPiece: Piece;
   bag: PieceType[];
@@ -42,13 +43,33 @@ function spawnNextPiece(bag: PieceType[], board: Board): {
   const currentPiece = createPiece(first.type);
   const nextPiece = createPiece(second.type);
 
-  const gameOver = isGameOver(board, currentPiece);
-
   return {
     currentPiece,
     nextPiece,
     bag: second.newBag,
-    gameOver,
+    gameOver: isGameOver(board, currentPiece),
+  };
+}
+
+/**
+ * After a lock: the piece the player was shown becomes the piece they play,
+ * and exactly one new piece is drawn for the preview. Drawing two here would
+ * silently discard the previewed piece and break the 7-bag guarantee.
+ */
+function promoteNextPiece(bag: PieceType[], board: Board, preview: Piece): {
+  currentPiece: Piece;
+  nextPiece: Piece;
+  bag: PieceType[];
+  gameOver: boolean;
+} {
+  const currentPiece = createPiece(preview.type);
+  const drawn = drawFromBag(bag);
+
+  return {
+    currentPiece,
+    nextPiece: createPiece(drawn.type),
+    bag: drawn.newBag,
+    gameOver: isGameOver(board, currentPiece),
   };
 }
 
@@ -62,7 +83,8 @@ function lockAndSpawn(
   bag: PieceType[],
   score: number,
   level: number,
-  lines: number
+  lines: number,
+  preview: Piece | null
 ): {
   board: Board;
   currentPiece: Piece;
@@ -81,7 +103,9 @@ function lockAndSpawn(
   const totalLines = lines + linesCleared;
   const newLevel = calculateLevel(totalLines);
 
-  const result = spawnNextPiece(bag, boardAfterClear);
+  const result = preview
+    ? promoteNextPiece(bag, boardAfterClear, preview)
+    : spawnInitial(bag, boardAfterClear);
 
   return {
     board: boardAfterClear,
@@ -114,7 +138,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   startGame: () => {
     const board = createEmptyBoard();
     const initialBag = generateBag();
-    const result = spawnNextPiece(initialBag, board);
+    const result = spawnInitial(initialBag, board);
     set({
       board,
       currentPiece: result.currentPiece,
@@ -190,7 +214,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       rotation: currentPiece.rotation,
     };
 
-    const spawned = lockAndSpawn(board, dropped, get().bag, score + hardDropScore, get().level, get().lines);
+    const spawned = lockAndSpawn(
+      board, dropped, get().bag, score + hardDropScore, get().level, get().lines, get().nextPiece
+    );
 
     set({
       ...spawned,
@@ -237,7 +263,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       } else {
         // Piece can't move down — lock it
         const spawned = lockAndSpawn(
-          state.board, state.currentPiece, state.bag, state.score, state.level, state.lines
+          state.board, state.currentPiece, state.bag, state.score, state.level, state.lines, state.nextPiece
         );
 
         set({

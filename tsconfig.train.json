@@ -3,22 +3,17 @@
     "target": "ES2022",
     "lib": ["ES2023"],
     "module": "ESNext",
-    "skipLibCheck": true,
-
-    /* Bundler mode */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
     "isolatedModules": true,
     "moduleDetection": "force",
     "noEmit": true,
-
-    /* Linting */
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true,
+    "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["vite.config.ts", "vitest.config.ts"]
+  "include": ["training", "src/ai", "src/types.ts", "src/constants.ts", "src/engine"]
 }
