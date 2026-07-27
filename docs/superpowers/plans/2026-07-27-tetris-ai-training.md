@@ -1001,21 +1001,23 @@ Expected: FAIL —— `Failed to resolve import "./weights"`
 
 - [ ] **Step 3: 建初始权重文件**
 
-训练还没跑过，先用 Dellacherie 风格的手调权重占位，这样 `import` 从第一天起就能解析。新建 `src/ai/trained-weights.json`（数值是把 `[-0.30,-0.60,-0.20,-0.10,0.25,-0.35,-0.30,-0.40,-0.20]` 做 L2 归一化的结果，范数为 1）：
+训练还没跑过，先用 Dellacherie 风格的手调权重占位，这样 `import` 从第一天起就能解析。新建 `src/ai/trained-weights.json`。
+
+数值必须是 `[-0.3,-0.6,-0.2,-0.1,0.25,-0.35,-0.3,-0.4,-0.2]` 做 L2 归一化后的**全精度**结果——本任务的测试断言 L2 范数精确到 6 位小数（`toBeCloseTo(1, 6)`，即误差 < 5e-7），而把各分量四舍五入到 6 位小数会让范数偏离 1 约 1.35e-6，刚好过不了。照抄下面的数字，不要再四舍五入：
 
 ```json
 {
   "version": 1,
   "weights": {
-    "aggregateHeight": -0.303821,
-    "holes": -0.607643,
-    "bumpiness": -0.202548,
-    "maxHeight": -0.101274,
-    "linesCleared": 0.253185,
-    "landingHeight": -0.354458,
-    "rowTransitions": -0.303821,
-    "colTransitions": -0.405095,
-    "wellDepth": -0.202548
+    "aggregateHeight": -0.30382181012509996,
+    "holes": -0.6076436202501999,
+    "bumpiness": -0.20254787341673333,
+    "maxHeight": -0.10127393670836667,
+    "linesCleared": 0.25318484177091666,
+    "landingHeight": -0.3544587784792833,
+    "rowTransitions": -0.30382181012509996,
+    "colTransitions": -0.40509574683346666,
+    "wellDepth": -0.20254787341673333
   },
   "meanLines": 0,
   "evalGames": 0,
