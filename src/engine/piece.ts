@@ -45,11 +45,11 @@ export function rotatePiece(board: Board, piece: Piece, clockwise: boolean = tru
   return piece; // No valid position found — rotation fails
 }
 
-export function generateBag(): PieceType[] {
+export function generateBag(rng: () => number = Math.random): PieceType[] {
   const bag: PieceType[] = [1, 2, 3, 4, 5, 6, 7];
   // Fisher-Yates shuffle
   for (let i = bag.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = Math.floor(rng() * (i + 1));
     [bag[i], bag[j]] = [bag[j], bag[i]];
   }
   return bag;
