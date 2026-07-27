@@ -29,7 +29,9 @@ describe('evalMove', () => {
       const r = evalMove(board, p, zeros());
       if (r.linesCleared > 0) {
         cleared = r.linesCleared;
-        expect(r.boardAfter[0].every((c) => c === 0)).toBe(true);
+        // old row 20 (piece cell in column 0 only) must have shifted down into index 21
+        expect(r.boardAfter[21][0]).toBe(1);
+        expect(r.boardAfter[21].slice(1).every((c) => c === 0)).toBe(true);
       }
     }
     expect(cleared).toBe(1);
