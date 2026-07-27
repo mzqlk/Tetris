@@ -7,6 +7,11 @@ dist/
 # Vite cache
 *.local
 
+# Environment variables
+.env
+.env.*
+!.env.example
+
 # Editor
 .vscode/
 .idea/
@@ -20,3 +25,6 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# ESLint
+.eslintcache

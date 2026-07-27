@@ -25,6 +25,12 @@ export interface ScoreResult {
   linesCleared: number;
 }
 
+export interface HardDropTrail {
+  positions: Position[];
+  pieceType: PieceType;
+  rotation: number;
+}
+
 export interface GameState {
   board: Board;
   currentPiece: Piece | null;
@@ -37,6 +43,6 @@ export interface GameState {
   dropTimer: number;
   flashRows: number[];
   flashTimer: number;
-  hardDropTrail: Position[];
+  hardDropTrail: HardDropTrail | null;
   trailTimer: number;
 }

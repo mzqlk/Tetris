@@ -71,13 +71,18 @@ export function clearLines(board: Board): ClearResult {
 }
 
 export function getGhostPosition(board: Board, piece: Piece): Position {
-  let ghostY = piece.position.y;
+  const ghostPos = { x: piece.position.x, y: piece.position.y };
+  const ghostPiece: Piece = { type: piece.type, rotation: piece.rotation, position: ghostPos };
 
-  while (isValidPosition(board, { ...piece, position: { x: piece.position.x, y: ghostY + 1 } })) {
-    ghostY++;
+  // Try moving down one row at a time — mutate ghostPos in place to avoid per-iteration allocations
+  ghostPos.y += 1;
+  while (isValidPosition(board, ghostPiece)) {
+    ghostPos.y += 1;
   }
+  // Went one row too far — back up to the last valid position
+  ghostPos.y -= 1;
 
-  return { x: piece.position.x, y: ghostY };
+  return { x: ghostPos.x, y: ghostPos.y };
 }
 
 export function isGameOver(board: Board, piece: Piece): boolean {

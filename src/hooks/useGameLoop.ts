@@ -43,7 +43,7 @@ export function useGameLoop(canvasRef: React.RefObject<HTMLCanvasElement | null>
       }
 
       drawLineClearFlash(ctx, state.flashRows, state.flashTimer);
-      drawHardDropTrail(ctx, state.hardDropTrail, state.trailTimer, state.currentPiece?.type ?? 0);
+      drawHardDropTrail(ctx, state.hardDropTrail, state.trailTimer);
 
       rafRef.current = requestAnimationFrame(gameLoop);
     };

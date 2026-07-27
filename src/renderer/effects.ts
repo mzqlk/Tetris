@@ -1,5 +1,6 @@
 import { BOARD_WIDTH, BOARD_HEIGHT, BOARD_BUFFER, CELL_SIZE, PIECE_COLORS } from '../constants';
-import type { Position } from '../types';
+import type { HardDropTrail } from '../types';
+import { getPieceCells } from '../engine/board';
 
 interface Particle {
   x: number;
@@ -56,8 +57,16 @@ export function updateAndDrawParticles(ctx: CanvasRenderingContext2D, deltaTime:
 
   ctx.globalAlpha = 1.0;
 
+  // In-place filter: remove dead particles without allocating a new array each frame
+  let writeIdx = 0;
+  for (let i = 0; i < particles.length; i++) {
+    if (particles[i].life > 0) {
+      particles[writeIdx++] = particles[i];
+    }
+  }
+  particles.length = writeIdx;
+
   // Respawn dead particles
-  particles = particles.filter(p => p.life > 0);
   while (particles.length < 30) {
     particles.push({
       x: Math.random() * canvasWidth,
@@ -94,26 +103,32 @@ export function drawLineClearFlash(
 
 export function drawHardDropTrail(
   ctx: CanvasRenderingContext2D,
-  trail: Position[],
-  trailTimer: number,
-  pieceType: number
+  trail: HardDropTrail | null,
+  trailTimer: number
 ): void {
-  if (trail.length === 0) return;
+  if (!trail || trail.positions.length === 0) return;
 
-  const color = PIECE_COLORS[pieceType as keyof typeof PIECE_COLORS];
+  const color = PIECE_COLORS[trail.pieceType];
   const alpha = Math.min(trailTimer / 100, 1.0) * 0.4;
 
-  for (const pos of trail) {
-    const displayRow = pos.y - BOARD_BUFFER;
-    if (displayRow >= 0) {
-      ctx.globalAlpha = alpha;
-      ctx.fillStyle = color;
-      ctx.shadowColor = color;
-      ctx.shadowBlur = 10;
-      ctx.fillRect(pos.x * CELL_SIZE, displayRow * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+  for (const pos of trail.positions) {
+    // Render the full piece silhouette at each stored position
+    const ghostPiece = { type: trail.pieceType, rotation: trail.rotation, position: pos };
+    const cells = getPieceCells(ghostPiece);
+
+    for (const cell of cells) {
+      const displayRow = cell.y - BOARD_BUFFER;
+      if (displayRow >= 0) {
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = color;
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 10;
+        ctx.fillRect(cell.x * CELL_SIZE, displayRow * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+      }
     }
   }
 
   ctx.shadowBlur = 0;
+  ctx.shadowColor = 'transparent';
   ctx.globalAlpha = 1.0;
 }

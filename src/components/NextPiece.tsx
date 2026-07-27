@@ -2,6 +2,7 @@ import { useRef, useEffect } from 'react';
 import { useGameStore } from '../store/gameStore';
 import { PIECE_COLORS, CELL_SIZE } from '../constants';
 import { getPieceCells } from '../engine/board';
+import { drawBlock } from '../renderer/drawBoard';
 
 export default function NextPiece() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -33,24 +34,7 @@ export default function NextPiece() {
     const offsetY = (canvas.height - pieceH) / 2 - minY * CELL_SIZE;
 
     for (const cell of cells) {
-      const x = cell.x * CELL_SIZE + offsetX;
-      const y = cell.y * CELL_SIZE + offsetY;
-      const inset = 2;
-      ctx.fillStyle = color;
-      ctx.fillRect(x + inset, y + inset, CELL_SIZE - inset * 2, CELL_SIZE - inset * 2);
-
-      const gradient = ctx.createLinearGradient(x, y, x + CELL_SIZE, y + CELL_SIZE);
-      gradient.addColorStop(0, 'rgba(255,255,255,0.3)');
-      gradient.addColorStop(0.5, 'rgba(255,255,255,0.05)');
-      gradient.addColorStop(1, 'rgba(0,0,0,0.3)');
-      ctx.fillStyle = gradient;
-      ctx.fillRect(x + inset, y + inset, CELL_SIZE - inset * 2, CELL_SIZE - inset * 2);
-
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1;
-      ctx.globalAlpha = 0.8;
-      ctx.strokeRect(x + inset, y + inset, CELL_SIZE - inset * 2, CELL_SIZE - inset * 2);
-      ctx.globalAlpha = 1.0;
+      drawBlock(ctx, cell.x, cell.y, color, 1.0, offsetX, offsetY);
     }
   }, [nextPiece]);
 

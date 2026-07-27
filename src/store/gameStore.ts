@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { GameState, Piece, PieceType, Position, Board } from '../types';
+import type { GameState, Piece, PieceType, Position, Board, HardDropTrail } from '../types';
 import { createEmptyBoard, lockPiece, clearLines, isGameOver } from '../engine/board';
 import { createPiece, rotatePiece, generateBag, movePiece } from '../engine/piece';
 import { calculateScore, calculateSoftDropScore, calculateHardDropScore, calculateLevel } from '../engine/scorer';
@@ -52,6 +52,50 @@ function spawnNextPiece(bag: PieceType[], board: Board): {
   };
 }
 
+/**
+ * Shared lock → clear → score → spawn pipeline.
+ * Used by both hardDrop and gravity-lock to avoid duplicated logic.
+ */
+function lockAndSpawn(
+  board: Board,
+  piece: Piece,
+  bag: PieceType[],
+  score: number,
+  level: number,
+  lines: number
+): {
+  board: Board;
+  currentPiece: Piece;
+  nextPiece: Piece;
+  bag: PieceType[];
+  score: number;
+  level: number;
+  lines: number;
+  status: 'playing' | 'gameover';
+  flashRows: number[];
+} {
+  const newBoard = lockPiece(board, piece);
+  const { clearedRows, newBoard: boardAfterClear } = clearLines(newBoard);
+  const linesCleared = clearedRows.length;
+  const lineScore = calculateScore(linesCleared, level);
+  const totalLines = lines + linesCleared;
+  const newLevel = calculateLevel(totalLines);
+
+  const result = spawnNextPiece(bag, boardAfterClear);
+
+  return {
+    board: boardAfterClear,
+    currentPiece: result.currentPiece,
+    nextPiece: result.nextPiece,
+    bag: result.bag,
+    score: score + lineScore,
+    level: newLevel,
+    lines: totalLines,
+    status: result.gameOver ? 'gameover' : 'playing',
+    flashRows: clearedRows,
+  };
+}
+
 export const useGameStore = create<GameStore>((set, get) => ({
   board: createEmptyBoard(),
   currentPiece: null,
@@ -64,7 +108,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   dropTimer: 0,
   flashRows: [],
   flashTimer: 0,
-  hardDropTrail: [],
+  hardDropTrail: null,
   trailTimer: 0,
 
   startGame: () => {
@@ -83,7 +127,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       dropTimer: 0,
       flashRows: [],
       flashTimer: 0,
-      hardDropTrail: [],
+      hardDropTrail: null,
       trailTimer: 0,
     });
   },
@@ -139,30 +183,21 @@ export const useGameStore = create<GameStore>((set, get) => ({
       cellsDropped++;
     }
 
-    const newScore = score + calculateHardDropScore(cellsDropped);
-    const newBoard = lockPiece(board, dropped);
-    const { clearedRows, newBoard: boardAfterClear } = clearLines(newBoard);
-    const linesCleared = clearedRows.length;
-    const lineScore = calculateScore(linesCleared, get().level);
-    const totalLines = get().lines + linesCleared;
-    const newLevel = calculateLevel(get().level, totalLines);
+    const hardDropScore = calculateHardDropScore(cellsDropped);
+    const trail: HardDropTrail = {
+      positions: trailPositions,
+      pieceType: currentPiece.type,
+      rotation: currentPiece.rotation,
+    };
 
-    const result = spawnNextPiece(get().bag, boardAfterClear);
+    const spawned = lockAndSpawn(board, dropped, get().bag, score + hardDropScore, get().level, get().lines);
 
     set({
-      board: boardAfterClear,
-      currentPiece: result.currentPiece,
-      nextPiece: result.nextPiece,
-      bag: result.bag,
-      score: newScore + lineScore,
-      level: newLevel,
-      lines: totalLines,
+      ...spawned,
       dropTimer: 0,
-      flashRows: clearedRows,
       flashTimer: 300,
-      hardDropTrail: trailPositions,
+      hardDropTrail: trail,
       trailTimer: 200,
-      status: result.gameOver ? 'gameover' : 'playing',
     });
   },
 
@@ -177,16 +212,21 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   tick: (deltaTime: number) => {
     const state = get();
-    if (state.status !== 'playing' || !state.currentPiece) return;
 
-    // Calculate timer updates
+    // Always update timers — even during gameover, so trails and flashes fade out
     const newFlashTimer = state.flashTimer > 0 ? state.flashTimer - deltaTime : 0;
     const flashRows = newFlashTimer > 0 ? state.flashRows : [];
     const flashTimer = Math.max(newFlashTimer, 0);
 
     const newTrailTimer = state.trailTimer > 0 ? state.trailTimer - deltaTime : 0;
-    const hardDropTrail = newTrailTimer > 0 ? state.hardDropTrail : [];
+    const hardDropTrail: HardDropTrail | null = newTrailTimer > 0 ? state.hardDropTrail : null;
     const trailTimer = Math.max(newTrailTimer, 0);
+
+    if (state.status !== 'playing' || !state.currentPiece) {
+      // Still apply timer updates so trails / flashes decay during gameover
+      set({ flashRows, flashTimer, hardDropTrail, trailTimer });
+      return;
+    }
 
     // Gravity
     const { shouldDrop: drop, newTimer } = shouldDrop(state.dropTimer, state.level, deltaTime);
@@ -196,29 +236,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
         set({ currentPiece: moved, dropTimer: newTimer, flashRows, flashTimer, hardDropTrail, trailTimer });
       } else {
         // Piece can't move down — lock it
-        const newBoard = lockPiece(state.board, state.currentPiece);
-        const { clearedRows, newBoard: boardAfterClear } = clearLines(newBoard);
-        const linesCleared = clearedRows.length;
-        const lineScore = calculateScore(linesCleared, state.level);
-        const totalLines = state.lines + linesCleared;
-        const newLevel = calculateLevel(state.level, totalLines);
-
-        const result = spawnNextPiece(state.bag, boardAfterClear);
+        const spawned = lockAndSpawn(
+          state.board, state.currentPiece, state.bag, state.score, state.level, state.lines
+        );
 
         set({
-          board: boardAfterClear,
-          currentPiece: result.currentPiece,
-          nextPiece: result.nextPiece,
-          bag: result.bag,
-          score: state.score + lineScore,
-          level: newLevel,
-          lines: totalLines,
+          ...spawned,
           dropTimer: 0,
-          flashRows: clearedRows,
           flashTimer: 300,
-          hardDropTrail: [],
+          hardDropTrail: null,
           trailTimer: 0,
-          status: result.gameOver ? 'gameover' : 'playing',
         });
       }
     } else {
@@ -227,5 +254,5 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   clearFlashRows: () => set({ flashRows: [], flashTimer: 0 }),
-  clearHardDropTrail: () => set({ hardDropTrail: [], trailTimer: 0 }),
+  clearHardDropTrail: () => set({ hardDropTrail: null, trailTimer: 0 }),
 }));
