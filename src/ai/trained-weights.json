@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "weights": {
+    "aggregateHeight": -0.30382181012509996,
+    "holes": -0.6076436202501999,
+    "bumpiness": -0.20254787341673333,
+    "maxHeight": -0.10127393670836667,
+    "linesCleared": 0.25318484177091666,
+    "landingHeight": -0.3544587784792833,
+    "rowTransitions": -0.30382181012509996,
+    "colTransitions": -0.40509574683346666,
+    "wellDepth": -0.20254787341673333
+  },
+  "meanLines": 0,
+  "evalGames": 0,
+  "gen": 0,
+  "searchDepth": 2,
+  "trainedAt": "2026-07-27T00:00:00.000Z"
+}
