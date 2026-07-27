@@ -4103,7 +4103,6 @@ export function useTrainingLog(pollMs = 1000): { entries: LogEntry[]; error: str
 
 ```tsx
 import { useTrainingLog } from './useTrainingLog';
-import { FitnessChart, WeightEvolutionChart, SigmaHeatmap, BestWeightsChart } from './charts';
 import styles from './App.module.css';
 
 function formatDuration(ms: number): string {
@@ -4154,26 +4153,16 @@ export default function App() {
 
       <div className={styles.grid}>
         <div className={styles.card}>
-          <div className={styles.cardTitle}>Fitness per generation</div>
-          <FitnessChart entries={entries} />
-        </div>
-        <div className={styles.card}>
-          <div className={styles.cardTitle}>Weight evolution (mu)</div>
-          <WeightEvolutionChart entries={entries} />
-        </div>
-        <div className={styles.card}>
-          <div className={styles.cardTitle}>Distribution contraction (sigma)</div>
-          <SigmaHeatmap entries={entries} />
-        </div>
-        <div className={styles.card}>
-          <div className={styles.cardTitle}>Best weights so far</div>
-          <BestWeightsChart entry={entries.reduce((a, b) => (a.best >= b.best ? a : b))} />
+          <div className={styles.cardTitle}>Charts</div>
+          <div className={styles.empty}>图表在 Task 15 接入</div>
         </div>
       </div>
     </div>
   );
 }
 ```
+
+这一版刻意不 import `./charts` —— 该模块要到 Task 15 才存在，现在引用会让本任务的提交无法构建。Task 15 会把这块占位换成四张图。
 
 新建 `src/training/dashboard/main.tsx`：
 
@@ -4190,10 +4179,10 @@ createRoot(document.getElementById('root')!).render(
 );
 ```
 
-- [ ] **Step 9: 运行测试确认通过**
+- [ ] **Step 9: 运行测试与构建确认通过**
 
-Run: `npm test -- src/training/dashboard`
-Expected: all passed（图表组件此刻还不存在，`App.tsx` 会编译失败——这是预期的，Task 15 补上）
+Run: `npm test -- src/training/dashboard && npm run build`
+Expected: 测试全过；构建成功并在 `dist/` 下同时产出 `index.html` 与 `training.html`。本任务的提交必须是可构建的。
 
 - [ ] **Step 10: Commit**
 
@@ -4209,6 +4198,7 @@ git commit -m "feat: add training dashboard shell and log polling"
 **Files:**
 - Create: `src/training/dashboard/charts.tsx`
 - Test: `src/training/dashboard/charts.test.ts`
+- Modify: `src/training/dashboard/App.tsx`（把 Task 14 留下的占位卡片换成四张图）
 
 **Interfaces:**
 - Consumes: `linearScale` / `niceTicks` / `extent`（Task 14）、`LogEntry`（Task 14）、`FEATURE_NAMES`（Task 3）
@@ -4475,12 +4465,43 @@ export function BestWeightsChart({ entry }: { entry: LogEntry }) {
 Run: `npm test -- src/training/dashboard/charts.test.ts`
 Expected: all passed
 
-- [ ] **Step 6: 全量检查**
+- [ ] **Step 6: 把四张图接进 `App.tsx`**
+
+Task 14 在 `App.tsx` 里留了一张占位卡片。现在加上 import：
+
+```tsx
+import { FitnessChart, WeightEvolutionChart, SigmaHeatmap, BestWeightsChart } from './charts';
+```
+
+并把整个 `<div className={styles.grid}>…</div>` 块替换为：
+
+```tsx
+      <div className={styles.grid}>
+        <div className={styles.card}>
+          <div className={styles.cardTitle}>Fitness per generation</div>
+          <FitnessChart entries={entries} />
+        </div>
+        <div className={styles.card}>
+          <div className={styles.cardTitle}>Weight evolution (mu)</div>
+          <WeightEvolutionChart entries={entries} />
+        </div>
+        <div className={styles.card}>
+          <div className={styles.cardTitle}>Distribution contraction (sigma)</div>
+          <SigmaHeatmap entries={entries} />
+        </div>
+        <div className={styles.card}>
+          <div className={styles.cardTitle}>Best weights so far</div>
+          <BestWeightsChart entry={entries.reduce((a, b) => (a.best >= b.best ? a : b))} />
+        </div>
+      </div>
+```
+
+- [ ] **Step 7: 全量检查**
 
 Run: `npm test && npm run build`
 Expected: 均通过；`dist/` 下同时产出 `index.html` 与 `training.html`
 
-- [ ] **Step 7: 人工验证 —— 阶段④的里程碑**
+- [ ] **Step 8: 人工验证 —— 阶段④的里程碑**
 
 先确认空状态：临时移走日志再打开面板。
 
@@ -4505,10 +4526,10 @@ Expected：
 - σ 热力图随代数推进整体变暗（分布收敛）
 - 权重演化图里 `holes`、`colTransitions` 应稳定落在 0 以下
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add src/training/dashboard/charts.tsx src/training/dashboard/charts.test.ts
+git add src/training/dashboard/charts.tsx src/training/dashboard/charts.test.ts src/training/dashboard/App.tsx
 git commit -m "feat: add hand-rolled SVG charts for the training dashboard"
 ```
 
