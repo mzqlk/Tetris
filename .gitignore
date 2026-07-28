@@ -29,3 +29,9 @@ npm-debug.log*
 # ESLint
 .eslintcache
 .gstack/
+
+# AI training artifacts. The model itself is committed at
+# src/ai/trained-weights.json; everything under public/ai is a run artifact.
+public/ai/best-weights.json
+public/ai/training-log.jsonl
+public/ai/checkpoint.json

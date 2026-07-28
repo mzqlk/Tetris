@@ -1,19 +1,19 @@
 {
   "version": 1,
   "weights": {
-    "aggregateHeight": -0.30382181012509996,
-    "holes": -0.6076436202501999,
-    "bumpiness": -0.20254787341673333,
-    "maxHeight": -0.10127393670836667,
-    "linesCleared": 0.25318484177091666,
-    "landingHeight": -0.3544587784792833,
-    "rowTransitions": -0.30382181012509996,
-    "colTransitions": -0.40509574683346666,
-    "wellDepth": -0.20254787341673333
+    "aggregateHeight": -0.5706143354786177,
+    "holes": -0.24634709955986225,
+    "bumpiness": -0.11463564292270817,
+    "maxHeight": -0.15492076225066514,
+    "linesCleared": 0.17566800517901446,
+    "landingHeight": -0.2970121603699603,
+    "rowTransitions": -0.4176225977440524,
+    "colTransitions": -0.4831567247867781,
+    "wellDepth": -0.22281401925311273
   },
-  "meanLines": 0,
-  "evalGames": 0,
-  "gen": 0,
+  "meanLines": 1998.2333333333333,
+  "evalGames": 30,
+  "gen": 10,
   "searchDepth": 2,
-  "trainedAt": "2026-07-27T00:00:00.000Z"
+  "trainedAt": "2026-07-28T03:51:43.423Z"
 }
