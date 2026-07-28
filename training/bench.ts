@@ -13,16 +13,35 @@ interface Args {
 
 function parseArgs(argv: string[]): Args {
   const args: Args = { weights: null, games: 10, depth: 2, maxPieces: 5000, seed: 1 };
+
+  /**
+   * A mistyped value has to fail loudly. Bare `Number(value)` yields NaN, every
+   * loop bound compared against it is immediately false, and the run completes
+   * "successfully" reporting `0/NaN games` with NaN throughput — silently wrong
+   * numbers that go on to inform hyperparameter choices.
+   */
+  const num = (key: string, value: string): number => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) throw new Error(`${key} expects a number, got "${value}"`);
+    return n;
+  };
+
   for (let i = 0; i < argv.length; i += 2) {
     const key = argv[i];
     const value = argv[i + 1];
     if (value === undefined) throw new Error(`missing value for ${key}`);
     switch (key) {
       case '--weights': args.weights = value; break;
-      case '--games': args.games = Number(value); break;
-      case '--depth': args.depth = Number(value) === 1 ? 1 : 2; break;
-      case '--max-pieces': args.maxPieces = Number(value); break;
-      case '--seed': args.seed = Number(value); break;
+      case '--games': args.games = num(key, value); break;
+      case '--depth': {
+        // Coercing anything non-1 to 2 would silently swallow `--depth 3`.
+        const depth = num(key, value);
+        if (depth !== 1 && depth !== 2) throw new Error(`--depth must be 1 or 2, got ${depth}`);
+        args.depth = depth;
+        break;
+      }
+      case '--max-pieces': args.maxPieces = num(key, value); break;
+      case '--seed': args.seed = num(key, value); break;
       default: throw new Error(`unknown flag ${key}`);
     }
   }
