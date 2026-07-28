@@ -23,11 +23,16 @@ export default function AiControls() {
     };
   }, []);
 
-  const active: Weights = useRuntime && runtime ? runtime.weights : DEFAULT_WEIGHTS;
+  // Highlight whichever source is ACTUALLY driving the AI, not merely what the
+  // user would prefer. Before training has run `runtime` is null, so a bare
+  // `useRuntime` would light up "trained" while bundled weights are in use and
+  // the caption below says so.
+  const usingRuntime = useRuntime && runtime !== null;
+  const active: Weights = usingRuntime ? runtime.weights : DEFAULT_WEIGHTS;
 
   useAiPlayer({ enabled, depth, speed, weights: active });
 
-  const source = useRuntime && runtime
+  const source = usingRuntime
     ? `trained · gen ${runtime.gen} · ${Math.round(runtime.meanLines)} lines`
     : DEFAULT_WEIGHTS_META && DEFAULT_WEIGHTS_META.gen > 0
       ? `bundled · gen ${DEFAULT_WEIGHTS_META.gen}`
@@ -77,14 +82,14 @@ export default function AiControls() {
       <div className={styles.row}>
         <button
           type="button"
-          className={`${styles.segment} ${!useRuntime ? styles.segmentActive : ''}`}
+          className={`${styles.segment} ${!usingRuntime ? styles.segmentActive : ''}`}
           onClick={() => setUseRuntime(false)}
         >
           bundled
         </button>
         <button
           type="button"
-          className={`${styles.segment} ${useRuntime ? styles.segmentActive : ''}`}
+          className={`${styles.segment} ${usingRuntime ? styles.segmentActive : ''}`}
           onClick={() => setUseRuntime(true)}
           disabled={runtime === null}
         >

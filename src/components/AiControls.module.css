@@ -58,7 +58,13 @@
   border-radius: 3px;
 }
 
-.segment:hover {
+/*
+ * :not(.segmentActive) is load-bearing. `.segment:hover` has higher specificity
+ * than `.segmentActive` (0,2,0 vs 0,1,0), so without it, hovering the SELECTED
+ * segment repaints its label cyan on the cyan active background and the text
+ * disappears. Reordering the rules does not help — specificity wins over order.
+ */
+.segment:not(.segmentActive):hover {
   color: #00f0ff;
 }
 
@@ -66,6 +72,11 @@
   color: #0a0e1a;
   background: #00f0ff;
   border-color: #00f0ff;
+}
+
+.segment:disabled {
+  color: #24455a;
+  cursor: not-allowed;
 }
 
 .source {
