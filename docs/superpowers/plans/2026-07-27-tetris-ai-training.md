@@ -4213,6 +4213,38 @@ describe('parseLog', () => {
     expect(parseLog(`{"gen":0}\n${line(1)}`)).toHaveLength(1);
   });
 
+  it('keeps older lines that predate a schema addition, with defaults', () => {
+    // elitePieces was added to the log partway through the project, so a
+    // resumed run's file legitimately mixes old and new lines. Dropping the old
+    // ones would blank the dashboard; passing them through undefined crashes
+    // the render, since App formats maxPieces with toLocaleString().
+    const parsed = JSON.parse(line(0));
+    delete parsed.elitePieces;
+    delete parsed.maxPieces;
+
+    const entries = parseLog(JSON.stringify(parsed));
+    expect(entries).toHaveLength(1);
+    expect(entries[0].elitePieces).toBe(0);
+    expect(entries[0].maxPieces).toBe(0);
+    expect(() => entries[0].maxPieces.toLocaleString()).not.toThrow();
+  });
+
+  it('never yields an undefined numeric field', () => {
+    const entries = parseLog(`${line(0)}\n${line(1)}`);
+    for (const e of entries) {
+      for (const key of ['ts', 'std', 'maxPieces', 'medianPieces', 'elitePieces',
+                         'gamesPerCandidate', 'elapsedMs'] as const) {
+        expect(typeof e[key]).toBe('number');
+      }
+    }
+  });
+
+  it('rejects a line whose required field is present but not finite', () => {
+    const parsed = JSON.parse(line(0));
+    parsed.best = null;
+    expect(parseLog(JSON.stringify(parsed))).toHaveLength(0);
+  });
+
   it('sorts by generation', () => {
     const entries = parseLog(`${line(3)}\n${line(1)}\n${line(2)}`);
     expect(entries.map((e) => e.gen)).toEqual([1, 2, 3]);
@@ -4293,12 +4325,24 @@ import type { LogEntry } from './types';
 
 export const LOG_URL = '/ai/training-log.jsonl';
 
+/** Without these a line is meaningless, so it is dropped. */
 const NUMBER_FIELDS = ['gen', 'best', 'mean', 'median', 'worst'] as const;
 const ARRAY_FIELDS = ['mu', 'sigma', 'bestWeights'] as const;
+
+const num = (value: unknown, fallback: number): number =>
+  typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 
 /**
  * The trainer appends to this file while we read it, so a truncated final line
  * is routine rather than an error. Skip anything that does not parse.
+ *
+ * Fields beyond the required set are NORMALISED rather than required, because
+ * the log schema grows over time — `elitePieces` was added partway through this
+ * project, so a resumed run's file can legitimately contain older lines without
+ * it. Rejecting those would blank the dashboard on any schema change, and
+ * passing them through undefined crashes the render the moment the UI formats
+ * one (`latest.maxPieces.toLocaleString()` throws on undefined). Defaulting is
+ * the only option that degrades gracefully.
  */
 export function parseLog(text: string): LogEntry[] {
   const entries: LogEntry[] = [];
@@ -4316,10 +4360,19 @@ export function parseLog(text: string): LogEntry[] {
     if (typeof value !== 'object' || value === null) continue;
 
     const e = value as Record<string, unknown>;
-    if (NUMBER_FIELDS.some((f) => typeof e[f] !== 'number')) continue;
+    if (NUMBER_FIELDS.some((f) => typeof e[f] !== 'number' || !Number.isFinite(e[f]))) continue;
     if (ARRAY_FIELDS.some((f) => !Array.isArray(e[f]))) continue;
 
-    entries.push(value as LogEntry);
+    entries.push({
+      ...(value as LogEntry),
+      ts: num(e.ts, 0),
+      std: num(e.std, 0),
+      maxPieces: num(e.maxPieces, 0),
+      medianPieces: num(e.medianPieces, 0),
+      elitePieces: num(e.elitePieces, 0),
+      gamesPerCandidate: num(e.gamesPerCandidate, 0),
+      elapsedMs: num(e.elapsedMs, 0),
+    });
   }
 
   return entries.sort((a, b) => a.gen - b.gen);
