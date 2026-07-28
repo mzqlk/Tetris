@@ -119,14 +119,17 @@ describe('updateCem', () => {
 });
 
 describe('nextMaxPieces', () => {
-  // The trigger is SURVIVED PIECES, not lines. Each piece is 4 cells and a line
-  // is 10, so lines/pieces can never exceed 0.4 — a lines-based trigger of
-  // "0.8 * maxPieces" is mathematically unreachable and would never fire.
-  it('doubles once the median game is bumping against the cap', () => {
+  // The trigger is the ELITES' SURVIVED PIECES, and both halves are measured
+  // rather than assumed. Lines can never exceed 0.4 per piece (4 cells vs 10),
+  // so a lines-based trigger of "0.8 * maxPieces" is unreachable. And across 15
+  // real generations the POPULATION median sat at 18-59 pieces against a 240
+  // threshold and never fired, while the best candidate was already pinned at
+  // 99% of the ceiling from generation 0.
+  it('doubles once the elite games are bumping against the cap', () => {
     expect(nextMaxPieces(300, 250, 100000)).toBe(600);
   });
 
-  it('holds steady while games still end on their own', () => {
+  it('holds steady while the elites still die on their own', () => {
     expect(nextMaxPieces(300, 100, 100000)).toBe(300);
   });
 

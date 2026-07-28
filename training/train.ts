@@ -147,10 +147,22 @@ async function runGeneration(): Promise<void> {
   const bestWeights = candidates[fitness.indexOf(best)];
   const elapsedMs = Date.now() - started;
 
+  // Median survival among the ELITES. This drives the piece cap (see below) and
+  // is worth logging in its own right: it is the one number that shows whether
+  // the cap is currently truncating the candidates CEM actually learns from.
+  const eliteCount = Math.max(1, Math.ceil(cfg.eliteFrac * candidates.length));
+  const elitePieces = median(
+    fitness
+      .map((fit, i) => ({ fit, pieces: meanPieces[i] }))
+      .sort((a, b) => b.fit - a.fit)
+      .slice(0, eliteCount)
+      .map((e) => e.pieces),
+  );
+
   appendFileSync(LOG, JSON.stringify({
     gen, ts: Date.now(), best, mean, median: median(fitness), worst, std,
     mu: state.mu, sigma: state.sigma, bestWeights,
-    maxPieces, medianPieces: median(meanPieces),
+    maxPieces, medianPieces: median(meanPieces), elitePieces,
     gamesPerCandidate: cfg.gamesPerCandidate, elapsedMs,
   }) + '\n');
 
@@ -165,9 +177,9 @@ async function runGeneration(): Promise<void> {
     noise: noiseAt(gen, cfg),
   });
 
-  const raised = nextMaxPieces(maxPieces, median(meanPieces), cfg.maxPiecesCap);
+  const raised = nextMaxPieces(maxPieces, elitePieces, cfg.maxPiecesCap);
   if (raised !== maxPieces) {
-    console.log(`  piece cap ${maxPieces} -> ${raised} (median survival ${median(meanPieces).toFixed(0)})`);
+    console.log(`  piece cap ${maxPieces} -> ${raised} (elite survival ${elitePieces.toFixed(0)})`);
     maxPieces = raised;
   }
 

@@ -91,15 +91,25 @@ export function median(values: number[]): number {
 /**
  * Raise the per-game piece cap once it is the binding constraint.
  *
- * The trigger is median SURVIVED PIECES, not fitness. Fitness is measured in
- * lines, and since a piece contributes 4 cells while a line needs 10, the ratio
- * of lines to pieces can never exceed 0.4 — comparing lines against a fraction
- * of the piece cap would be a condition that can never be true.
+ * `elitePieces` is the median survived-piece count among the ELITES, and both
+ * halves of that matter. Measured evidence for each:
  *
- * Without this, late-generation candidates run for minutes per game and eat the
- * whole time budget.
+ * - PIECES, not fitness. Fitness is lines; a piece contributes 4 cells and a
+ *   line needs 10, so lines/pieces can never exceed 0.4. Comparing lines
+ *   against a fraction of the piece cap is a condition that can never be true.
+ * - ELITES, not the population. Most sampled candidates die within ~40 pieces,
+ *   so the population median never approaches the cap either — measured across
+ *   15 real generations it sat at 18-59 against a 240 threshold and never once
+ *   fired. Meanwhile the best candidate was pinned at 99% of the 0.4 x cap
+ *   ceiling from generation 0 onward. CEM fits its next distribution to the
+ *   elites, so when they are all pressed against the ceiling it can no longer
+ *   tell its best candidate from its worst elite, and selection pressure dies.
+ *
+ * Without a working trigger the cap never rises and fitness saturates; with one
+ * that fires too eagerly, late generations run for minutes per game and eat the
+ * whole time budget. Keying on the elites puts it where the signal actually is.
  */
-export function nextMaxPieces(current: number, medianPieces: number, cap: number): number {
-  if (medianPieces <= 0.8 * current) return current;
+export function nextMaxPieces(current: number, elitePieces: number, cap: number): number {
+  if (elitePieces <= 0.8 * current) return current;
   return Math.min(current * 2, cap);
 }
