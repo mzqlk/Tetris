@@ -1,5 +1,17 @@
 import { Worker } from 'node:worker_threads';
 
+import { TOTAL_ROWS } from '../src/constants';
+
+/**
+ * What a game that never ran is scored at. Zero lines is obvious; the height is
+ * NOT zero, because fitness subtracts it — a crashed game reporting height 0
+ * would look like the tidiest board ever played and could outrank a real
+ * candidate. The worst possible height is the honest reading for "no result".
+ */
+export const FAILED_RESULT = {
+  lines: 0, score: 0, pieces: 0, meanHeight: TOTAL_ROWS, reason: 'error',
+} as const;
+
 export interface SimTask {
   taskId: number;
   weights: number[];
@@ -13,6 +25,7 @@ export interface SimTaskResult {
   lines: number;
   score: number;
   pieces: number;
+  meanHeight: number;
   reason: string;
   failed: boolean;
   error?: string;
@@ -102,7 +115,7 @@ export class WorkerPool {
         console.warn(`[pool] task ${item.task.taskId} ${reason} twice; scoring it 0`);
         complete(item, {
           taskId: item.task.taskId,
-          lines: 0, score: 0, pieces: 0, reason: 'error',
+          ...FAILED_RESULT,
           failed: true, error: reason,
         });
       };

@@ -65,6 +65,14 @@ describe('parseWeightsFile', () => {
     expect(parsed!.gen).toBe(12);
   });
 
+  it('carries the mean stack height the model was selected on', () => {
+    expect(parseWeightsFile({ ...valid, meanHeight: 4.25 })!.meanHeight).toBe(4.25);
+  });
+
+  it('defaults meanHeight to 0 for a file written before that metric existed', () => {
+    expect(parseWeightsFile(valid)!.meanHeight).toBe(0);
+  });
+
   it('rejects a missing feature key', () => {
     const { holes, ...rest } = valid.weights;
     expect(parseWeightsFile({ ...valid, weights: rest })).toBeNull();

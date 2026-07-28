@@ -2,6 +2,7 @@ import { describe, it, expect, afterAll } from 'vitest';
 import type { Worker } from 'node:worker_threads';
 import { WorkerPool, type SimTask } from './pool';
 import { toVector, HANDCRAFTED_WEIGHTS } from '../src/ai/weights';
+import { TOTAL_ROWS } from '../src/constants';
 
 const W = toVector(HANDCRAFTED_WEIGHTS);
 const pool = new WorkerPool(3);
@@ -35,6 +36,7 @@ describe('WorkerPool', () => {
     expect(viaWorker.lines).toBe(direct.lines);
     expect(viaWorker.score).toBe(direct.score);
     expect(viaWorker.pieces).toBe(direct.pieces);
+    expect(viaWorker.meanHeight).toBe(direct.meanHeight);
   }, 60000);
 
   it('records a failed task as zero fitness instead of hanging or throwing', async () => {
@@ -44,6 +46,10 @@ describe('WorkerPool', () => {
     expect(results).toHaveLength(3);
     expect(results[1].failed).toBe(true);
     expect(results[1].lines).toBe(0);
+    // Not 0. Fitness SUBTRACTS height, so a failed game reporting height 0
+    // would read as the tidiest board ever played and could outscore a real
+    // candidate. The worst legal height is the honest stand-in for no result.
+    expect(results[1].meanHeight).toBe(TOTAL_ROWS);
     expect(results[0].failed).toBe(false);
     expect(results[2].failed).toBe(false);
   }, 60000);

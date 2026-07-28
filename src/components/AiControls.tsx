@@ -33,7 +33,11 @@ export default function AiControls() {
   useAiPlayer({ enabled, depth, speed, weights: active });
 
   const source = usingRuntime
-    ? `trained · gen ${runtime.gen} · ${Math.round(runtime.meanLines)} lines`
+    // Height is shown alongside lines because lines alone saturate: any model
+    // that survives its evaluation reports 0.4 x the piece cap, so two models
+    // of quite different quality print the same line count.
+    ? `trained · gen ${runtime.gen} · ${Math.round(runtime.meanLines)} lines` +
+      (runtime.meanHeight > 0 ? ` · height ${runtime.meanHeight.toFixed(1)}` : '')
     : DEFAULT_WEIGHTS_META && DEFAULT_WEIGHTS_META.gen > 0
       ? `bundled · gen ${DEFAULT_WEIGHTS_META.gen}`
       : 'bundled · handcrafted';

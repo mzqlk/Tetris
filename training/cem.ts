@@ -86,10 +86,14 @@ export function updateCem(
 }
 
 export interface CandidateStats {
-  /** Mean lines cleared per candidate — this is the fitness CEM selects on. */
+  /** `meanLines - heightPenalty * meanHeight` — what CEM actually selects on. */
   fitness: number[];
+  /** Mean lines cleared per candidate. */
+  meanLines: number[];
   /** Mean pieces survived per candidate. */
   meanPieces: number[];
+  /** Mean stack height per candidate — the tidiness half of the objective. */
+  meanHeight: number[];
 }
 
 /**
@@ -104,11 +108,17 @@ export interface CandidateStats {
  * a different candidate's fitness. Selection then optimises noise, the run
  * learns nothing, and every log line still looks perfectly healthy. Hence a
  * pure function with tests rather than a loop buried in the orchestration.
+ *
+ * Fitness itself is `meanLines - heightPenalty * meanHeight`. Lines alone
+ * cannot rank candidates that never die (see SimResult.meanHeight and
+ * TrainConfig.heightPenalty); the height term is what keeps the elites ordered
+ * once every one of them has pinned the lines ceiling.
  */
 export function aggregateFitness(
-  results: readonly { lines: number; pieces: number }[],
+  results: readonly { lines: number; pieces: number; meanHeight: number }[],
   population: number,
   gamesPerCandidate: number,
+  heightPenalty: number,
 ): CandidateStats {
   const expected = population * gamesPerCandidate;
   if (results.length !== expected) {
@@ -116,21 +126,31 @@ export function aggregateFitness(
   }
 
   const fitness: number[] = [];
+  const meanLines: number[] = [];
   const meanPieces: number[] = [];
+  const meanHeight: number[] = [];
 
   for (let i = 0; i < population; i++) {
     let lines = 0;
     let pieces = 0;
+    let height = 0;
     for (let j = 0; j < gamesPerCandidate; j++) {
       const r = results[i * gamesPerCandidate + j];
       lines += r.lines;
       pieces += r.pieces;
+      height += r.meanHeight;
     }
-    fitness.push(lines / gamesPerCandidate);
+    // Height is averaged over GAMES, not over pieces: each game already reports
+    // its own per-piece mean. Pooling by pieces instead would silently weight
+    // the long games more, which is backwards — the short games are the ones
+    // that ended badly.
+    meanLines.push(lines / gamesPerCandidate);
     meanPieces.push(pieces / gamesPerCandidate);
+    meanHeight.push(height / gamesPerCandidate);
+    fitness.push(lines / gamesPerCandidate - heightPenalty * (height / gamesPerCandidate));
   }
 
-  return { fitness, meanPieces };
+  return { fitness, meanLines, meanPieces, meanHeight };
 }
 
 export function median(values: number[]): number {

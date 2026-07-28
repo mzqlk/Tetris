@@ -7,6 +7,8 @@ export interface WeightsFile {
   version: number;
   weights: Weights;
   meanLines: number;
+  /** Mean stack height over the same evaluation — 0 in files written before it. */
+  meanHeight: number;
   evalGames: number;
   gen: number;
   searchDepth: 1 | 2;
@@ -67,6 +69,7 @@ export function parseWeightsFile(data: unknown): WeightsFile | null {
     version: num(d.version, 1),
     weights,
     meanLines: num(d.meanLines, 0),
+    meanHeight: num(d.meanHeight, 0),
     evalGames: num(d.evalGames, 0),
     gen: num(d.gen, 0),
     searchDepth: d.searchDepth === 1 ? 1 : 2,

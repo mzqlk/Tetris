@@ -4,7 +4,9 @@ import { parseLog } from './useTrainingLog';
 const line = (gen: number) => JSON.stringify({
   gen, ts: 1785000000000 + gen, best: 100 + gen, mean: 50, median: 40, worst: 1, std: 10,
   mu: Array(9).fill(0.1), sigma: Array(9).fill(0.5), bestWeights: Array(9).fill(0.2),
-  maxPieces: 300, medianPieces: 120, elitePieces: 260, gamesPerCandidate: 5, elapsedMs: 1000,
+  maxPieces: 300, medianPieces: 120, elitePieces: 260,
+  medianLines: 45, medianHeight: 7.5, eliteHeight: 4.2, heightPenalty: 1,
+  gamesPerCandidate: 5, elapsedMs: 1000,
 });
 
 describe('parseLog', () => {
@@ -38,11 +40,20 @@ describe('parseLog', () => {
     const parsed = JSON.parse(line(0));
     delete parsed.elitePieces;
     delete parsed.maxPieces;
+    // Same story for the tidiness fields, added later still.
+    delete parsed.medianLines;
+    delete parsed.medianHeight;
+    delete parsed.eliteHeight;
+    delete parsed.heightPenalty;
 
     const entries = parseLog(JSON.stringify(parsed));
     expect(entries).toHaveLength(1);
     expect(entries[0].elitePieces).toBe(0);
     expect(entries[0].maxPieces).toBe(0);
+    expect(entries[0].medianLines).toBe(0);
+    expect(entries[0].medianHeight).toBe(0);
+    expect(entries[0].eliteHeight).toBe(0);
+    expect(entries[0].heightPenalty).toBe(0);
     expect(() => entries[0].maxPieces.toLocaleString()).not.toThrow();
   });
 
@@ -50,6 +61,7 @@ describe('parseLog', () => {
     const entries = parseLog(`${line(0)}\n${line(1)}`);
     for (const e of entries) {
       for (const key of ['ts', 'std', 'maxPieces', 'medianPieces', 'elitePieces',
+                         'medianLines', 'medianHeight', 'eliteHeight', 'heightPenalty',
                          'gamesPerCandidate', 'elapsedMs'] as const) {
         expect(typeof e[key]).toBe('number');
       }

@@ -1,6 +1,6 @@
 import { parentPort } from 'node:worker_threads';
 import { simulateGame } from '../src/ai/simulate';
-import type { SimTask } from './pool';
+import { FAILED_RESULT, type SimTask } from './pool';
 
 if (parentPort === null) throw new Error('worker.ts must be run as a worker thread');
 const port = parentPort;
@@ -17,7 +17,7 @@ port.on('message', (task: SimTask) => {
   } catch (err) {
     port.postMessage({
       taskId: task.taskId,
-      lines: 0, score: 0, pieces: 0, reason: 'error',
+      ...FAILED_RESULT,
       failed: true,
       error: err instanceof Error ? err.message : String(err),
     });

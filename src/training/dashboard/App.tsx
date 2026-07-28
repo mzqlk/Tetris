@@ -26,10 +26,15 @@ export default function App() {
   const bestEver = Math.max(...entries.map((e) => e.best));
   const totalMs = entries.reduce((s, e) => s + e.elapsedMs, 0);
 
+  // Fitness is `lines - heightPenalty * height`, so labelling any of it "lines"
+  // would be wrong — and the lines half saturates at 0.4 x the piece cap, which
+  // is exactly why elite height is on the board next to it.
   const metrics: [string, string][] = [
     ['Generation', String(latest.gen)],
-    ['Best lines', Math.round(bestEver).toLocaleString()],
-    ['Median lines', Math.round(latest.median).toLocaleString()],
+    ['Best fitness', Math.round(bestEver).toLocaleString()],
+    ['Median fitness', Math.round(latest.median).toLocaleString()],
+    ['Median lines', Math.round(latest.medianLines).toLocaleString()],
+    ['Elite height', latest.eliteHeight.toFixed(1)],
     ['Piece cap', latest.maxPieces.toLocaleString()],
     ['Elapsed', formatDuration(totalMs)],
   ];

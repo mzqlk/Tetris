@@ -32,6 +32,10 @@ npm-debug.log*
 
 # AI training artifacts. The model itself is committed at
 # src/ai/trained-weights.json; everything under public/ai is a run artifact.
-public/ai/best-weights.json
-public/ai/training-log.jsonl
-public/ai/checkpoint.json
+# The whole directory, not the three filenames it happened to hold first, so
+# any future artifact is covered without editing this file again.
+public/ai/
+
+# Retired training runs, kept for forensics. NOT under public/ — Vite copies
+# that directory verbatim into dist, and a dead run has no business shipping.
+training-archive/

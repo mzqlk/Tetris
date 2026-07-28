@@ -73,6 +73,7 @@ console.log(`games=${args.games} depth=${args.depth} maxPieces=${args.maxPieces}
 
 const started = Date.now();
 const lines: number[] = [];
+const heights: number[] = [];
 let totalPieces = 0;
 let capped = 0;
 
@@ -84,24 +85,42 @@ for (let i = 0; i < args.games; i++) {
     depth: args.depth,
   });
   lines.push(result.lines);
+  heights.push(result.meanHeight);
   totalPieces += result.pieces;
   if (result.reason === 'pieceCap') capped++;
   console.log(
     `  game ${String(i + 1).padStart(3)}  lines ${String(result.lines).padStart(7)}` +
-    `  pieces ${String(result.pieces).padStart(7)}  ${result.reason}`,
+    `  pieces ${String(result.pieces).padStart(7)}` +
+    `  height ${result.meanHeight.toFixed(2).padStart(6)}  ${result.reason}`,
   );
 }
 
 const elapsedMs = Date.now() - started;
 const sorted = [...lines].sort((a, b) => a - b);
 const mean = lines.reduce((s, x) => s + x, 0) / lines.length;
+const meanHeight = heights.reduce((s, x) => s + x, 0) / heights.length;
+const sortedHeights = [...heights].sort((a, b) => a - b);
+
+// Lines top out at 0.4 per piece (4 cells per piece, 10 per row), so once a
+// weight set stops dying its line count just restates the cap — measured, two
+// clearly different weight sets both scored 398 of a possible 400. Height is
+// what actually tells them apart, so it is reported next to the ceiling that
+// makes lines useless.
+const ceiling = 0.4 * args.maxPieces;
 
 console.log(`
-mean    ${mean.toFixed(1)}
-median  ${quantile(sorted, 0.5).toFixed(1)}
-min     ${sorted[0]}
-max     ${sorted[sorted.length - 1]}
-capped  ${capped}/${args.games} games hit the piece cap
+lines
+  mean    ${mean.toFixed(1)}  (${(100 * mean / ceiling).toFixed(1)}% of the 0.4 x maxPieces ceiling, ${ceiling})
+  median  ${quantile(sorted, 0.5).toFixed(1)}
+  min     ${sorted[0]}
+  max     ${sorted[sorted.length - 1]}
+  capped  ${capped}/${args.games} games hit the piece cap
+
+mean stack height  (lower is tidier; no ceiling, so this still ranks survivors)
+  mean    ${meanHeight.toFixed(2)}
+  median  ${quantile(sortedHeights, 0.5).toFixed(2)}
+  min     ${sortedHeights[0].toFixed(2)}
+  max     ${sortedHeights[sortedHeights.length - 1].toFixed(2)}
 
 throughput  ${Math.round(totalPieces / (elapsedMs / 1000))} pieces/sec (single core)
 elapsed     ${(elapsedMs / 1000).toFixed(1)}s`);

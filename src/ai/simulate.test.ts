@@ -3,12 +3,12 @@ import { createSimState, applyAction, simulateGame, type SimAction } from './sim
 import { mulberry32 } from './rng';
 import { toVector, HANDCRAFTED_WEIGHTS } from './weights';
 import { useGameStore } from '../store/gameStore';
-import { FEATURE_COUNT } from './features';
+import { FEATURE_COUNT, columnHeights } from './features';
 import { enumeratePlacements } from './placements';
 import { boardFrom } from './testUtils';
 import { getPieceCells } from '../engine/board';
 import { createPiece } from '../engine/piece';
-import { BOARD_WIDTH } from '../constants';
+import { BOARD_WIDTH, TOTAL_ROWS } from '../constants';
 import type { Board, PieceType } from '../types';
 
 afterEach(() => {
@@ -296,5 +296,79 @@ describe('simulateGame', () => {
   it('rejects a weight vector of the wrong length', () => {
     expect(() => simulateGame({ weights: [1, 2, 3], seed: 1, maxPieces: 10, depth: 1 }))
       .toThrow(/9/);
+  });
+});
+
+describe('board tidiness', () => {
+  const weights = toVector(HANDCRAFTED_WEIGHTS);
+
+  it('accumulates the post-lock stack height on every lock', () => {
+    const sim = createSimState(9);
+    expect(sim.heightSum).toBe(0);
+
+    let expected = 0;
+    for (let i = 0; i < 5; i++) {
+      applyAction(sim, 'hardDrop');
+      expected += Math.max(...columnHeights(sim.board));
+      expect(sim.heightSum).toBe(expected);
+    }
+  });
+
+  it('measures the height after the clear rather than before it', () => {
+    // Four rows one cell short of full: the vertical I completes all of them,
+    // so the board is empty the instant the piece locks. Sampling the height
+    // before clearLines would record 4 here instead of 0 — and would credit the
+    // tidiest possible move with the untidiest reading.
+    const { sim } = seedBoth(boardFrom(Array(4).fill('.#########')));
+    const placement = enumeratePlacements(sim.board, sim.currentPiece!).find((p) =>
+      getPieceCells(p.piece).every((c) => c.x === 0),
+    );
+    expect(placement).toBeDefined();
+
+    for (const move of placement!.moves) {
+      applyAction(sim, (move === 'down' ? 'softDrop' : move) as SimAction);
+    }
+    applyAction(sim, 'hardDrop');
+
+    expect(sim.lines).toBe(4);
+    expect(sim.heightSum).toBe(0);
+  });
+
+  it('reports the mean height a game was played at', () => {
+    const r = simulateGame({ weights, seed: 5, maxPieces: 60, depth: 1 });
+    expect(r.meanHeight).toBeGreaterThan(0);
+    expect(r.meanHeight).toBeLessThan(TOTAL_ROWS);
+  });
+
+  it('reports zero rather than NaN when no piece was ever locked', () => {
+    const r = simulateGame({ weights, seed: 1, maxPieces: 0, depth: 1 });
+    expect(r.pieces).toBe(0);
+    expect(r.meanHeight).toBe(0);
+  });
+
+  it('separates two players that both survive the whole game', () => {
+    // This is the property the whole metric exists for. Both vectors clear
+    // lines and neither dies within the cap, so `lines` pins them to the same
+    // 0.4 x maxPieces ceiling and cannot rank them; the one that is indifferent
+    // to height still plays visibly higher up the board.
+    const careless = toVector(HANDCRAFTED_WEIGHTS);
+    careless[0] = 0; // aggregateHeight
+    careless[3] = 0; // maxHeight
+
+    const tidy = simulateGame({ weights, seed: 11, maxPieces: 200, depth: 1 });
+    const sloppy = simulateGame({ weights: careless, seed: 11, maxPieces: 200, depth: 1 });
+
+    expect(tidy.reason).toBe('pieceCap');
+    expect(sloppy.reason).toBe('pieceCap');
+
+    // Lines cannot tell them apart: both sit within a few percent of the same
+    // 0.4 x maxPieces ceiling (measured 78 and 76 of a possible 80).
+    const ceiling = 0.4 * 200;
+    expect(tidy.lines).toBeGreaterThan(0.9 * ceiling);
+    expect(sloppy.lines).toBeGreaterThan(0.9 * ceiling);
+    expect(Math.abs(sloppy.lines - tidy.lines)).toBeLessThan(0.05 * ceiling);
+
+    // Height can.
+    expect(sloppy.meanHeight).toBeGreaterThan(tidy.meanHeight);
   });
 });

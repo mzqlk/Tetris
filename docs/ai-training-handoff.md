@@ -1,8 +1,8 @@
 # Tetris AI 训练系统 — 交接文档
 
-**写于**：2026-07-28
-**代码状态**：46 个提交已合并到本地 `master`（HEAD `ccd95bd`），**尚未推送**（`git pull` 当时 SSL 握手失败）
-**测试**：148 个，全绿，约 17 秒
+**写于**：2026-07-28（同日更新：适应度加入棋盘整洁度，旧 checkpoint 退役）
+**代码状态**：46 个提交已合并到本地 `master`（HEAD `ccd95bd`），**尚未推送**（`git pull` 当时 SSL 握手失败）；整洁度这一批改动**尚未提交**
+**测试**：159 个，全绿，约 5 秒
 **设计文档**：[`docs/superpowers/specs/2026-07-27-tetris-ai-training-design.md`](superpowers/specs/2026-07-27-tetris-ai-training-design.md)
 **实施计划**：[`docs/superpowers/plans/2026-07-27-tetris-ai-training.md`](superpowers/plans/2026-07-27-tetris-ai-training.md)（约 5000 行，含每个模块的完整代码与理由）
 
@@ -10,7 +10,7 @@
 
 ## 1. 一句话现状
 
-AI 已经能打得很好（30 局 × 5000 步全程未死），训练系统完整可用；**但「训练比手调好多少」尚未被证明**，因为适应度函数在当前设计下会封顶。要让后续训练有意义，得先换指标——细节见第 4 节。
+AI 已经能打得很好（30 局 × 5000 步全程未死），训练系统完整可用。**消行数这个指标会封顶**，所以适应度已经改成 `消行 - 平均堆叠高度`——高度不封顶，能把「都不会死」的候选排出高下（细节见第 4 节）。指标本身现在是可用的；**「训练比手调好多少」仍未被证明**：按新指标量，当前这版训练权重（平均高度 3.23）还略逊于手调权重（3.12），需要用新适应度重跑一轮训练才能下结论。
 
 ---
 
@@ -63,8 +63,8 @@ npm test                    # 148 个测试，约 17 秒
 npm run build               # 产出 dist/index.html 与 dist/training.html
 npm run typecheck:train     # 单独检查 training/（与主应用 tsconfig 分开）
 
-npm run dev                 # http://localhost:5173/          游戏 + AI 面板
-                            # http://localhost:5173/training.html  训练面板
+npm run dev                 # http://localhost:5190/          游戏 + AI 面板
+                            # http://localhost:5190/training.html  训练面板
 
 npm run bench -- --games 30 --depth 2 --max-pieces 2000 --weights public/ai/best-weights.json
 npm run train -- --generations 20
@@ -103,37 +103,84 @@ CEM 是按前 10% 的精英拟合下一代分布的。精英全部并列在天�
 
 已经有三版触发条件先后撞在同一堵墙上：中位消行数（数学上不可达）、中位存活步数（可达但实际到不了）、精英中位存活步数（触发正确，但**永远触发**）。**问题从来不在触发条件，在指标本身。**
 
-### 现在的处置
+### 处置一：给局长上限封顶
 
-`maxPiecesCap` 已压到 **2000**，并且复评饱和时会打印明确警告。判断收敛请看 **mean / median / sigma**，把 `best` 当成饱和量——它只是在复述局长上限。
+`maxPiecesCap` 已压到 **2000**，并且复评的消行项饱和时会打印提示。**消行**这一项仍然是饱和量——它只是在复述局长上限，别拿它判断收敛。
 
-### 建议的下一步（尚未实现）
+### 处置二：棋盘整洁度（已实现）
 
-把**棋盘整洁度**作为第二目标：既然大家都不会死，就比谁活得漂亮。用每局的平均堆叠高度（或平均洞数）参与适应度——平均把堆压在 3 行的候选，明显强于常年顶到 15 行才勉强不死的。
+适应度现在是组合式的：
 
-好处是这个量**没有上限、不会饱和**，而且**保留真实的 7-bag 分布**，练出的权重能直接迁移回真游戏。改动量约半小时：`simulate.ts` 累加每步 `maxHeight`，`SimResult` 多带一个字段，`train.ts` 的 fitness 改成组合式。
+```
+fitness = meanLines - heightPenalty * meanHeight
+```
 
-备选：敌对方块序列（S/Z 洪水，强 AI 也会死）——差异化最彻底，但权重是针对敌对分布练的，未必迁移得回真游戏。
+`meanHeight` 是**每次锁定后（且消行之后）最高列高度**的全局平均，由 `simulate.ts` 累加、`SimResult` 带出。这个量**没有上限也不会饱和**：既然大家都不会死，就比谁活得漂亮——平均把堆压在 3 行的，明显强于常年顶到 15 行才勉强不死的。且它**保留真实的 7-bag 分布**，练出的权重能直接迁移回真游戏。
+
+`heightPenalty = 1.0`，是量出来的，不是拍的。把训练权重按 sigma 0.1 扰动（模拟收敛后的精英池）后两项的跨度：
+
+| 局长上限 | 消行跨度 | 高度跨度 | 饱和候选 |
+|---|---|---|---|
+| 300 | 3.33 | 2.93 | 12/12 |
+| 1200 | 6.00 | 4.38 | 10/12 |
+
+两项量级相当，且**局长上限翻倍后仍然相当**，所以后期不会退化成只看消行。权重不能调太大：高度上限是 `TOTAL_ROWS = 22`，而活满全场值 `0.4 × maxPieces` 分；一旦 `22 × heightPenalty` 逼近 `0.4 × initialMaxPieces`（当前是 120），**5 个方块就顶死的候选因为棋盘几乎全空反而显得最整洁**，CEM 会开始偏爱「干净地速死」。理由与算术都写在 `training/config.ts` 的 `heightPenalty` 注释里。
+
+实测确实区分出来了（`npm run bench --games 3 --depth 2 --max-pieces 600`）：
+
+| 权重 | 消行 | 占天花板 | 平均高度 |
+|---|---|---|---|
+| 手调 | 238.0 | 99.2% | **3.12** |
+| 训练（gen 10） | 238.7 | 99.4% | **3.23** |
+
+消行仍然分不出（差 0.3%），高度分得出（差 3.5%）——顺带说明**当前这版训练权重并不比手调的更整洁**。
+
+冒烟跑（`npm run train -- --generations 2`）里信号也在动：精英中位高度 gen 0 是 7.0，gen 1 降到 3.5，而同期全体中位高度是 14.3。
+
+配套改动：
+
+- `aggregateFitness` 现在返回 `{ fitness, meanLines, meanPieces, meanHeight }`，多收一个 `heightPenalty` 参数
+- 日志每代多写 `medianLines / medianHeight / eliteHeight / heightPenalty`，控制台多打一列 `eliteH`
+- 复评与 `bestEver` **改用组合分 `score` 排名**。只按消行排名的话，复评一饱和（实测 1998.2/2000）就此永远并列，模型再也不会更新
+- 旧 checkpoint 没有 `score` 字段，`--resume` 时会把标杆清零（旧的 `meanLines` 是另一套目标下量的，不可比），下次复评重新发布
+- 池子里失败的任务记为 `meanHeight = TOTAL_ROWS` 而不是 0——适应度是**减**高度的，记 0 会让崩掉的一局显得像史上最整洁的棋盘
+- `bench` 每局和汇总都报高度，并把消行天花板的占比直接打出来
+- 训练面板的指标改叫 Fitness（它早就不是消行了），并加了 Median lines 与 Elite height
+
+### 备选（仍未实现）
+
+敌对方块序列（S/Z 洪水，强 AI 也会死）——差异化最彻底，但权重是针对敌对分布练的，未必迁移得回真游戏。
 
 ---
 
 ## 5. 坑（会浪费时间的那种）
 
-### 当前 checkpoint 是有毒的
+### 有毒的 checkpoint（已处理，2026-07-28）
 
-```
-public/ai/checkpoint.json:  maxPieces = 76800   bestEver = 无（没跑到第 10 代，没复评过）
-```
+那个 `maxPieces = 76800` 的 checkpoint **已经退役归档**，现在 `public/ai/` 是干净的：直接 `npm run train` 从 gen 0、上限 300 开始；`--resume` 会立刻报 `--resume but no checkpoint at ...` 而不是闷头跑三小时。
 
-直接 `--resume` 会**先跑一个约 3 小时的世代**（76800 步/局 × 500 局），之后才被 2000 的新上限拉回来。先改掉或删掉：
+退役的那轮在仓库根目录的 `training-archive/`（同目录 README 记了原委）。**不放在 `public/ai/` 下**：Vite 会把 `public/` 原样拷进 `dist/`，死掉的运行没必要跟着发布。当时的状态与判断：
+
+| | |
+|---|---|
+| `maxPieces` | 76800——`--resume` 会先跑一个约 3 小时的世代（76800 步/局 × 500 局），之后才被 2000 的新上限拉回来 |
+| `bestEver` | 无。8 代没跑到第 10 代，没复评过，**一个模型都没发布** |
+| `sigma` | 仍在 0.61–0.68，几乎没收敛 |
+| `mu` | 按新指标实测（depth 2、cap 600、3 局）平均高度 **3.18**，介于手调 3.12 与已发布训练权重 3.23 之间——8 代什么也没换来 |
+
+加上适应度已经换成组合式，旧日志里 cap 38400 下的 `best = 15358` 与新目标的百位数值混在同一个 `training-log.jsonl` 里会让面板的图彻底失真，所以选择了归档重来而不是把 `maxPieces` 改回 300。
+
+**下次再遇到跑飞的 checkpoint**，两条路：
 
 ```bash
-# 改回 300，保留已有的 mu/sigma 进度
+# 改回 300，保留已有的 mu/sigma 进度（仅当目标函数没变过）
 node -e "const f='public/ai/checkpoint.json';const c=require('./'+f);c.maxPieces=300;require('fs').writeFileSync(f,JSON.stringify(c,null,2))"
 
-# 或者彻底重来
-rm public/ai/checkpoint.json public/ai/training-log.jsonl
+# 或者归档重来（目标函数变过就只能走这条）
+mkdir -p training-archive && mv public/ai/checkpoint.json public/ai/training-log.jsonl training-archive/
 ```
+
+`.gitignore` 现在忽略整个 `public/ai/`（原先只列了三个文件名）与 `training-archive/`，两边都不会漏进 git。
 
 ### 杀训练进程要按内存/CPU 找，不能 grep 命令行
 
@@ -190,7 +237,7 @@ CEM 是搜索式演化，「模型」只有 9 个浮点数，算力全花在博�
 
 按价值排序：
 
-1. **实现第 4 节的「棋盘整洁度」适应度**——这是让后续训练有意义的前提，约半小时
+1. **用新适应度重跑一轮训练**——指标已经就位（第 4 节），旧 checkpoint 也已退役（第 5 节），`npm run train` 直接就是干净的从头开始。跑起来之后看 `eliteH` 这一列是否持续下降；判断标准不是 `best`（它的消行部分仍然饱和）
 2. **推送到远端**（当时 SSL 握手失败，46 个提交还在本地）
 3. 修复 `npm run lint`（补 `eslint.config.js`）——这是 master 上本来就有的问题
 4. 让 `searchDepth` 元数据真正起作用：权重文件的深度与 UI 当前深度不一致时给出提示

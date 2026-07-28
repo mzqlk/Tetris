@@ -48,6 +48,10 @@ export function parseLog(text: string): LogEntry[] {
       maxPieces: num(e.maxPieces, 0),
       medianPieces: num(e.medianPieces, 0),
       elitePieces: num(e.elitePieces, 0),
+      medianLines: num(e.medianLines, 0),
+      medianHeight: num(e.medianHeight, 0),
+      eliteHeight: num(e.eliteHeight, 0),
+      heightPenalty: num(e.heightPenalty, 0),
       gamesPerCandidate: num(e.gamesPerCandidate, 0),
       elapsedMs: num(e.elapsedMs, 0),
     });

@@ -4,7 +4,7 @@ import { createPiece, generateBag, movePiece, rotatePiece } from '../engine/piec
 import {
   calculateScore, calculateSoftDropScore, calculateHardDropScore, calculateLevel,
 } from '../engine/scorer';
-import { FEATURE_COUNT } from './features';
+import { FEATURE_COUNT, columnHeights } from './features';
 import { mulberry32 } from './rng';
 import { bestPlacement } from './search';
 
@@ -20,6 +20,8 @@ export interface SimState {
   lines: number;
   status: 'playing' | 'gameover';
   pieces: number;
+  /** Sum of the stack height sampled after every lock; see `meanHeight`. */
+  heightSum: number;
   rng: () => number;
 }
 
@@ -27,7 +29,28 @@ export interface SimResult {
   lines: number;
   score: number;
   pieces: number;
+  /**
+   * Mean stack height across the game — the tallest column measured after each
+   * lock, averaged over every piece played. 0 for a game that locked nothing.
+   *
+   * This exists because `lines` cannot rank competent players. A piece is 4
+   * cells and a row is 10, so lines can never exceed 0.4 per piece; a candidate
+   * that never dies therefore scores exactly 0.4 x maxPieces no matter how well
+   * it actually plays, and measurement confirms it — three separate runs landed
+   * within 1% of that ceiling, and hand-tuned weights were indistinguishable
+   * from trained ones. Height has no such ceiling: playing at an average of 3
+   * rows and surviving on the brink at 15 are both fully expressible, so this
+   * still separates two players who both survive forever.
+   */
+  meanHeight: number;
   reason: 'gameover' | 'pieceCap';
+}
+
+/** Tallest column on the board — the same quantity as the `maxHeight` feature. */
+function stackHeight(board: Board): number {
+  let max = 0;
+  for (const h of columnHeights(board)) if (h > max) max = h;
+  return max;
 }
 
 function drawFromBag(state: SimState): PieceType {
@@ -47,6 +70,7 @@ export function createSimState(seed: number): SimState {
     lines: 0,
     status: 'playing',
     pieces: 0,
+    heightSum: 0,
     rng,
   };
 
@@ -71,6 +95,9 @@ function lockAndSpawn(state: SimState, piece: Piece): void {
   state.level = calculateLevel(state.lines);
   state.board = newBoard;
   state.pieces += 1;
+  // Sampled AFTER the clear, so a move that fills four rows is credited with
+  // the low board it leaves behind rather than the tall one it briefly made.
+  state.heightSum += stackHeight(newBoard);
 
   const preview = state.nextPiece;
   const current = createPiece(preview ? preview.type : drawFromBag(state));
@@ -161,6 +188,7 @@ export function simulateGame(opts: {
     lines: state.lines,
     score: state.score,
     pieces: state.pieces,
+    meanHeight: state.pieces === 0 ? 0 : state.heightSum / state.pieces,
     reason: state.status === 'gameover' ? 'gameover' : 'pieceCap',
   };
 }
