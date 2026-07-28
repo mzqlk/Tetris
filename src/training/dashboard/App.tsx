@@ -1,4 +1,5 @@
 import { useTrainingLog } from './useTrainingLog';
+import { FitnessChart, WeightEvolutionChart, SigmaHeatmap, BestWeightsChart } from './charts';
 import styles from './App.module.css';
 
 function formatDuration(ms: number): string {
@@ -49,8 +50,20 @@ export default function App() {
 
       <div className={styles.grid}>
         <div className={styles.card}>
-          <div className={styles.cardTitle}>Charts</div>
-          <div className={styles.empty}>图表在 Task 15 接入</div>
+          <div className={styles.cardTitle}>Fitness per generation</div>
+          <FitnessChart entries={entries} />
+        </div>
+        <div className={styles.card}>
+          <div className={styles.cardTitle}>Weight evolution (mu)</div>
+          <WeightEvolutionChart entries={entries} />
+        </div>
+        <div className={styles.card}>
+          <div className={styles.cardTitle}>Distribution contraction (sigma)</div>
+          <SigmaHeatmap entries={entries} />
+        </div>
+        <div className={styles.card}>
+          <div className={styles.cardTitle}>Best weights so far</div>
+          <BestWeightsChart entry={entries.reduce((a, b) => (a.best >= b.best ? a : b))} />
         </div>
       </div>
     </div>
