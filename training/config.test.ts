@@ -1,0 +1,54 @@
+import { describe, it, expect } from 'vitest';
+import { DEFAULT_CONFIG, resolveWorkers } from './config';
+
+describe('resolveWorkers', () => {
+  it('leaves a core free for the rest of the machine by default', () => {
+    expect(resolveWorkers(null, 8)).toBe(7);
+  });
+
+  it('caps the default well below a very large core count', () => {
+    expect(resolveWorkers(null, 64)).toBe(31);
+  });
+
+  it('still yields one worker on a single-core machine', () => {
+    expect(resolveWorkers(null, 1)).toBe(1);
+  });
+
+  it('honours an explicit request', () => {
+    expect(resolveWorkers(4, 32)).toBe(4);
+  });
+
+  it('allows deliberate oversubscription', () => {
+    // Not our call to forbid: a run that wants more workers than cores is
+    // merely slower per worker, not wrong.
+    expect(resolveWorkers(12, 8)).toBe(12);
+  });
+
+  it('rejects a count that would leave the pool with nothing to run on', () => {
+    // WorkerPool(0) spawns no workers, so nothing is ever fed a task and
+    // run() never settles — a multi-hour script that hangs in silence rather
+    // than failing. It has to be caught at the argument, not discovered at 3am.
+    expect(() => resolveWorkers(0, 8)).toThrow(/at least 1/);
+    expect(() => resolveWorkers(-4, 8)).toThrow(/at least 1/);
+  });
+
+  it('rejects a fractional or non-finite count', () => {
+    expect(() => resolveWorkers(2.5, 8)).toThrow(/whole number/);
+    expect(() => resolveWorkers(NaN, 8)).toThrow(/whole number/);
+    expect(() => resolveWorkers(Infinity, 8)).toThrow(/whole number/);
+  });
+});
+
+describe('DEFAULT_CONFIG', () => {
+  it('runs at least one worker on whatever machine this is', () => {
+    expect(DEFAULT_CONFIG.workers).toBeGreaterThanOrEqual(1);
+    expect(Number.isInteger(DEFAULT_CONFIG.workers)).toBe(true);
+  });
+
+  it('keeps the height penalty far below the point where dying tidily wins', () => {
+    // See the heightPenalty comment: once heightPenalty * TOTAL_ROWS (22)
+    // approaches 0.4 * initialMaxPieces, a candidate that tops out early
+    // outranks one that survives, because an empty board reads as immaculate.
+    expect(DEFAULT_CONFIG.heightPenalty * 22).toBeLessThan(0.4 * DEFAULT_CONFIG.initialMaxPieces / 2);
+  });
+});

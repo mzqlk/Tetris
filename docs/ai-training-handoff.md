@@ -68,6 +68,7 @@ npm run dev                 # http://localhost:5190/          游戏 + AI 面板
 
 npm run bench -- --games 30 --depth 2 --max-pieces 2000 --weights public/ai/best-weights.json
 npm run train -- --generations 20
+npm run train -- --generations 20 --workers 8   # 只占 8 个核心（缺省是核心数-1，上限 31）
 npm run train -- --resume
 npm run train               # 无限跑，Ctrl-C 存盘退出
 ```
@@ -205,9 +206,33 @@ Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
 
 复评产出更好的权重时会覆写它（这是被跟踪的文件）。跑冒烟测试后记得 `git checkout src/ai/trained-weights.json`，别把测试产物当成模型提交上去。
 
+### 不想让训练占满 CPU
+
+`--workers N`。worker 池是这个脚本里唯一吃多核的东西，N 个 worker 就是 N 个忙碌核心——这是结构上的上限，不是调优建议。缺省是 `核心数 - 1`（上限 31）。
+
+**代价比想象的小得多。** 同一代（同种子、结果完全一致：best 114.4、eliteH 7.0）：
+
+| workers | gen 0 耗时 |
+|---|---|
+| 31（缺省） | 34.5s |
+| 8 | 39.9s |
+| 4 | 54.2s |
+
+核心砍到 1/4，只慢 16%。原因是**一代的墙钟时间由少数几局长对局的尾巴决定，而不是由总吞吐决定**：大部分候选 40 步就死了，精英要打满 300 步，最后总有几局在单独跑。31 个核心里大半时间是闲着的。
+
+想再温和一点，可以叠加降优先级。worker 是 `worker_threads`——**同一个进程里的线程**，所以设一次进程优先级就覆盖所有 worker：
+
+```powershell
+# 训练跑起来之后执行（进程命令行不含 train.ts，只能按 CPU 找最忙的那个）
+$p = Get-Process node | Sort-Object CPU -Descending | Select-Object -First 1
+$p.PriorityClass = 'BelowNormal'
+```
+
+两者的区别：`--workers` 是**硬性**留出空闲核心，随时都留着；降优先级是让训练**在你不用机器时照样吃满**，你一动它就让路。想安静地后台跑，两个一起用。
+
 ### 训练与 GPU 无关
 
-CEM 是搜索式演化，「模型」只有 9 个浮点数，算力全花在博弈树搜索上。**吃满 CPU、GPU 全程闲置是符合预期的**，不是配置错误。要用 GPU 得换神经网络方案，那是另一个项目。
+CEM 是搜索式演化，「模型」只有 9 个浮点数，算力全花在博弈树搜索上。**CPU 吃满、GPU 全程闲置是符合预期的**，不是配置错误（不想吃满见上一条）。要用 GPU 得换神经网络方案，那是另一个项目。
 
 ---
 

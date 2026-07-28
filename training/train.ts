@@ -1,8 +1,9 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpus } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { DEFAULT_CONFIG, type TrainConfig } from './config';
+import { DEFAULT_CONFIG, resolveWorkers, type TrainConfig } from './config';
 import { WorkerPool, type SimTask } from './pool';
 import {
   initCem, sampleCandidates, updateCem, noiseAt, nextMaxPieces, median,
@@ -72,11 +73,16 @@ function num(key: string, value: string | undefined): number {
   return n;
 }
 
-function parseArgs(argv: string[]): { generations: number | null; resume: boolean } {
-  const out = { generations: null as number | null, resume: false };
+function parseArgs(argv: string[]): {
+  generations: number | null;
+  resume: boolean;
+  workers: number | null;
+} {
+  const out = { generations: null as number | null, resume: false, workers: null as number | null };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--resume') out.resume = true;
     else if (argv[i] === '--generations') out.generations = num(argv[i], argv[++i]);
+    else if (argv[i] === '--workers') out.workers = num(argv[i], argv[++i]);
     else throw new Error(`unknown flag ${argv[i]}`);
   }
   return out;
@@ -121,7 +127,10 @@ function restoreBestEver(raw: Partial<BestEver>): BestEver {
 }
 
 const args = parseArgs(process.argv.slice(2));
-const cfg = DEFAULT_CONFIG;
+// `--workers` is the throttle: the pool is the only thing in this script that
+// consumes more than one core, so N workers means N busy cores and the rest of
+// the machine stays responsive. Everything else comes from config.ts.
+const cfg: TrainConfig = { ...DEFAULT_CONFIG, workers: resolveWorkers(args.workers) };
 mkdirSync(PUBLIC_AI, { recursive: true });
 
 let state: CemState = initCem();
@@ -145,7 +154,11 @@ if (args.resume) {
 }
 
 const pool = new WorkerPool(cfg.workers);
-console.log(`training with ${cfg.workers} workers, depth ${cfg.depth}, population ${cfg.population}`);
+console.log(
+  `training with ${cfg.workers} workers of ${cpus().length} cores` +
+  `${args.workers === null ? '' : ' (--workers)'}` +
+  `, depth ${cfg.depth}, population ${cfg.population}`,
+);
 
 function saveCheckpoint() {
   const cp: Checkpoint = {

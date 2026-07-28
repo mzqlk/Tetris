@@ -1,5 +1,29 @@
 import { cpus } from 'node:os';
 
+/**
+ * How many worker threads a run gets, from an optional `--workers N`.
+ *
+ * `requested === null` means "decide for me": one thread short of the core
+ * count, so the machine stays usable, capped at 31 because past that the
+ * generation is bounded by the slowest single game rather than by throughput.
+ *
+ * A bad count has to throw here rather than reach the pool. `WorkerPool(0)`
+ * spawns nothing, so no task is ever fed to anything and `run()` never settles:
+ * a multi-hour script that hangs in perfect silence. `WorkerPool(NaN)` does the
+ * same. Both are far cheaper to catch at the argument.
+ */
+export function resolveWorkers(
+  requested: number | null,
+  available: number = cpus().length,
+): number {
+  if (requested === null) return Math.max(1, Math.min(31, available - 1));
+  if (!Number.isInteger(requested)) {
+    throw new Error(`--workers expects a whole number, got ${requested}`);
+  }
+  if (requested < 1) throw new Error(`--workers must be at least 1, got ${requested}`);
+  return requested;
+}
+
 export interface TrainConfig {
   /** Candidates sampled per generation. */
   population: number;
@@ -82,7 +106,7 @@ export const DEFAULT_CONFIG: TrainConfig = {
   noiseDecay: 0.95,
   noiseFloor: 0.01,
   baseSeed: 20260727,
-  workers: Math.max(1, Math.min(31, cpus().length - 1)),
+  workers: resolveWorkers(null),
   reevalEvery: 10,
   reevalGames: 30,
   reevalMaxPieces: 5000,

@@ -111,6 +111,10 @@ npm run bench -- --games 20 --depth 2 --max-pieces 5000
 # 启动 CEM（交叉熵方法）训练循环 —— 多小时级、会持续运行直至达到代数上限或 Ctrl-C
 npm run train -- --generations 200
 
+# 只用 8 个核心跑，把机器留给自己用（缺省是核心数 - 1）
+# 代价很小：实测 31 → 8 个 worker，单代只慢 16%（一代的耗时由少数长对局的尾巴决定）
+npm run train -- --generations 200 --workers 8
+
 # 从上次的 checkpoint 继续训练
 npm run train -- --resume
 
