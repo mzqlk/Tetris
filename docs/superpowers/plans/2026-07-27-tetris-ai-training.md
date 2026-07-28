@@ -2987,6 +2987,20 @@ export interface TrainConfig {
   depth: 1 | 2;
   /** Starting piece cap per game; doubles as candidates outgrow it. */
   initialMaxPieces: number;
+  /**
+   * Hard ceiling on the piece cap, and it must stay modest.
+   *
+   * Measured: a competent 2-ply candidate does not lose. Across a real run the
+   * elites' median survival equalled the cap in EVERY generation (300, 600,
+   * 1200, 2400 ...), so the doubling never stops on its own, while generation
+   * time grew 34s -> 121s -> 273s -> 326s. Each doubling buys no new
+   * information either — `best` just tracks 0.4 x cap to within 0.1%, because
+   * lines-with-a-cap cannot rank candidates that never die.
+   *
+   * So the cap is bounded here rather than left to run away. Above this
+   * ceiling, judge convergence from mean / median / sigma, which stay
+   * informative, and treat `best` as saturated.
+   */
   maxPiecesCap: number;
   /** Extra variance added to sigma^2 each generation. */
   initialNoise: number;
@@ -3006,7 +3020,7 @@ export const DEFAULT_CONFIG: TrainConfig = {
   gamesPerCandidate: 5,
   depth: 2,
   initialMaxPieces: 300,
-  maxPiecesCap: 100000,
+  maxPiecesCap: 2000,
   initialNoise: 0.5,
   noiseDecay: 0.95,
   noiseFloor: 0.01,
@@ -5016,5 +5030,5 @@ git commit -m "chore: publish trained weights"
 1. **权重可能收敛到「苟活但不消行」的局部最优**（堆平不清行）。适应度已经用消行数而非分数来缓解。若仍出现：把适应度改成「每方块消行率」（`lines / pieces`），或给 `linesCleared` 一个正的先验均值而非从 0 开始。
 2. **2 层前瞻在浏览器里的耗时**：实测单核约 115 步/秒，即每步约 8.7ms，远低于最快等级的 100ms 重力间隔，观感应无问题。若某些局面下变慢，Task 9 的自愈式回放会自动重规划，不会卡死；实在需要时可在控件里切到 1 ply，但要注意 §5.5 的深度—权重绑定问题（此时应另训一套 1 层权重）。
 3. **差分测试的覆盖度依赖随机序列**。Task 7 的测试已把「至少发生过消行、多行同消、踢墙旋转」写成断言而非假设，避免覆盖不足被静默放过。
-4. **训练时长随局长上限指数增长**：局长翻倍一次，单代耗时就翻倍。默认上限 `maxPiecesCap = 100000`，实际跑之前先用 Task 8 记下的吞吐估算，必要时调低 `population` 或 `gamesPerCandidate`。
+4. **适应度在局长上限处封顶，且训练时长随上限指数增长**。实测结论（一次真实运行）：2 层搜索下**称职的候选根本不会死**——精英的中位存活步数每一代都恰好等于当时的上限（300 → 600 → 1200 → 2400），所以翻倍永不停止，单代耗时 34s → 121s → 273s → 326s 一路涨上去；而每次翻倍都换不到新信息，`best` 只是紧贴 `0.4 × 上限`（误差 0.1% 以内）。根因是「带上限的消行数」无法区分不会死的候选。因此 `maxPiecesCap` 已压到 **2000**。判断收敛请看 **mean / median / sigma**（这三个在实测中始终有信息量），把 `best` 当成饱和量看待。
 5. **训练器会写 `src/ai/trained-weights.json`**，若此时 `npm run dev` 正开着，Vite 会热更新游戏页面。属预期行为，只是训练中途页面可能自己刷新一下。
