@@ -255,21 +255,29 @@ describe('createSimState', () => {
 describe('simulateGame', () => {
   const weights = toVector(HANDCRAFTED_WEIGHTS);
 
-  // depth-2 search runs ~115 pieces/sec/core, so a 200-piece game takes a couple
-  // of seconds and these two-game tests blow past vitest's 5s default.
+  // depth-2 search runs ~110 pieces/sec/core (vs. ~3000/sec at depth 1) because
+  // it's a long *synchronous* compute loop that blocks this worker's event
+  // loop — including the RPC heartbeat vitest uses to check the worker is
+  // alive. Keep any depth-2 case here deliberately small: past a few seconds
+  // of blocking, vitest's "onTaskUpdate" heartbeat times out and logs an
+  // unhandled error, and under full-suite parallel load a large depth-2 case
+  // can also blow past even a generous per-test timeout. Only the determinism
+  // test below actually needs depth 2 (it's the training configuration); the
+  // other properties (seed sensitivity, relative quality) don't depend on
+  // search depth, so they run at depth 1 instead.
   const SLOW = 45_000;
 
   it('is fully deterministic for a given seed', () => {
-    const a = simulateGame({ weights, seed: 7, maxPieces: 200, depth: 2 });
-    const b = simulateGame({ weights, seed: 7, maxPieces: 200, depth: 2 });
+    const a = simulateGame({ weights, seed: 7, maxPieces: 60, depth: 2 });
+    const b = simulateGame({ weights, seed: 7, maxPieces: 60, depth: 2 });
     expect(a).toEqual(b);
   }, SLOW);
 
   it('produces different results for different seeds', () => {
-    const a = simulateGame({ weights, seed: 1, maxPieces: 200, depth: 2 });
-    const b = simulateGame({ weights, seed: 2, maxPieces: 200, depth: 2 });
+    const a = simulateGame({ weights, seed: 1, maxPieces: 200, depth: 1 });
+    const b = simulateGame({ weights, seed: 2, maxPieces: 200, depth: 1 });
     expect(a).not.toEqual(b);
-  }, SLOW);
+  });
 
   it('stops at the piece cap without calling it a loss', () => {
     const r = simulateGame({ weights, seed: 3, maxPieces: 30, depth: 2 });
@@ -280,10 +288,10 @@ describe('simulateGame', () => {
   it('plays better than a deliberately terrible weight vector', () => {
     const bad = Array(FEATURE_COUNT).fill(0);
     bad[1] = 1; // reward holes
-    const good = simulateGame({ weights, seed: 11, maxPieces: 500, depth: 2 });
-    const awful = simulateGame({ weights: bad, seed: 11, maxPieces: 500, depth: 2 });
+    const good = simulateGame({ weights, seed: 11, maxPieces: 300, depth: 1 });
+    const awful = simulateGame({ weights: bad, seed: 11, maxPieces: 300, depth: 1 });
     expect(good.lines).toBeGreaterThan(awful.lines);
-  }, SLOW);
+  });
 
   it('rejects a weight vector of the wrong length', () => {
     expect(() => simulateGame({ weights: [1, 2, 3], seed: 1, maxPieces: 10, depth: 1 }))
