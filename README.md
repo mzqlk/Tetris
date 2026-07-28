@@ -122,6 +122,9 @@ npm run typecheck:train
 
 访问 `training.html`（开发模式下即 `npm run dev` 后的 `/training.html`）可以打开训练可视化面板，它会持续轮询 `public/ai/training-log.jsonl`，训练运行时图表随日志增长自动刷新，无需手动刷新页面。
 
+> **动手改训练之前，请先读 [`docs/ai-training-handoff.md`](docs/ai-training-handoff.md)。**
+> 它记录了当前进度、几个会浪费数小时的坑，以及最关键的一点：适应度函数在当前设计下会封顶——称职的候选根本不会死，导致消行数恒等于 `0.4 × 局长上限`，训练权重与手调权重在任何封顶基准上都区分不出来。
+
 ## 📁 项目结构
 
 ```
