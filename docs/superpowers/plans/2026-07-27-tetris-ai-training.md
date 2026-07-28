@@ -4783,7 +4783,15 @@ export function WeightEvolutionChart({ entries }: { entries: LogEntry[] }) {
 
 export function SigmaHeatmap({ entries }: { entries: LogEntry[] }) {
   const [, sMax] = extent(entries.flatMap((e) => e.sigma));
-  const cellW = Math.max(1, PLOT_W / entries.length);
+
+  // POSITION uses the unfloored width so the last cell always lands on the right
+  // edge, however many generations there are. WIDTH is floored to 1px so a cell
+  // never becomes invisible. Flooring the position instead — `Math.max(1, ...)`
+  // for both — walks the newest cells off the canvas once entries.length exceeds
+  // PLOT_W (396), where the browser's default overflow:hidden silently clips
+  // them. That hides precisely the freshest data during a long run, while the
+  // corner label keeps reporting the correct latest generation.
+  const cellW = PLOT_W / entries.length;
   const cellH = PLOT_H / FEATURE_NAMES.length;
 
   return (
@@ -4794,10 +4802,12 @@ export function SigmaHeatmap({ entries }: { entries: LogEntry[] }) {
             key={`${entry.gen}-${d}`}
             x={M.left + gi * cellW}
             y={M.top + d * cellH}
-            width={Math.ceil(cellW)}
+            width={Math.max(1, Math.ceil(cellW))}
             height={Math.ceil(cellH)}
             fill={sigmaColor(sMax === 0 ? 0 : s / sMax)}
-          />
+          >
+            <title>{`gen ${entry.gen} · ${FEATURE_NAMES[d]} · sigma ${s.toFixed(3)}`}</title>
+          </rect>
         )),
       )}
       {FEATURE_NAMES.map((name, d) => (
