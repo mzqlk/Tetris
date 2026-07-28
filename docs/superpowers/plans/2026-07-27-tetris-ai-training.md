@@ -2746,7 +2746,13 @@ export async function fetchRuntimeWeights(
   border-radius: 3px;
 }
 
-.segment:hover {
+/*
+ * :not(.segmentActive) is load-bearing. `.segment:hover` has higher specificity
+ * than `.segmentActive` (0,2,0 vs 0,1,0), so without it, hovering the SELECTED
+ * segment repaints its label cyan on the cyan active background and the text
+ * disappears. Reordering the rules does not help — specificity wins over order.
+ */
+.segment:not(.segmentActive):hover {
   color: #00f0ff;
 }
 
@@ -2754,6 +2760,11 @@ export async function fetchRuntimeWeights(
   color: #0a0e1a;
   background: #00f0ff;
   border-color: #00f0ff;
+}
+
+.segment:disabled {
+  color: #24455a;
+  cursor: not-allowed;
 }
 
 .source {
@@ -2792,11 +2803,16 @@ export default function AiControls() {
     };
   }, []);
 
-  const active: Weights = useRuntime && runtime ? runtime.weights : DEFAULT_WEIGHTS;
+  // Highlight whichever source is ACTUALLY driving the AI, not merely what the
+  // user would prefer. Before training has run `runtime` is null, so a bare
+  // `useRuntime` would light up "trained" while bundled weights are in use and
+  // the caption below says so.
+  const usingRuntime = useRuntime && runtime !== null;
+  const active: Weights = usingRuntime ? runtime.weights : DEFAULT_WEIGHTS;
 
   useAiPlayer({ enabled, depth, speed, weights: active });
 
-  const source = useRuntime && runtime
+  const source = usingRuntime
     ? `trained · gen ${runtime.gen} · ${Math.round(runtime.meanLines)} lines`
     : DEFAULT_WEIGHTS_META && DEFAULT_WEIGHTS_META.gen > 0
       ? `bundled · gen ${DEFAULT_WEIGHTS_META.gen}`
@@ -2846,14 +2862,14 @@ export default function AiControls() {
       <div className={styles.row}>
         <button
           type="button"
-          className={`${styles.segment} ${!useRuntime ? styles.segmentActive : ''}`}
+          className={`${styles.segment} ${!usingRuntime ? styles.segmentActive : ''}`}
           onClick={() => setUseRuntime(false)}
         >
           bundled
         </button>
         <button
           type="button"
-          className={`${styles.segment} ${useRuntime ? styles.segmentActive : ''}`}
+          className={`${styles.segment} ${usingRuntime ? styles.segmentActive : ''}`}
           onClick={() => setUseRuntime(true)}
           disabled={runtime === null}
         >
