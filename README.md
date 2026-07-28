@@ -55,7 +55,7 @@ npm install
 ```bash
 npm run dev
 ```
-访问 `http://localhost:5173` 查看游戏
+访问 `http://localhost:5190` 查看游戏
 
 ### 构建生产版本
 ```bash

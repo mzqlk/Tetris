@@ -5,6 +5,14 @@ import { fileURLToPath } from 'node:url'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  server: {
+    port: 5190,
+    strictPort: true,
+  },
+  preview: {
+    port: 5190,
+    strictPort: true,
+  },
   build: {
     rollupOptions: {
       input: {
