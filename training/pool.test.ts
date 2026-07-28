@@ -1,4 +1,5 @@
 import { describe, it, expect, afterAll } from 'vitest';
+import type { Worker } from 'node:worker_threads';
 import { WorkerPool, type SimTask } from './pool';
 import { toVector, HANDCRAFTED_WEIGHTS } from '../src/ai/weights';
 
@@ -56,4 +57,34 @@ describe('WorkerPool', () => {
   it('accepts an empty task list', async () => {
     expect(await pool.run([])).toEqual([]);
   });
+
+  it('replaces a crashed worker and still completes every task', async () => {
+    // The soft-failure path (the worker catching its own exception) is covered
+    // above. This covers the hard one: the worker thread dying, which surfaces
+    // as an 'error' event on the parent Worker object. It is the single path
+    // most likely to strand a task and hang run() forever, so it gets a test
+    // rather than an argument.
+    const crashPool = new WorkerPool(2);
+    const victim = (crashPool as unknown as { workers: Worker[] }).workers[0];
+
+    try {
+      const promise = crashPool.run(Array.from({ length: 8 }, (_, i) => task(i, 500 + i)));
+
+      // Fire a genuine 'error' event while work is in flight.
+      victim.emit('error', new Error('simulated worker crash'));
+
+      const results = await promise;
+
+      expect(results).toHaveLength(8);
+      results.forEach((r, i) => {
+        expect(r.taskId).toBe(i);
+        expect(r.pieces).toBeGreaterThan(0);
+      });
+    } finally {
+      // The synthetic 'error' leaves the original thread alive but orphaned —
+      // the pool has already swapped it out, so destroy() will not reach it.
+      await victim.terminate();
+      await crashPool.destroy();
+    }
+  }, 120000);
 });

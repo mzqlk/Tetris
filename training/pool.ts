@@ -42,21 +42,23 @@ export class WorkerPool {
   }
 
   private spawn(i: number): Worker {
-    // `execArgv` registers tsx's ESM loader inside the worker thread itself.
-    // Node's worker_threads only inherit loader hooks that were registered in
-    // the *parent* process (e.g. via `npx tsx ...` or NODE_OPTIONS=--import=tsx
-    // set before Node starts). When the pool runs under `vitest run`, the
-    // parent process is plain Node with no tsx loader registered — Vite/vitest
-    // transforms `.ts` files it imports through its own module graph, but a
-    // real OS-level `new Worker(url)` bypasses that graph entirely and falls
-    // back to Node's native TS type-stripping, which does not resolve
-    // extension-less relative specifiers like `../src/ai/simulate`. Passing
-    // `--import tsx` here makes each worker register its own loader on
-    // startup, so worker.ts resolves correctly no matter how the parent was
-    // launched.
-    const worker = new Worker(WORKER_URL, { name: `sim-${i}`, execArgv: ['--import', 'tsx'] });
-    worker.unref();
-    return worker;
+    // `execArgv` registers tsx's ESM loader inside the worker thread itself, and
+    // it is required rather than optional. Spawning a .ts worker only works when
+    // the PARENT process was started under tsx; `vitest run` starts plain Node,
+    // so a worker spawned from a test inherits no loader, falls back to Node's
+    // native type-stripping, and cannot resolve extensionless relative imports
+    // like '../src/ai/simulate'. Every game then fails with "Cannot find module"
+    // — loudly, via the pool's retry path, but uselessly. This flag makes the
+    // worker self-sufficient no matter how the parent was launched.
+    // No unref() here. It looks like it would let an idle worker stop holding
+    // the process open, but attaching a 'message' listener re-refs the
+    // underlying MessagePort, and attach() always adds one — so unref() is
+    // inert and only misleads. Shutting the pool down is destroy()'s job, and
+    // callers must call it.
+    return new Worker(WORKER_URL, {
+      name: `sim-${i}`,
+      execArgv: ['--import', 'tsx'],
+    });
   }
 
   run(tasks: SimTask[]): Promise<SimTaskResult[]> {
