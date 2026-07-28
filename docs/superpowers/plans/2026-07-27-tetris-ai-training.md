@@ -3350,6 +3350,7 @@ git commit -m "feat: add worker pool with per-game task granularity"
 import { describe, it, expect } from 'vitest';
 import {
   initCem, gaussian, sampleCandidates, noiseAt, updateCem, nextMaxPieces, median,
+  aggregateFitness,
 } from './cem';
 import { mulberry32 } from '../src/ai/rng';
 import { FEATURE_COUNT } from '../src/ai/features';
@@ -3487,6 +3488,42 @@ describe('nextMaxPieces', () => {
   });
 });
 
+describe('aggregateFitness', () => {
+  // results[i * gamesPerCandidate + j] belongs to candidate i, game j.
+  const results = [
+    { lines: 10, pieces: 100 }, { lines: 20, pieces: 200 }, // candidate 0
+    { lines: 1, pieces: 11 }, { lines: 3, pieces: 13 },     // candidate 1
+    { lines: 0, pieces: 5 }, { lines: 0, pieces: 7 },       // candidate 2
+  ];
+
+  it('averages each candidate over its own games', () => {
+    const { fitness, meanPieces } = aggregateFitness(results, 3, 2);
+    expect(fitness).toEqual([15, 2, 0]);
+    expect(meanPieces).toEqual([150, 12, 6]);
+  });
+
+  it('would notice a transposed flattening', () => {
+    // If the loop read results[j * population + i] instead, candidate 0 would
+    // average games 0 and 2 (10 and 1) giving 5.5 rather than 15. Pin the
+    // correct attribution down so a refactor cannot silently swap it.
+    const { fitness } = aggregateFitness(results, 3, 2);
+    expect(fitness[0]).toBe(15);
+    expect(fitness[0]).not.toBe(5.5);
+  });
+
+  it('rejects a result count that does not match population x games', () => {
+    expect(() => aggregateFitness(results, 3, 3)).toThrow(/expected 9/);
+    expect(() => aggregateFitness(results.slice(1), 3, 2)).toThrow(/expected 6/);
+  });
+
+  it('handles a single game per candidate', () => {
+    const { fitness } = aggregateFitness(
+      [{ lines: 4, pieces: 40 }, { lines: 8, pieces: 80 }], 2, 1,
+    );
+    expect(fitness).toEqual([4, 8]);
+  });
+});
+
 describe('median', () => {
   it('handles odd and even lengths', () => {
     expect(median([3, 1, 2])).toBe(2);
@@ -3596,6 +3633,54 @@ export function updateCem(
   return { mu, sigma, gen: state.gen + 1 };
 }
 
+export interface CandidateStats {
+  /** Mean lines cleared per candidate — this is the fitness CEM selects on. */
+  fitness: number[];
+  /** Mean pieces survived per candidate. */
+  meanPieces: number[];
+}
+
+/**
+ * Reassemble per-candidate statistics from the flat results array.
+ *
+ * Tasks are flattened row-major as `i * gamesPerCandidate + j`, and WorkerPool
+ * fills its output by INPUT ARRAY POSITION rather than by taskId, so results
+ * line up positionally regardless of the order games actually finished in.
+ *
+ * This is the most dangerous arithmetic in the trainer. Transpose the
+ * flattening — or change the pool to order by taskId — and every candidate gets
+ * a different candidate's fitness. Selection then optimises noise, the run
+ * learns nothing, and every log line still looks perfectly healthy. Hence a
+ * pure function with tests rather than a loop buried in the orchestration.
+ */
+export function aggregateFitness(
+  results: readonly { lines: number; pieces: number }[],
+  population: number,
+  gamesPerCandidate: number,
+): CandidateStats {
+  const expected = population * gamesPerCandidate;
+  if (results.length !== expected) {
+    throw new Error(`expected ${expected} results, got ${results.length}`);
+  }
+
+  const fitness: number[] = [];
+  const meanPieces: number[] = [];
+
+  for (let i = 0; i < population; i++) {
+    let lines = 0;
+    let pieces = 0;
+    for (let j = 0; j < gamesPerCandidate; j++) {
+      const r = results[i * gamesPerCandidate + j];
+      lines += r.lines;
+      pieces += r.pieces;
+    }
+    fitness.push(lines / gamesPerCandidate);
+    meanPieces.push(pieces / gamesPerCandidate);
+  }
+
+  return { fitness, meanPieces };
+}
+
 export function median(values: number[]): number {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
@@ -3683,7 +3768,8 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_CONFIG, type TrainConfig } from './config';
 import { WorkerPool, type SimTask } from './pool';
 import {
-  initCem, sampleCandidates, updateCem, noiseAt, nextMaxPieces, median, type CemState,
+  initCem, sampleCandidates, updateCem, noiseAt, nextMaxPieces, median,
+  aggregateFitness, type CemState,
 } from './cem';
 import { hashSeed, mulberry32 } from '../src/ai/rng';
 import { fromVector, normalize } from './weightsIo';
@@ -3711,6 +3797,11 @@ interface Checkpoint {
   sigma: number[];
   baseSeed: number;
   maxPieces: number;
+  /**
+   * Forensic only — deliberately NOT restored by --resume. A resumed run uses
+   * whatever config.ts currently says, so hyperparameters can be tuned between
+   * sessions; this field records what actually produced the checkpoint.
+   */
   config: TrainConfig;
   bestEver: BestEver;
 }
@@ -3804,19 +3895,9 @@ async function runGeneration(): Promise<void> {
 
   const results = await pool.run(tasks);
 
-  const fitness: number[] = [];
-  const meanPieces: number[] = [];
-  for (let i = 0; i < candidates.length; i++) {
-    let lines = 0;
-    let pieces = 0;
-    for (let j = 0; j < cfg.gamesPerCandidate; j++) {
-      const r = results[i * cfg.gamesPerCandidate + j];
-      lines += r.lines;
-      pieces += r.pieces;
-    }
-    fitness.push(lines / cfg.gamesPerCandidate);
-    meanPieces.push(pieces / cfg.gamesPerCandidate);
-  }
+  const { fitness, meanPieces } = aggregateFitness(
+    results, candidates.length, cfg.gamesPerCandidate,
+  );
 
   const best = Math.max(...fitness);
   const worst = Math.min(...fitness);
