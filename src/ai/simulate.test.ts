@@ -1,0 +1,236 @@
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { createSimState, applyAction, simulateGame, type SimAction } from './simulate';
+import { mulberry32 } from './rng';
+import { toVector, HANDCRAFTED_WEIGHTS } from './weights';
+import { useGameStore } from '../store/gameStore';
+import { FEATURE_COUNT } from './features';
+import { enumeratePlacements } from './placements';
+import { boardFrom } from './testUtils';
+import { getPieceCells } from '../engine/board';
+import { createPiece } from '../engine/piece';
+import { BOARD_WIDTH } from '../constants';
+import type { PieceType } from '../types';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+const STORE_ACTION: Record<SimAction, keyof ReturnType<typeof useGameStore.getState>> = {
+  left: 'moveLeft',
+  right: 'moveRight',
+  rotate: 'rotate',
+  softDrop: 'softDrop',
+  hardDrop: 'hardDrop',
+};
+
+/**
+ * Emit an arbitrary but board-covering action sequence.
+ *
+ * A symmetric random walk from the spawn column does NOT work here: every piece
+ * piles up around x=3, the stack tops out after roughly five locks, and no row
+ * ever fills — measured over 50,000 seeds, zero line clears. That leaves the
+ * clear / score / level-up paths, which are exactly where the simulator and the
+ * store could diverge, completely unexercised.
+ *
+ * Steering each piece toward a random target column fills rows instead, while
+ * still being an arbitrary sequence: the rotations kick off walls, the moves
+ * that fail are no-ops on both sides, and neither side gets any hint of what
+ * the other is doing.
+ */
+function* actionScript(rand: () => number): Generator<SimAction> {
+  for (;;) {
+    const rotations = Math.floor(rand() * 4);
+    for (let i = 0; i < rotations; i++) yield 'rotate';
+
+    // Pieces spawn at x=3; walk toward a random column.
+    const dx = Math.floor(rand() * BOARD_WIDTH) - 3;
+    for (let i = 0; i < Math.abs(dx); i++) yield dx < 0 ? 'left' : 'right';
+
+    if (rand() < 0.3) yield 'softDrop';
+    yield 'hardDrop';
+  }
+}
+
+describe('differential test against the real gameStore', () => {
+  it('matches the store cell-for-cell over random action sequences', () => {
+    let totalClears = 0;
+    let totalKicks = 0;
+    let totalLocks = 0;
+
+    for (let seed = 1; seed <= 20; seed++) {
+      // Both sides consume the same mulberry32 stream in the same order.
+      vi.spyOn(Math, 'random').mockImplementation(mulberry32(seed));
+      useGameStore.getState().startGame();
+      const sim = createSimState(seed);
+      const pick = mulberry32(seed ^ 0x9e3779b9);
+
+      const script = actionScript(pick);
+
+      for (let step = 0; step < 400; step++) {
+        if (useGameStore.getState().status !== 'playing') break;
+        if (sim.status !== 'playing') break;
+
+        const action = script.next().value as SimAction;
+
+        const before = useGameStore.getState();
+        const linesBefore = before.lines;
+        const pieceBefore = before.currentPiece;
+
+        (before[STORE_ACTION[action]] as () => void)();
+        applyAction(sim, action);
+
+        const after = useGameStore.getState();
+
+        expect(sim.board).toEqual(after.board);
+        expect(sim.currentPiece).toEqual(after.currentPiece);
+        expect(sim.nextPiece).toEqual(after.nextPiece);
+        expect(sim.score).toBe(after.score);
+        expect(sim.lines).toBe(after.lines);
+        expect(sim.level).toBe(after.level);
+        expect(sim.status).toBe(after.status);
+
+        // Coverage bookkeeping — a differential test that never clears a line
+        // or kicks off a wall proves much less than it appears to.
+        const gained = after.lines - linesBefore;
+        if (gained > 0) totalClears++;
+        if (action === 'hardDrop') totalLocks++;
+        if (
+          action === 'rotate' && pieceBefore && after.currentPiece &&
+          after.currentPiece.rotation !== pieceBefore.rotation &&
+          (after.currentPiece.position.x !== pieceBefore.position.x ||
+           after.currentPiece.position.y !== pieceBefore.position.y)
+        ) {
+          totalKicks++;
+        }
+      }
+
+      vi.restoreAllMocks();
+    }
+
+    // §13 flags coverage as the weak point of a randomised differential test,
+    // so assert the corpus actually exercised the interesting paths. Multi-row
+    // clears are pinned down deterministically below instead — they are too rare
+    // under random play to rely on.
+    expect(totalLocks).toBeGreaterThan(100);
+    expect(totalClears).toBeGreaterThan(0);
+    expect(totalKicks).toBeGreaterThan(0);
+  });
+});
+
+describe('line-clear parity', () => {
+  // Random play produces single clears but essentially never a double or a
+  // tetris, so the multi-row scoring and level-up paths get pinned down here
+  // instead. Both sides start from an identical board and an identical
+  // non-empty bag, so neither consumes any RNG.
+  const CASES: [string, string[], number][] = [
+    ['single', ['.#########'], 1],
+    ['double', ['.#########', '.#########'], 2],
+    ['tetris', ['.#########', '.#########', '.#########', '.#########'], 4],
+  ];
+
+  for (const [name, rows, expectedLines] of CASES) {
+    it(`matches the store on a ${name} clear`, () => {
+      const board = boardFrom(rows);
+      const current = createPiece(1); // I piece
+      const next = createPiece(2);
+      const bag: PieceType[] = [3, 4, 5, 6, 7];
+
+      const seeded = () => ({
+        board: board.map((row) => [...row]),
+        currentPiece: { ...current, position: { ...current.position } },
+        nextPiece: { ...next, position: { ...next.position } },
+        bag: [...bag],
+        score: 0,
+        level: 1,
+        lines: 0,
+        status: 'playing' as const,
+      });
+
+      useGameStore.setState(seeded());
+      const sim = createSimState(1);
+      Object.assign(sim, seeded());
+
+      // The vertical I dropped into the column-0 shaft completes every seeded row.
+      const placement = enumeratePlacements(board, current).find((p) =>
+        getPieceCells(p.piece).every((c) => c.x === 0),
+      );
+      expect(placement).toBeDefined();
+
+      const actions: SimAction[] = [
+        ...placement!.moves.map((m) => (m === 'down' ? 'softDrop' : m) as SimAction),
+        'hardDrop',
+      ];
+
+      for (const action of actions) {
+        (useGameStore.getState()[STORE_ACTION[action]] as () => void)();
+        applyAction(sim, action);
+      }
+
+      const after = useGameStore.getState();
+      expect(after.lines).toBe(expectedLines);
+      expect(sim.lines).toBe(expectedLines);
+      expect(sim.board).toEqual(after.board);
+      expect(sim.score).toBe(after.score);
+      expect(sim.level).toBe(after.level);
+      expect(sim.status).toBe(after.status);
+    });
+  }
+});
+
+describe('createSimState', () => {
+  it('starts with a current piece and a preview', () => {
+    const s = createSimState(42);
+    expect(s.currentPiece).not.toBeNull();
+    expect(s.nextPiece).not.toBeNull();
+    expect(s.status).toBe('playing');
+    expect(s.pieces).toBe(0);
+  });
+
+  it('promotes the previewed piece on lock, like the store', () => {
+    const s = createSimState(42);
+    for (let i = 0; i < 5; i++) {
+      const previewed = s.nextPiece!.type;
+      applyAction(s, 'hardDrop');
+      expect(s.currentPiece!.type).toBe(previewed);
+    }
+  });
+});
+
+describe('simulateGame', () => {
+  const weights = toVector(HANDCRAFTED_WEIGHTS);
+
+  // depth-2 search runs ~115 pieces/sec/core, so a 200-piece game takes a couple
+  // of seconds and these two-game tests blow past vitest's 5s default.
+  const SLOW = 45_000;
+
+  it('is fully deterministic for a given seed', () => {
+    const a = simulateGame({ weights, seed: 7, maxPieces: 200, depth: 2 });
+    const b = simulateGame({ weights, seed: 7, maxPieces: 200, depth: 2 });
+    expect(a).toEqual(b);
+  }, SLOW);
+
+  it('produces different results for different seeds', () => {
+    const a = simulateGame({ weights, seed: 1, maxPieces: 200, depth: 2 });
+    const b = simulateGame({ weights, seed: 2, maxPieces: 200, depth: 2 });
+    expect(a).not.toEqual(b);
+  }, SLOW);
+
+  it('stops at the piece cap without calling it a loss', () => {
+    const r = simulateGame({ weights, seed: 3, maxPieces: 30, depth: 2 });
+    expect(r.pieces).toBe(30);
+    expect(r.reason).toBe('pieceCap');
+  }, SLOW);
+
+  it('plays better than a deliberately terrible weight vector', () => {
+    const bad = Array(FEATURE_COUNT).fill(0);
+    bad[1] = 1; // reward holes
+    const good = simulateGame({ weights, seed: 11, maxPieces: 500, depth: 2 });
+    const awful = simulateGame({ weights: bad, seed: 11, maxPieces: 500, depth: 2 });
+    expect(good.lines).toBeGreaterThan(awful.lines);
+  }, SLOW);
+
+  it('rejects a weight vector of the wrong length', () => {
+    expect(() => simulateGame({ weights: [1, 2, 3], seed: 1, maxPieces: 10, depth: 1 }))
+      .toThrow(/9/);
+  });
+});
