@@ -2,6 +2,7 @@ import { useKeyboardControls } from '../hooks/useGameLoop';
 import GameCanvas from './GameCanvas';
 import ScoreBoard from './ScoreBoard';
 import GameOverlay from './GameOverlay';
+import AiControls from './AiControls';
 import styles from './Game.module.css';
 
 export default function Game() {
@@ -13,7 +14,10 @@ export default function Game() {
         <GameCanvas />
         <GameOverlay />
       </div>
-      <ScoreBoard />
+      <div className={styles.sidebar}>
+        <ScoreBoard />
+        <AiControls />
+      </div>
     </div>
   );
 }
