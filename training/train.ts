@@ -6,10 +6,10 @@ import { DEFAULT_CONFIG, type TrainConfig } from './config';
 import { WorkerPool, type SimTask } from './pool';
 import {
   initCem, sampleCandidates, updateCem, noiseAt, nextMaxPieces, median,
-  aggregateFitness, type CemState,
+  aggregateFitness, eliteCount, type CemState,
 } from './cem';
 import { hashSeed, mulberry32 } from '../src/ai/rng';
-import { fromVector, normalize } from './weightsIo';
+import { fromVector, normalize } from '../src/ai/weights';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 /** Salt keeping the candidate-sampling stream disjoint from the game seeds. */
@@ -43,11 +43,25 @@ interface Checkpoint {
   bestEver: BestEver;
 }
 
+/**
+ * A mistyped or omitted value has to fail loudly. Bare `Number(value)` yields
+ * NaN, and the loop guard `state.gen >= args.generations` is always false
+ * against NaN — a run the operator believes is bounded runs until Ctrl-C.
+ * This is a multi-hour, self-extending script, so a silent unbounded run is
+ * expensive. Matches bench.ts's `parseArgs` so the two CLIs behave the same.
+ */
+function num(key: string, value: string | undefined): number {
+  if (value === undefined) throw new Error(`missing value for ${key}`);
+  const n = Number(value);
+  if (!Number.isFinite(n)) throw new Error(`${key} expects a number, got "${value}"`);
+  return n;
+}
+
 function parseArgs(argv: string[]): { generations: number | null; resume: boolean } {
   const out = { generations: null as number | null, resume: false };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--resume') out.resume = true;
-    else if (argv[i] === '--generations') out.generations = Number(argv[++i]);
+    else if (argv[i] === '--generations') out.generations = num(argv[i], argv[++i]);
     else throw new Error(`unknown flag ${argv[i]}`);
   }
   return out;
@@ -146,12 +160,11 @@ async function runGeneration(): Promise<void> {
   // Median survival among the ELITES. This drives the piece cap (see below) and
   // is worth logging in its own right: it is the one number that shows whether
   // the cap is currently truncating the candidates CEM actually learns from.
-  const eliteCount = Math.max(1, Math.ceil(cfg.eliteFrac * candidates.length));
   const elitePieces = median(
     fitness
       .map((fit, i) => ({ fit, pieces: meanPieces[i] }))
       .sort((a, b) => b.fit - a.fit)
-      .slice(0, eliteCount)
+      .slice(0, eliteCount(cfg.eliteFrac, candidates.length))
       .map((e) => e.pieces),
   );
 
@@ -193,6 +206,21 @@ async function runGeneration(): Promise<void> {
     const evalResults = await pool.run(evalTasks);
     const meanLines = evalResults.reduce((s, r) => s + r.lines, 0) / evalResults.length;
     console.log(`  re-eval of mu over ${cfg.reevalGames} fresh seeds: ${meanLines.toFixed(1)} lines`);
+
+    // Theoretical ceiling: a piece contributes 4 cells and a line needs 10, so
+    // lines/pieces can never exceed 0.4 — thus 0.4 * reevalMaxPieces is the most
+    // lines re-eval can EVER report, no matter how good the candidate is.
+    const reevalCeiling = 0.4 * cfg.reevalMaxPieces;
+    if (meanLines > 0.99 * reevalCeiling) {
+      console.warn(
+        `  WARNING: re-eval meanLines (${meanLines.toFixed(1)}) is within 1% of its theoretical ` +
+        `ceiling (0.4 x reevalMaxPieces = ${reevalCeiling.toFixed(1)}). A competent candidate never ` +
+        `dies within reevalMaxPieces pieces, so lines are pinned at 0.4 x cap regardless of how much ` +
+        `better the underlying policy actually is. The published model cannot be shown to improve ` +
+        `further by this measure — raise reevalMaxPieces or judge convergence from mean/median/sigma ` +
+        `instead, whether or not this round republished the model.`,
+      );
+    }
 
     if (meanLines > bestEver.meanLines) {
       bestEver = { weights: mu, meanLines, gen: state.gen, evalGames: cfg.reevalGames };

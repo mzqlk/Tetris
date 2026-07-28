@@ -36,6 +36,11 @@ interface QueueItem {
  */
 export class WorkerPool {
   private workers: Worker[] = [];
+  // Set only by destroy(). An 'exit' event fired by terminate() during teardown
+  // is expected shutdown, not a crash — without this flag the exit listener
+  // below would spawn a fresh replacement worker moments after `this.workers`
+  // has been cleared, leaking a thread destroy() never gets to terminate.
+  private destroyed = false;
 
   constructor(size: number) {
     for (let i = 0; i < size; i++) this.workers.push(this.spawn(i));
@@ -105,6 +110,29 @@ export class WorkerPool {
       const attach = (worker: Worker, slot: number) => {
         worker.removeAllListeners('message');
         worker.removeAllListeners('error');
+        worker.removeAllListeners('exit');
+
+        // A worker that has died — whether it emitted 'error' first or not —
+        // gets replaced and its in-flight task (if any) requeued exactly once.
+        // `handled` is scoped to this attach() call, i.e. to this one worker
+        // instance, so a worker that emits BOTH 'error' and 'exit' (the usual
+        // Node sequence for a crash) only runs this the first time; the second
+        // event is a no-op rather than a double replace/requeue.
+        let handled = false;
+        const handleDeath = (reason: string) => {
+          if (handled) return;
+          handled = true;
+
+          const item = inFlight.get(worker);
+          inFlight.delete(worker);
+
+          const replacement = this.spawn(slot);
+          this.workers[slot] = replacement;
+          attach(replacement, slot);
+
+          if (item !== undefined) retryOrFail(item, reason);
+          feed(replacement);
+        };
 
         worker.on('message', (result: SimTaskResult) => {
           const item = inFlight.get(worker);
@@ -117,17 +145,16 @@ export class WorkerPool {
           feed(worker);
         });
 
-        // A worker that emits 'error' has died; replace it and requeue its task.
-        worker.on('error', (err) => {
-          const item = inFlight.get(worker);
-          inFlight.delete(worker);
+        worker.on('error', (err) => handleDeath(`crashed the worker (${err.message})`));
 
-          const replacement = this.spawn(slot);
-          this.workers[slot] = replacement;
-          attach(replacement, slot);
-
-          if (item !== undefined) retryOrFail(item, `crashed the worker (${err.message})`);
-          feed(replacement);
+        // A clean thread exit or external termination leaves no 'error' event at
+        // all, which — without this listener — would strand the task in
+        // `inFlight` forever and hang run() on a multi-hour run. Skip it during
+        // destroy(): that termination is intentional teardown, not a crash, and
+        // by then nothing is waiting on a replacement worker.
+        worker.on('exit', (code) => {
+          if (this.destroyed) return;
+          handleDeath(`exited unexpectedly (code ${code})`);
         });
       };
 
@@ -142,6 +169,7 @@ export class WorkerPool {
   }
 
   async destroy(): Promise<void> {
+    this.destroyed = true;
     await Promise.all(this.workers.map((w) => w.terminate()));
     this.workers = [];
   }

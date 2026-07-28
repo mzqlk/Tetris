@@ -56,11 +56,17 @@ const fmt = (v: number) =>
   : Math.abs(v) >= 10 ? v.toFixed(0)
   : v.toFixed(2);
 
-function Axes({ xTicks, yTicks, x, y }: {
+// Generation numbers are counts, not fractional weight values — `fmt` alone
+// renders a 7-generation log's x-axis as "0.00 · 2.00 · 4.00 · 6.00". The
+// y-axis legitimately shows fractional weights/fitness, so it keeps `fmt`.
+const fmtInt = (v: number) => Math.round(v).toString();
+
+function Axes({ xTicks, yTicks, x, y, xFmt = fmt }: {
   xTicks: number[];
   yTicks: number[];
   x: (v: number) => number;
   y: (v: number) => number;
+  xFmt?: (v: number) => string;
 }) {
   return (
     <g>
@@ -74,7 +80,7 @@ function Axes({ xTicks, yTicks, x, y }: {
       ))}
       {xTicks.map((t) => (
         <text key={`x${t}`} x={x(t)} y={H - 8} textAnchor="middle" fontSize="10" fill={AXIS_TEXT}>
-          {fmt(t)}
+          {xFmt(t)}
         </text>
       ))}
     </g>
@@ -97,7 +103,7 @@ export function FitnessChart({ entries }: { entries: LogEntry[] }) {
 
   return (
     <svg width={W} height={H} role="img" aria-label="Fitness per generation">
-      <Axes x={x} y={y} xTicks={niceTicks(g0, g1, 5)} yTicks={niceTicks(0, yMax, 5)} />
+      <Axes x={x} y={y} xTicks={niceTicks(g0, g1, 5)} yTicks={niceTicks(0, yMax, 5)} xFmt={fmtInt} />
       <path d={`${path(band)} Z`} fill={BEST} fillOpacity={0.1} stroke="none" />
       <path d={path(entries.map((e) => [x(e.gen), y(e.worst)]))} fill="none" stroke={WORST} strokeWidth={1} opacity={0.7} />
       <path d={path(entries.map((e) => [x(e.gen), y(e.median)]))} fill="none" stroke={MEDIAN} strokeWidth={1.5} />
@@ -120,7 +126,7 @@ export function WeightEvolutionChart({ entries }: { entries: LogEntry[] }) {
 
   return (
     <svg width={W} height={H} role="img" aria-label="Weight evolution">
-      <Axes x={x} y={y} xTicks={niceTicks(g0, g1, 5)} yTicks={niceTicks(-bound, bound, 5)} />
+      <Axes x={x} y={y} xTicks={niceTicks(g0, g1, 5)} yTicks={niceTicks(-bound, bound, 5)} xFmt={fmtInt} />
       <line x1={M.left} x2={M.left + PLOT_W} y1={y(0)} y2={y(0)} stroke={AXIS_TEXT} strokeDasharray="2 3" />
       {FEATURE_NAMES.map((name, d) => (
         <path

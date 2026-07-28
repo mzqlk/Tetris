@@ -84,6 +84,44 @@ npm run lint
 | **P** | 暂停/继续 |
 | **R** | 重新开始 |
 
+## 🤖 AI 自动对战
+
+游戏内置一个 AI 面板，可以让内置的 AI 接管游戏：
+
+- **Autoplay 开关** — 开启/关闭 AI 自动对战。
+- **Speed** — 出手速度：`instant`（立即落子）、`normal`、`slow`。
+- **Lookahead** — 搜索深度，`1 ply`（只看当前方块）或 `2 ply`（同时看一步之后的下一个方块，决策更好但更慢）。
+- **Weights** — 权重来源：
+  - `bundled`：打包进构建产物的权重（`src/ai/trained-weights.json`，训练产出，缺省时回退到手工设定的 Dellacherie 式权重）。
+  - `trained`：运行时从 `public/ai/best-weights.json` 拉取的最新训练权重，无需重新构建即可生效；训练尚未产出该文件前此选项不可用。
+
+面板上会显示当前实际生效的权重来源及其代数（gen）和平均消行数，便于确认 AI 到底在用哪一套权重下棋。
+
+## 🧠 AI 训练与评测
+
+`src/ai/` 是纯函数的 AI 评估引擎（特征提取、落子搜索、权重校验），不依赖 DOM、文件系统或 Node 内置模块，因此可以同时在浏览器和 Node 训练脚本中运行。`training/` 目录下是围绕它构建的训练与评测工具链：
+
+```bash
+# 运行全部单元测试
+npm test
+
+# 对一组权重跑基准评测（局数/搜索深度/单局最大方块数可调）
+npm run bench -- --games 20 --depth 2 --max-pieces 5000
+
+# 启动 CEM（交叉熵方法）训练循环 —— 多小时级、会持续运行直至达到代数上限或 Ctrl-C
+npm run train -- --generations 200
+
+# 从上次的 checkpoint 继续训练
+npm run train -- --resume
+
+# 只对训练脚本做类型检查（与主应用的 tsconfig 分开）
+npm run typecheck:train
+```
+
+训练过程会把每一代的统计数据追加写入 `public/ai/training-log.jsonl`，并在每次刷新最佳权重时同步更新 `public/ai/best-weights.json` 与 `src/ai/trained-weights.json`。
+
+访问 `training.html`（开发模式下即 `npm run dev` 后的 `/training.html`）可以打开训练可视化面板，它会持续轮询 `public/ai/training-log.jsonl`，训练运行时图表随日志增长自动刷新，无需手动刷新页面。
+
 ## 📁 项目结构
 
 ```
@@ -93,9 +131,23 @@ src/
 ├── index.css          # 全局样式
 ├── types.ts           # TypeScript 类型定义
 ├── constants.ts       # 游戏常量和配置
+├── ai/                # AI 评估引擎（纯函数，无 DOM / 文件系统 / node: 依赖）
+│   ├── features.ts    # 局面特征提取
+│   ├── search.ts      # 1/2-ply 落子搜索
+│   ├── weights.ts     # 权重加载、校验与内置默认权重
+│   └── trained-weights.json  # 训练产出的默认权重，构建时打包进 dist
+├── training/dashboard/  # 训练可视化面板（training.html 的入口）
 └── store/             # Zustand 状态管理
     ├── hooks.ts       # 自定义 React hooks
     └── useTetris.ts   # 游戏状态管理逻辑
+
+training/               # 训练与评测 CLI（仓库根目录，与 src/ 平级，用 tsx 直接运行）
+├── train.ts           # CEM 训练主循环
+├── bench.ts           # 权重基准评测 CLI
+├── cem.ts             # 交叉熵方法（CEM）核心算法
+├── pool.ts            # 基于 worker_threads 的对局并行工作池
+├── worker.ts          # 单局游戏模拟 worker
+└── config.ts          # 训练超参数
 ```
 
 ## 🎮 游戏规则

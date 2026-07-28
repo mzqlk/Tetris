@@ -44,6 +44,11 @@ export function noiseAt(
   return Math.max(opts.noiseFloor, opts.initialNoise * Math.pow(opts.noiseDecay, gen));
 }
 
+/** Number of elites kept from a population: ceil(eliteFrac * population), floored at 1. */
+export function eliteCount(eliteFrac: number, population: number): number {
+  return Math.max(1, Math.ceil(eliteFrac * population));
+}
+
 export function updateCem(
   state: CemState,
   candidates: number[][],
@@ -55,11 +60,10 @@ export function updateCem(
   }
   if (candidates.length === 0) throw new Error('cannot update from an empty population');
 
-  const eliteCount = Math.max(1, Math.ceil(opts.eliteFrac * candidates.length));
   const elites = candidates
     .map((weights, i) => ({ weights, fit: fitness[i] }))
     .sort((a, b) => b.fit - a.fit)
-    .slice(0, eliteCount)
+    .slice(0, eliteCount(opts.eliteFrac, candidates.length))
     .map((e) => e.weights);
 
   const dim = state.mu.length;

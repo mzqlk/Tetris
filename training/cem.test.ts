@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   initCem, gaussian, sampleCandidates, noiseAt, updateCem, nextMaxPieces, median,
-  aggregateFitness,
+  aggregateFitness, eliteCount,
 } from './cem';
 import { mulberry32 } from '../src/ai/rng';
 import { FEATURE_COUNT } from '../src/ai/features';
@@ -116,6 +116,18 @@ describe('updateCem', () => {
 
   it('rejects mismatched candidate and fitness lengths', () => {
     expect(() => updateCem(initCem(), [vec(1)], [1, 2], { eliteFrac: 0.5, noise: 0 })).toThrow();
+  });
+});
+
+describe('eliteCount', () => {
+  it('takes ceil(eliteFrac * population) for a normal case', () => {
+    expect(eliteCount(0.1, 100)).toBe(10);
+    expect(eliteCount(0.1, 95)).toBe(10);
+  });
+
+  it('floors at 1 even for a tiny fraction or population', () => {
+    expect(eliteCount(0.001, 4)).toBe(1);
+    expect(eliteCount(0.5, 1)).toBe(1);
   });
 });
 

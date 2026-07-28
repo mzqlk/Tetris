@@ -17,7 +17,7 @@ export default function App() {
       <div className={styles.page}>
         <h1 className={styles.title}>Tetris AI — Training</h1>
         <p className={styles.subtitle}>public/ai/training-log.jsonl</p>
-        <div className={styles.empty}>尚未开始训练 —— 运行 <code>npm run train</code> 后曲线会自动出现</div>
+        <div className={styles.empty}>No training data yet — run <code>npm run train</code> and the charts will appear automatically</div>
       </div>
     );
   }
