@@ -16,7 +16,7 @@
 - AI 逻辑只有一份。禁止为「训练快一点」复制简化逻辑。
 - 特征顺序由 `FEATURE_NAMES` 单一定义，权重文件用**具名对象**而非裸数组。
 - 新增依赖仅限：`vitest`、`tsx`、`@types/node`（均为 devDependency）。不引图表库。
-- 已验证环境：Node 24.14.0 / npm 11.9.0 / 32 核；tsx 4.23.1 支持 TS worker_threads 与 JSON import。
+- 已验证环境：Node 24.14.0 / npm 11.9.0 / 32 核；tsx 4.23.1 支持 TS worker_threads 与 JSON import。**但这只在父进程本身跑在 tsx 下时成立**——`vitest run` 起的是普通 Node，从中派生的 worker 不继承任何 loader。因此 `new Worker` 必须显式带上 `execArgv: ['--import', 'tsx']`（见 Task 11）。
 - 非目标（不实现）：hold、T-spin、DAS/ARR、神经网络、对战、云端存储。
 
 ---
@@ -192,9 +192,12 @@ export default defineConfig({
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["training", "src/ai", "src/types.ts", "src/constants.ts", "src/engine"]
+  "include": ["training", "src/ai", "src/types.ts", "src/constants.ts", "src/engine"],
+  "exclude": ["src/ai/loadWeights.ts"]
 }
 ```
+
+`src/ai/loadWeights.ts`（Task 10 新增）是**浏览器专用**的：它调用 `fetch(url, { cache: 'no-store' })`，而 `cache` 这个属性只存在于 DOM 的 `RequestInit` 里，在这份 Node-only 的 lib 下会报 TS2353。训练侧从不 import 它（`training/bench.ts` 有自己的同名本地函数），所以直接排除。
 
 - [ ] **Step 7: 写会失败的测试**
 
@@ -3163,7 +3166,18 @@ export class WorkerPool {
   }
 
   private spawn(i: number): Worker {
-    const worker = new Worker(WORKER_URL, { name: `sim-${i}` });
+    // `execArgv` registers tsx's ESM loader inside the worker thread itself, and
+    // it is required rather than optional. Spawning a .ts worker only works when
+    // the PARENT process was started under tsx; `vitest run` starts plain Node,
+    // so a worker spawned from a test inherits no loader, falls back to Node's
+    // native type-stripping, and cannot resolve extensionless relative imports
+    // like '../src/ai/simulate'. Every game then fails with "Cannot find module"
+    // — loudly, via the pool's retry path, but uselessly. This flag makes the
+    // worker self-sufficient no matter how the parent was launched.
+    const worker = new Worker(WORKER_URL, {
+      name: `sim-${i}`,
+      execArgv: ['--import', 'tsx'],
+    });
     worker.unref();
     return worker;
   }
