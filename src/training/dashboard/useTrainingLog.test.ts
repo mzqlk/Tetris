@@ -30,6 +30,38 @@ describe('parseLog', () => {
     expect(parseLog(`{"gen":0}\n${line(1)}`)).toHaveLength(1);
   });
 
+  it('keeps older lines that predate a schema addition, with defaults', () => {
+    // elitePieces was added to the log partway through the project, so a
+    // resumed run's file legitimately mixes old and new lines. Dropping the old
+    // ones would blank the dashboard; passing them through undefined crashes
+    // the render, since App formats maxPieces with toLocaleString().
+    const parsed = JSON.parse(line(0));
+    delete parsed.elitePieces;
+    delete parsed.maxPieces;
+
+    const entries = parseLog(JSON.stringify(parsed));
+    expect(entries).toHaveLength(1);
+    expect(entries[0].elitePieces).toBe(0);
+    expect(entries[0].maxPieces).toBe(0);
+    expect(() => entries[0].maxPieces.toLocaleString()).not.toThrow();
+  });
+
+  it('never yields an undefined numeric field', () => {
+    const entries = parseLog(`${line(0)}\n${line(1)}`);
+    for (const e of entries) {
+      for (const key of ['ts', 'std', 'maxPieces', 'medianPieces', 'elitePieces',
+                         'gamesPerCandidate', 'elapsedMs'] as const) {
+        expect(typeof e[key]).toBe('number');
+      }
+    }
+  });
+
+  it('rejects a line whose required field is present but not finite', () => {
+    const parsed = JSON.parse(line(0));
+    parsed.best = null;
+    expect(parseLog(JSON.stringify(parsed))).toHaveLength(0);
+  });
+
   it('sorts by generation', () => {
     const entries = parseLog(`${line(3)}\n${line(1)}\n${line(2)}`);
     expect(entries.map((e) => e.gen)).toEqual([1, 2, 3]);
