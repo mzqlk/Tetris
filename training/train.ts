@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_CONFIG, type TrainConfig } from './config';
 import { WorkerPool, type SimTask } from './pool';
 import {
-  initCem, sampleCandidates, updateCem, noiseAt, nextMaxPieces, median, type CemState,
+  initCem, sampleCandidates, updateCem, noiseAt, nextMaxPieces, median,
+  aggregateFitness, type CemState,
 } from './cem';
 import { hashSeed, mulberry32 } from '../src/ai/rng';
 import { fromVector, normalize } from './weightsIo';
@@ -33,6 +34,11 @@ interface Checkpoint {
   sigma: number[];
   baseSeed: number;
   maxPieces: number;
+  /**
+   * Forensic only — deliberately NOT restored by --resume. A resumed run uses
+   * whatever config.ts currently says, so hyperparameters can be tuned between
+   * sessions; this field records what actually produced the checkpoint.
+   */
   config: TrainConfig;
   bestEver: BestEver;
 }
@@ -126,19 +132,9 @@ async function runGeneration(): Promise<void> {
 
   const results = await pool.run(tasks);
 
-  const fitness: number[] = [];
-  const meanPieces: number[] = [];
-  for (let i = 0; i < candidates.length; i++) {
-    let lines = 0;
-    let pieces = 0;
-    for (let j = 0; j < cfg.gamesPerCandidate; j++) {
-      const r = results[i * cfg.gamesPerCandidate + j];
-      lines += r.lines;
-      pieces += r.pieces;
-    }
-    fitness.push(lines / cfg.gamesPerCandidate);
-    meanPieces.push(pieces / cfg.gamesPerCandidate);
-  }
+  const { fitness, meanPieces } = aggregateFitness(
+    results, candidates.length, cfg.gamesPerCandidate,
+  );
 
   const best = Math.max(...fitness);
   const worst = Math.min(...fitness);

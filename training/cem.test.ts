@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   initCem, gaussian, sampleCandidates, noiseAt, updateCem, nextMaxPieces, median,
+  aggregateFitness,
 } from './cem';
 import { mulberry32 } from '../src/ai/rng';
 import { FEATURE_COUNT } from '../src/ai/features';
@@ -135,6 +136,42 @@ describe('nextMaxPieces', () => {
 
   it('respects the absolute cap', () => {
     expect(nextMaxPieces(80000, 79000, 100000)).toBe(100000);
+  });
+});
+
+describe('aggregateFitness', () => {
+  // results[i * gamesPerCandidate + j] belongs to candidate i, game j.
+  const results = [
+    { lines: 10, pieces: 100 }, { lines: 20, pieces: 200 }, // candidate 0
+    { lines: 1, pieces: 11 }, { lines: 3, pieces: 13 },     // candidate 1
+    { lines: 0, pieces: 5 }, { lines: 0, pieces: 7 },       // candidate 2
+  ];
+
+  it('averages each candidate over its own games', () => {
+    const { fitness, meanPieces } = aggregateFitness(results, 3, 2);
+    expect(fitness).toEqual([15, 2, 0]);
+    expect(meanPieces).toEqual([150, 12, 6]);
+  });
+
+  it('would notice a transposed flattening', () => {
+    // If the loop read results[j * population + i] instead, candidate 0 would
+    // average games 0 and 2 (10 and 1) giving 5.5 rather than 15. Pin the
+    // correct attribution down so a refactor cannot silently swap it.
+    const { fitness } = aggregateFitness(results, 3, 2);
+    expect(fitness[0]).toBe(15);
+    expect(fitness[0]).not.toBe(5.5);
+  });
+
+  it('rejects a result count that does not match population x games', () => {
+    expect(() => aggregateFitness(results, 3, 3)).toThrow(/expected 9/);
+    expect(() => aggregateFitness(results.slice(1), 3, 2)).toThrow(/expected 6/);
+  });
+
+  it('handles a single game per candidate', () => {
+    const { fitness } = aggregateFitness(
+      [{ lines: 4, pieces: 40 }, { lines: 8, pieces: 80 }], 2, 1,
+    );
+    expect(fitness).toEqual([4, 8]);
   });
 });
 

@@ -81,6 +81,54 @@ export function updateCem(
   return { mu, sigma, gen: state.gen + 1 };
 }
 
+export interface CandidateStats {
+  /** Mean lines cleared per candidate — this is the fitness CEM selects on. */
+  fitness: number[];
+  /** Mean pieces survived per candidate. */
+  meanPieces: number[];
+}
+
+/**
+ * Reassemble per-candidate statistics from the flat results array.
+ *
+ * Tasks are flattened row-major as `i * gamesPerCandidate + j`, and WorkerPool
+ * fills its output by INPUT ARRAY POSITION rather than by taskId, so results
+ * line up positionally regardless of the order games actually finished in.
+ *
+ * This is the most dangerous arithmetic in the trainer. Transpose the
+ * flattening — or change the pool to order by taskId — and every candidate gets
+ * a different candidate's fitness. Selection then optimises noise, the run
+ * learns nothing, and every log line still looks perfectly healthy. Hence a
+ * pure function with tests rather than a loop buried in the orchestration.
+ */
+export function aggregateFitness(
+  results: readonly { lines: number; pieces: number }[],
+  population: number,
+  gamesPerCandidate: number,
+): CandidateStats {
+  const expected = population * gamesPerCandidate;
+  if (results.length !== expected) {
+    throw new Error(`expected ${expected} results, got ${results.length}`);
+  }
+
+  const fitness: number[] = [];
+  const meanPieces: number[] = [];
+
+  for (let i = 0; i < population; i++) {
+    let lines = 0;
+    let pieces = 0;
+    for (let j = 0; j < gamesPerCandidate; j++) {
+      const r = results[i * gamesPerCandidate + j];
+      lines += r.lines;
+      pieces += r.pieces;
+    }
+    fitness.push(lines / gamesPerCandidate);
+    meanPieces.push(pieces / gamesPerCandidate);
+  }
+
+  return { fitness, meanPieces };
+}
+
 export function median(values: number[]): number {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
