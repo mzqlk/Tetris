@@ -15,5 +15,6 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["training", "src/ai", "src/types.ts", "src/constants.ts", "src/engine"]
+  "include": ["training", "src/ai", "src/types.ts", "src/constants.ts", "src/engine"],
+  "exclude": ["src/ai/loadWeights.ts"]
 }
