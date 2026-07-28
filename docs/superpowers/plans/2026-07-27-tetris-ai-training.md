@@ -3054,6 +3054,7 @@ port.on('message', (task: SimTask) => {
 
 ```ts
 import { describe, it, expect, afterAll } from 'vitest';
+import type { Worker } from 'node:worker_threads';
 import { WorkerPool, type SimTask } from './pool';
 import { toVector, HANDCRAFTED_WEIGHTS } from '../src/ai/weights';
 
@@ -3111,6 +3112,36 @@ describe('WorkerPool', () => {
   it('accepts an empty task list', async () => {
     expect(await pool.run([])).toEqual([]);
   });
+
+  it('replaces a crashed worker and still completes every task', async () => {
+    // The soft-failure path (the worker catching its own exception) is covered
+    // above. This covers the hard one: the worker thread dying, which surfaces
+    // as an 'error' event on the parent Worker object. It is the single path
+    // most likely to strand a task and hang run() forever, so it gets a test
+    // rather than an argument.
+    const crashPool = new WorkerPool(2);
+    const victim = (crashPool as unknown as { workers: Worker[] }).workers[0];
+
+    try {
+      const promise = crashPool.run(Array.from({ length: 8 }, (_, i) => task(i, 500 + i)));
+
+      // Fire a genuine 'error' event while work is in flight.
+      victim.emit('error', new Error('simulated worker crash'));
+
+      const results = await promise;
+
+      expect(results).toHaveLength(8);
+      results.forEach((r, i) => {
+        expect(r.taskId).toBe(i);
+        expect(r.pieces).toBeGreaterThan(0);
+      });
+    } finally {
+      // The synthetic 'error' leaves the original thread alive but orphaned —
+      // the pool has already swapped it out, so destroy() will not reach it.
+      await victim.terminate();
+      await crashPool.destroy();
+    }
+  }, 120000);
 });
 ```
 
@@ -3174,12 +3205,15 @@ export class WorkerPool {
     // like '../src/ai/simulate'. Every game then fails with "Cannot find module"
     // — loudly, via the pool's retry path, but uselessly. This flag makes the
     // worker self-sufficient no matter how the parent was launched.
-    const worker = new Worker(WORKER_URL, {
+    // No unref() here. It looks like it would let an idle worker stop holding
+    // the process open, but attaching a 'message' listener re-refs the
+    // underlying MessagePort, and attach() always adds one — so unref() is
+    // inert and only misleads. Shutting the pool down is destroy()'s job, and
+    // callers must call it.
+    return new Worker(WORKER_URL, {
       name: `sim-${i}`,
       execArgv: ['--import', 'tsx'],
     });
-    worker.unref();
-    return worker;
   }
 
   run(tasks: SimTask[]): Promise<SimTaskResult[]> {
