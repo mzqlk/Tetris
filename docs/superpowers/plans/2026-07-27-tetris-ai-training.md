@@ -3339,7 +3339,7 @@ git commit -m "feat: add worker pool with per-game task granularity"
   - `sampleCandidates(state: CemState, count: number, rng: () => number): number[][]`
   - `noiseAt(gen: number, opts: { initialNoise; noiseDecay; noiseFloor }): number`
   - `updateCem(state, candidates, fitness, opts: { eliteFrac; noise }): CemState`
-  - `nextMaxPieces(current: number, medianPieces: number, cap: number): number`
+  - `nextMaxPieces(current: number, elitePieces: number, cap: number): number`
   - `median(values: number[]): number`
 
 - [ ] **Step 1: 写会失败的测试**
@@ -3468,14 +3468,17 @@ describe('updateCem', () => {
 });
 
 describe('nextMaxPieces', () => {
-  // The trigger is SURVIVED PIECES, not lines. Each piece is 4 cells and a line
-  // is 10, so lines/pieces can never exceed 0.4 — a lines-based trigger of
-  // "0.8 * maxPieces" is mathematically unreachable and would never fire.
-  it('doubles once the median game is bumping against the cap', () => {
+  // The trigger is the ELITES' SURVIVED PIECES, and both halves are measured
+  // rather than assumed. Lines can never exceed 0.4 per piece (4 cells vs 10),
+  // so a lines-based trigger of "0.8 * maxPieces" is unreachable. And across 15
+  // real generations the POPULATION median sat at 18-59 pieces against a 240
+  // threshold and never fired, while the best candidate was already pinned at
+  // 99% of the ceiling from generation 0.
+  it('doubles once the elite games are bumping against the cap', () => {
     expect(nextMaxPieces(300, 250, 100000)).toBe(600);
   });
 
-  it('holds steady while games still end on their own', () => {
+  it('holds steady while the elites still die on their own', () => {
     expect(nextMaxPieces(300, 100, 100000)).toBe(300);
   });
 
@@ -3603,16 +3606,26 @@ export function median(values: number[]): number {
 /**
  * Raise the per-game piece cap once it is the binding constraint.
  *
- * The trigger is median SURVIVED PIECES, not fitness. Fitness is measured in
- * lines, and since a piece contributes 4 cells while a line needs 10, the ratio
- * of lines to pieces can never exceed 0.4 — comparing lines against a fraction
- * of the piece cap would be a condition that can never be true.
+ * `elitePieces` is the median survived-piece count among the ELITES, and both
+ * halves of that matter. Measured evidence for each:
  *
- * Without this, late-generation candidates run for minutes per game and eat the
- * whole time budget.
+ * - PIECES, not fitness. Fitness is lines; a piece contributes 4 cells and a
+ *   line needs 10, so lines/pieces can never exceed 0.4. Comparing lines
+ *   against a fraction of the piece cap is a condition that can never be true.
+ * - ELITES, not the population. Most sampled candidates die within ~40 pieces,
+ *   so the population median never approaches the cap either — measured across
+ *   15 real generations it sat at 18-59 against a 240 threshold and never once
+ *   fired. Meanwhile the best candidate was pinned at 99% of the 0.4 x cap
+ *   ceiling from generation 0 onward. CEM fits its next distribution to the
+ *   elites, so when they are all pressed against the ceiling it can no longer
+ *   tell its best candidate from its worst elite, and selection pressure dies.
+ *
+ * Without a working trigger the cap never rises and fitness saturates; with one
+ * that fires too eagerly, late generations run for minutes per game and eat the
+ * whole time budget. Keying on the elites puts it where the signal actually is.
  */
-export function nextMaxPieces(current: number, medianPieces: number, cap: number): number {
-  if (medianPieces <= 0.8 * current) return current;
+export function nextMaxPieces(current: number, elitePieces: number, cap: number): number {
+  if (elitePieces <= 0.8 * current) return current;
   return Math.min(current * 2, cap);
 }
 ```
@@ -3812,10 +3825,22 @@ async function runGeneration(): Promise<void> {
   const bestWeights = candidates[fitness.indexOf(best)];
   const elapsedMs = Date.now() - started;
 
+  // Median survival among the ELITES. This drives the piece cap (see below) and
+  // is worth logging in its own right: it is the one number that shows whether
+  // the cap is currently truncating the candidates CEM actually learns from.
+  const eliteCount = Math.max(1, Math.ceil(cfg.eliteFrac * candidates.length));
+  const elitePieces = median(
+    fitness
+      .map((fit, i) => ({ fit, pieces: meanPieces[i] }))
+      .sort((a, b) => b.fit - a.fit)
+      .slice(0, eliteCount)
+      .map((e) => e.pieces),
+  );
+
   appendFileSync(LOG, JSON.stringify({
     gen, ts: Date.now(), best, mean, median: median(fitness), worst, std,
     mu: state.mu, sigma: state.sigma, bestWeights,
-    maxPieces, medianPieces: median(meanPieces),
+    maxPieces, medianPieces: median(meanPieces), elitePieces,
     gamesPerCandidate: cfg.gamesPerCandidate, elapsedMs,
   }) + '\n');
 
@@ -3830,9 +3855,9 @@ async function runGeneration(): Promise<void> {
     noise: noiseAt(gen, cfg),
   });
 
-  const raised = nextMaxPieces(maxPieces, median(meanPieces), cfg.maxPiecesCap);
+  const raised = nextMaxPieces(maxPieces, elitePieces, cfg.maxPiecesCap);
   if (raised !== maxPieces) {
-    console.log(`  piece cap ${maxPieces} -> ${raised} (median survival ${median(meanPieces).toFixed(0)})`);
+    console.log(`  piece cap ${maxPieces} -> ${raised} (elite survival ${elitePieces.toFixed(0)})`);
     maxPieces = raised;
   }
 
@@ -3960,7 +3985,7 @@ git commit -m "feat: add CEM training loop with checkpointing and re-evaluation"
 **Interfaces:**
 - Consumes: `FEATURE_NAMES`（Task 3）、`public/ai/training-log.jsonl`（Task 13 写出）
 - Produces:
-  - `interface LogEntry { gen; ts; best; mean; median; worst; std; mu; sigma; bestWeights; maxPieces; medianPieces; gamesPerCandidate; elapsedMs }`
+  - `interface LogEntry { gen; ts; best; mean; median; worst; std; mu; sigma; bestWeights; maxPieces; medianPieces; elitePieces; gamesPerCandidate; elapsedMs }`
   - `parseLog(text: string): LogEntry[]`
   - `useTrainingLog(pollMs?: number): { entries: LogEntry[]; error: string | null }`
   - `linearScale(d0, d1, r0, r1): (v: number) => number`
@@ -4081,7 +4106,7 @@ import { parseLog } from './useTrainingLog';
 const line = (gen: number) => JSON.stringify({
   gen, ts: 1785000000000 + gen, best: 100 + gen, mean: 50, median: 40, worst: 1, std: 10,
   mu: Array(9).fill(0.1), sigma: Array(9).fill(0.5), bestWeights: Array(9).fill(0.2),
-  maxPieces: 300, medianPieces: 120, gamesPerCandidate: 5, elapsedMs: 1000,
+  maxPieces: 300, medianPieces: 120, elitePieces: 260, gamesPerCandidate: 5, elapsedMs: 1000,
 });
 
 describe('parseLog', () => {
@@ -4172,6 +4197,8 @@ export interface LogEntry {
   bestWeights: number[];
   maxPieces: number;
   medianPieces: number;
+  /** Median survived pieces among the elites — drives the piece-cap schedule. */
+  elitePieces: number;
   gamesPerCandidate: number;
   elapsedMs: number;
 }
@@ -4824,7 +4851,7 @@ git commit -m "chore: publish trained weights"
 | §6.5 最优权重复评 | Task 13 |
 | §6.6 CLI 与 `config.ts` | Task 8、11、13 |
 | §7 数据格式（两份权重文件） | Task 4、13 |
-| §7.2 `training-log.jsonl` | Task 13（增加 `medianPieces` 字段） |
+| §7.2 `training-log.jsonl` | Task 13（增加 `medianPieces` / `elitePieces` 字段） |
 | §7.3 `checkpoint.json` | Task 13 |
 | §8.1 网页托管 + 自愈回放 + 权重加载 | Task 9、10 |
 | §8.2 面板、第二入口、四张图、空状态 | Task 14、15 |
@@ -4834,7 +4861,7 @@ git commit -m "chore: publish trained weights"
 
 无遗漏。
 
-**Type consistency** —— 跨任务引用的符号已核对一致：`FEATURE_NAMES` / `FEATURE_COUNT`（Task 3 定义，4/12/15 使用）、`Placement` / `AiMove`（Task 5 定义，6/9 使用）、`Decision`（Task 6）、`SimTask` / `SimTaskResult`（Task 11 定义，worker 与 train 共用）、`CemState`（Task 12 定义，13 使用）、`LogEntry`（Task 14 定义，15 使用）、`Weights` / `WeightsFile`（Task 4 定义，10/13 使用）。`nextMaxPieces` 的第二个参数在 Task 12 与 Task 13 中都是「中位存活方块数」。
+**Type consistency** —— 跨任务引用的符号已核对一致：`FEATURE_NAMES` / `FEATURE_COUNT`（Task 3 定义，4/12/15 使用）、`Placement` / `AiMove`（Task 5 定义，6/9 使用）、`Decision`（Task 6）、`SimTask` / `SimTaskResult`（Task 11 定义，worker 与 train 共用）、`CemState`（Task 12 定义，13 使用）、`LogEntry`（Task 14 定义，15 使用）、`Weights` / `WeightsFile`（Task 4 定义，10/13 使用）。`nextMaxPieces` 的第二个参数在 Task 12 与 Task 13 中都是「精英的中位存活方块数」。
 
 ---
 
