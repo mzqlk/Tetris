@@ -73,6 +73,41 @@ describe('parseWeightsFile', () => {
     expect(parseWeightsFile(valid)!.meanHeight).toBe(0);
   });
 
+  it('carries score-goal metadata from a newly published file', () => {
+    const parsed = parseWeightsFile({
+      ...valid,
+      version: 2,
+      objective: 'score-rate-v1',
+      meanScore: 123456.5,
+      evalMaxPieces: 5000,
+    });
+
+    expect(parsed).toMatchObject({
+      version: 2,
+      objective: 'score-rate-v1',
+      meanScore: 123456.5,
+      evalMaxPieces: 5000,
+    });
+  });
+
+  it('normalises score metadata to null for a legacy weights file', () => {
+    const parsed = parseWeightsFile(valid);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.objective).toBeNull();
+    expect(parsed!.meanScore).toBeNull();
+    expect(parsed!.evalMaxPieces).toBeNull();
+  });
+
+  it('does not turn malformed score metadata into a false numeric baseline', () => {
+    const parsed = parseWeightsFile({
+      ...valid,
+      objective: 7,
+      meanScore: '123456',
+      evalMaxPieces: Number.NaN,
+    });
+    expect(parsed).toMatchObject({ objective: null, meanScore: null, evalMaxPieces: null });
+  });
+
   it('rejects a missing feature key', () => {
     const { holes, ...rest } = valid.weights;
     expect(parseWeightsFile({ ...valid, weights: rest })).toBeNull();

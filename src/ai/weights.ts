@@ -6,6 +6,9 @@ export type Weights = Record<FeatureName, number>;
 export interface WeightsFile {
   version: number;
   weights: Weights;
+  objective: string | null;
+  meanScore: number | null;
+  evalMaxPieces: number | null;
   meanLines: number;
   /** Mean stack height over the same evaluation — 0 in files written before it. */
   meanHeight: number;
@@ -64,10 +67,15 @@ export function parseWeightsFile(data: unknown): WeightsFile | null {
 
   const num = (v: unknown, fallback: number) =>
     typeof v === 'number' && Number.isFinite(v) ? v : fallback;
+  const nullableNum = (v: unknown): number | null =>
+    typeof v === 'number' && Number.isFinite(v) ? v : null;
 
   return {
     version: num(d.version, 1),
     weights,
+    objective: typeof d.objective === 'string' ? d.objective : null,
+    meanScore: nullableNum(d.meanScore),
+    evalMaxPieces: nullableNum(d.evalMaxPieces),
     meanLines: num(d.meanLines, 0),
     meanHeight: num(d.meanHeight, 0),
     evalGames: num(d.evalGames, 0),

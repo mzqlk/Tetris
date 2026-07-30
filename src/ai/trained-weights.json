@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "weights": {
     "aggregateHeight": -0.3738787961463946,
     "holes": -0.20057166489064943,
@@ -11,6 +11,9 @@
     "colTransitions": -0.42490105942251594,
     "wellDepth": -0.17426639446021316
   },
+  "objective": "lines-height-v1",
+  "meanScore": null,
+  "evalMaxPieces": 5000,
   "meanLines": 1998.4,
   "meanHeight": 3.10,
   "evalGames": 30,
