@@ -39,16 +39,16 @@ describe('WorkerPool', () => {
     expect(viaWorker.meanHeight).toBe(direct.meanHeight);
   }, 60000);
 
-  it('records a failed task as zero fitness instead of hanging or throwing', async () => {
+  it('records a failed task as zero score instead of hanging or throwing', async () => {
     // A short weight vector makes simulateGame throw inside the worker.
     const results = await pool.run([task(0, 1), task(1, 2, [1, 2, 3]), task(2, 3)]);
 
     expect(results).toHaveLength(3);
     expect(results[1].failed).toBe(true);
+    expect(results[1].score).toBe(0);
     expect(results[1].lines).toBe(0);
-    // Not 0. Fitness SUBTRACTS height, so a failed game reporting height 0
-    // would read as the tidiest board ever played and could outscore a real
-    // candidate. The worst legal height is the honest stand-in for no result.
+    // Score is the primary target; height remains a diagnostic. The worst legal
+    // height is the honest stand-in when no diagnostic result exists.
     expect(results[1].meanHeight).toBe(TOTAL_ROWS);
     expect(results[0].failed).toBe(false);
     expect(results[2].failed).toBe(false);

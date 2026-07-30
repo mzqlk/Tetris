@@ -36,6 +36,8 @@ import {
   assertFreshRun,
   readCompatibleCheckpoint,
   resolveRunPaths,
+  type ScoreRateBestEver,
+  type ScoreRateCheckpoint,
 } from './runArtifacts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -44,25 +46,6 @@ const SAMPLE_STREAM = 0xce41;
 const PUBLIC_AI = resolve(ROOT, 'public/ai');
 const BEST_PUBLIC = resolve(PUBLIC_AI, 'best-weights.json');
 const BEST_SRC = resolve(ROOT, 'src/ai/trained-weights.json');
-
-interface BestEver extends ReevaluationSummary {
-  weights: number[];
-  gen: number;
-  evalGames: number;
-  evalMaxPieces: number;
-}
-
-interface Checkpoint {
-  version: 2;
-  objective: typeof SCORE_RATE_OBJECTIVE;
-  gen: number;
-  mu: number[];
-  sigma: number[];
-  baseSeed: number;
-  maxPieces: number;
-  config: TrainConfig;
-  bestEver: BestEver | null;
-}
 
 /**
  * A mistyped or omitted value has to fail loudly. Bare `Number(value)` yields
@@ -103,7 +86,7 @@ function parseArgs(argv: string[]): {
   return out;
 }
 
-function writeWeightsFiles(best: BestEver, depth: 1 | 2) {
+function writeWeightsFiles(best: ScoreRateBestEver, depth: 1 | 2) {
   const payload = JSON.stringify({
     version: 2,
     weights: fromVector(best.weights),
@@ -140,26 +123,32 @@ function reevaluationSummary(
 const args = parseArgs(process.argv.slice(2));
 const paths = resolveRunPaths(ROOT, args.outputDir);
 
-let checkpoint: Checkpoint | null = null;
+let checkpoint: ScoreRateCheckpoint | null = null;
 if (args.resume) {
   if (!existsSync(paths.checkpoint)) {
     throw new Error(`--resume but no checkpoint at ${paths.checkpoint}`);
   }
-  checkpoint = readCompatibleCheckpoint(paths.checkpoint) as unknown as Checkpoint;
+  checkpoint = readCompatibleCheckpoint(paths.checkpoint);
 } else {
   assertFreshRun(paths);
 }
 
 // `--workers` is the throttle: the pool is the only thing in this script that
 // consumes more than one core, so N workers means N busy cores and the rest of
-// the machine stays responsive. Everything else comes from config.ts.
-const cfg: TrainConfig = { ...DEFAULT_CONFIG, workers: resolveWorkers(args.workers) };
+// the machine stays responsive. A resume restores every other setting from the
+// validated checkpoint; a fresh run starts from config.ts.
+const restoredConfig = checkpoint?.config ?? DEFAULT_CONFIG;
+const requestedWorkers = args.workers ?? checkpoint?.config.workers ?? null;
+const cfg: TrainConfig = {
+  ...restoredConfig,
+  workers: resolveWorkers(requestedWorkers),
+};
 mkdirSync(paths.outputDir, { recursive: true });
 
 let state: CemState = initCem();
 let maxPieces = cfg.initialMaxPieces;
 let baseSeed = cfg.baseSeed;
-let bestEver: BestEver | null = null;
+let bestEver: ScoreRateBestEver | null = null;
 
 if (checkpoint !== null) {
   state = { mu: checkpoint.mu, sigma: checkpoint.sigma, gen: checkpoint.gen };
@@ -181,7 +170,7 @@ console.log(
 );
 
 function saveCheckpoint() {
-  const cp: Checkpoint = {
+  const cp: ScoreRateCheckpoint = {
     version: 2,
     objective: SCORE_RATE_OBJECTIVE,
     gen: state.gen,

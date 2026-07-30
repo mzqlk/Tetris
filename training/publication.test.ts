@@ -40,6 +40,28 @@ describe('shouldPublishScoreReevaluation', () => {
       summary(1000, 4),
     )).toBe(false);
   });
+
+  it('treats the exact inclusive 0.1 percent boundary as a height-decided tie', () => {
+    expect(shouldPublishScoreReevaluation(
+      summary(1000, 8),
+      summary(999, 3),
+    )).toBe(false);
+    expect(shouldPublishScoreReevaluation(
+      summary(999, 2),
+      summary(1000, 8),
+    )).toBe(true);
+  });
+
+  it('follows score ordering just outside the 0.1 percent band regardless of height', () => {
+    expect(shouldPublishScoreReevaluation(
+      summary(1000, 8),
+      summary(998.999999, 2),
+    )).toBe(true);
+    expect(shouldPublishScoreReevaluation(
+      summary(998.999999, 2),
+      summary(1000, 8),
+    )).toBe(false);
+  });
 });
 
 describe('fixedReevaluationSeeds', () => {

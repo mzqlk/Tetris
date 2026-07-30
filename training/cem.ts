@@ -171,20 +171,18 @@ export function median(values: number[]): number {
  * `elitePieces` is the median survived-piece count among the ELITES, and both
  * halves of that matter. Measured evidence for each:
  *
- * - PIECES, not fitness. Fitness is lines; a piece contributes 4 cells and a
- *   line needs 10, so lines/pieces can never exceed 0.4. Comparing lines
- *   against a fraction of the piece cap is a condition that can never be true.
+ * - PIECES, not score rate. The trigger asks whether the fixed schedule is the
+ *   binding constraint; only survived pieces answer that directly. A high or
+ *   low score rate does not prove that a candidate reached the scheduled cap.
  * - ELITES, not the population. Most sampled candidates die within ~40 pieces,
  *   so the population median never approaches the cap either — measured across
  *   15 real generations it sat at 18-59 against a 240 threshold and never once
- *   fired. Meanwhile the best candidate was pinned at 99% of the 0.4 x cap
- *   ceiling from generation 0 onward. CEM fits its next distribution to the
- *   elites, so when they are all pressed against the ceiling it can no longer
- *   tell its best candidate from its worst elite, and selection pressure dies.
+ *   fired. CEM fits its next distribution to the elites, so their survival is
+ *   the relevant signal for deciding when to lengthen the schedule.
  *
- * Without a working trigger the cap never rises and fitness saturates; with one
- * that fires too eagerly, late generations run for minutes per game and eat the
- * whole time budget. Keying on the elites puts it where the signal actually is.
+ * Without a working trigger the schedule never rises; with one that fires too
+ * eagerly, late generations run for minutes per game and eat the whole time
+ * budget. Keying on elite survival puts it where the signal actually is.
  */
 export function nextMaxPieces(current: number, elitePieces: number, cap: number): number {
   if (elitePieces <= 0.8 * current) return current;
