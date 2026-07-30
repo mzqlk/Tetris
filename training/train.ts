@@ -11,6 +11,7 @@ import {
 } from './cem';
 import { hashSeed, mulberry32 } from '../src/ai/rng';
 import { fromVector, normalize } from '../src/ai/weights';
+import { shouldPublishReevaluation } from './publication';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 /** Salt keeping the candidate-sampling stream disjoint from the game seeds. */
@@ -24,10 +25,10 @@ const BEST_SRC = resolve(ROOT, 'src/ai/trained-weights.json');
 interface BestEver {
   weights: number[];
   /**
-   * The combined objective, `meanLines - heightPenalty * meanHeight`, and the
-   * field the published model is chosen by. Ranking on meanLines alone stops
-   * working the moment re-eval saturates (measured: 1998.2 of a possible 2000),
-   * at which point every later re-eval ties and the model never updates again.
+   * The combined objective, `meanLines - heightPenalty * meanHeight`, used for
+   * publication while either re-evaluation can still die. Once both line terms
+   * saturate (measured: 1998.2 of a possible 2000), publication instead ranks
+   * the remaining non-saturated signal, mean stack height.
    */
   score: number;
   meanLines: number;
@@ -293,7 +294,11 @@ async function runGeneration(): Promise<void> {
       );
     }
 
-    if (score > bestEver.score) {
+    if (shouldPublishReevaluation(
+      { score, meanLines: lines, meanHeight: height },
+      bestEver,
+      reevalCeiling,
+    )) {
       bestEver = {
         weights: mu, score, meanLines: lines, meanHeight: height,
         gen: state.gen, evalGames: cfg.reevalGames,
