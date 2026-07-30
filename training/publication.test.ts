@@ -1,28 +1,55 @@
 import { describe, expect, it } from 'vitest';
-import { shouldPublishReevaluation } from './publication';
+import {
+  fixedReevaluationSeeds,
+  shouldPublishScoreReevaluation,
+  type ReevaluationSummary,
+} from './publication';
 
-describe('shouldPublishReevaluation', () => {
-  it('prefers the tidier candidate when both re-evaluations have saturated lines', () => {
-    expect(shouldPublishReevaluation(
-      { score: 1995.3, meanLines: 1998.4, meanHeight: 3.10 },
-      { score: 1995.5, meanLines: 1998.7, meanHeight: 3.19 },
-      2000,
+const summary = (meanScore: number, meanHeight: number): ReevaluationSummary => ({
+  meanScore,
+  scoreRate: meanScore / 5000,
+  meanLines: 1998,
+  meanHeight,
+});
+
+describe('shouldPublishScoreReevaluation', () => {
+  it('prefers a materially higher fixed-schedule score even with worse height', () => {
+    expect(shouldPublishScoreReevaluation(
+      summary(1002, 8),
+      summary(1000, 3),
     )).toBe(true);
   });
 
-  it('treats exactly 99% of the line ceiling as saturated', () => {
-    expect(shouldPublishReevaluation(
-      { score: 1978.8, meanLines: 1980, meanHeight: 1.2 },
-      { score: 1978.9, meanLines: 1980, meanHeight: 1.3 },
-      2000,
-    )).toBe(true);
-  });
-
-  it('keeps the combined score ordering before both candidates saturate', () => {
-    expect(shouldPublishReevaluation(
-      { score: 110, meanLines: 115, meanHeight: 5 },
-      { score: 111, meanLines: 116, meanHeight: 5 },
-      2000,
+  it('rejects a materially lower score even with better height', () => {
+    expect(shouldPublishScoreReevaluation(
+      summary(998, 2),
+      summary(1000, 8),
     )).toBe(false);
+  });
+
+  it('uses lower height inside the approved 0.1 percent near-tie band', () => {
+    expect(shouldPublishScoreReevaluation(
+      summary(1000.5, 3),
+      summary(1000, 4),
+    )).toBe(true);
+  });
+
+  it('does not publish a less tidy candidate inside the near-tie band', () => {
+    expect(shouldPublishScoreReevaluation(
+      summary(1000.5, 5),
+      summary(1000, 4),
+    )).toBe(false);
+  });
+});
+
+describe('fixedReevaluationSeeds', () => {
+  it('returns the same schedule whenever the base seed is the same', () => {
+    expect(fixedReevaluationSeeds(20260727, 30))
+      .toEqual(fixedReevaluationSeeds(20260727, 30));
+    expect(fixedReevaluationSeeds(20260727, 30)).toHaveLength(30);
+  });
+
+  it('changes the schedule when the run base seed changes', () => {
+    expect(fixedReevaluationSeeds(1, 3)).not.toEqual(fixedReevaluationSeeds(2, 3));
   });
 });
