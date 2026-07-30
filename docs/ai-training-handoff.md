@@ -1,8 +1,8 @@
 # Tetris AI 训练系统 — 交接文档
 
-**写于**：2026-07-28（同日更新：适应度加入棋盘整洁度，旧 checkpoint 退役）
-**代码状态**：46 个提交已合并到本地 `master`（HEAD `ccd95bd`），**尚未推送**（`git pull` 当时 SSL 握手失败）；整洁度这一批改动**尚未提交**
-**测试**：159 个，全绿，约 5 秒
+**写于**：2026-07-28；2026-07-29 按迁移审计修正动态状态
+**当前状态的读取方式**：每次先运行 `git status` / `git log`，检查 `public/ai/` 产物与训练进程，再决定操作。旧 HEAD、未推送状态和固定测试数都只是历史快照，不是本交接的持久指令。
+**验证**：运行当前 `npm test`、`npm run build` 与 `npm run typecheck:train`；以实际输出为准。
 **设计文档**：[`docs/superpowers/specs/2026-07-27-tetris-ai-training-design.md`](superpowers/specs/2026-07-27-tetris-ai-training-design.md)
 **实施计划**：[`docs/superpowers/plans/2026-07-27-tetris-ai-training.md`](superpowers/plans/2026-07-27-tetris-ai-training.md)（约 5000 行，含每个模块的完整代码与理由）
 
@@ -10,7 +10,7 @@
 
 ## 1. 一句话现状
 
-AI 已经能打得很好（30 局 × 5000 步全程未死），训练系统完整可用。**消行数这个指标会封顶**，所以适应度已经改成 `消行 - 平均堆叠高度`——高度不封顶，能把「都不会死」的候选排出高下（细节见第 4 节）。指标本身现在是可用的；**「训练比手调好多少」仍未被证明**：按新指标量，当前这版训练权重（平均高度 3.23）还略逊于手调权重（3.12），需要用新适应度重跑一轮训练才能下结论。
+AI 已经能打得很好（历史样本中 30 局 × 5000 步全程未死），训练系统完整可用。**消行数这个指标会在 piece cap 下饱和**，所以适应度已经改成 `消行 - 平均堆叠高度`。高度受棋盘总高 22 限制，但不会像“所有候选都活到 cap”时的消行数那样机械并列，因此仍能把幸存候选排出高下（细节见第 4 节）。指标本身现在可用；**「训练比手调好多少」仍需在相同配置、种子和当前产物上重新测量**。
 
 ---
 
@@ -52,28 +52,31 @@ AI 已经能打得很好（30 局 × 5000 步全程未死），训练系统完�
 
 - `training-log.jsonl` — 每代一行，面板每秒轮询它
 - `checkpoint.json` — 断点续训用
-- `best-weights.json` — 运行时 `fetch`，重训后无需 rebuild 即可生效
+- `best-weights.json` — 训练发布后供运行时 `fetch`；不是每个 checkout 或每个训练阶段都一定存在
 
 ---
 
 ## 3. 常用命令
 
 ```bash
-npm test                    # 148 个测试，约 17 秒
+npm test                    # 以当前收集数和实际输出为准
 npm run build               # 产出 dist/index.html 与 dist/training.html
 npm run typecheck:train     # 单独检查 training/（与主应用 tsconfig 分开）
 
 npm run dev                 # http://localhost:5190/          游戏 + AI 面板
                             # http://localhost:5190/training.html  训练面板
 
-npm run bench -- --games 30 --depth 2 --max-pieces 2000 --weights public/ai/best-weights.json
+npm run bench -- --games 30 --depth 2 --max-pieces 2000  # 内置手调基线
+# 仅在文件存在且已核验时追加：--weights <权重文件>
 npm run train -- --generations 20
 npm run train -- --generations 20 --workers 8   # 只占 8 个核心（缺省是核心数-1，上限 31）
 npm run train -- --resume
 npm run train               # 无限跑，Ctrl-C 存盘退出
 ```
 
-`npm run lint` **在 master 上本来就是坏的**（缺 `eslint.config.*`），与本次工作无关。
+训练命令会修改产物，不能把上面的示例当成顺序执行清单。运行前先读第 5 节的 checkpoint 决策门。
+
+`npm run lint` 的可用性也应在当前分支实测；不要继承旧会话的“本来就是坏的”结论。
 
 ---
 
@@ -116,7 +119,7 @@ CEM 是按前 10% 的精英拟合下一代分布的。精英全部并列在天�
 fitness = meanLines - heightPenalty * meanHeight
 ```
 
-`meanHeight` 是**每次锁定后（且消行之后）最高列高度**的全局平均，由 `simulate.ts` 累加、`SimResult` 带出。这个量**没有上限也不会饱和**：既然大家都不会死，就比谁活得漂亮——平均把堆压在 3 行的，明显强于常年顶到 15 行才勉强不死的。且它**保留真实的 7-bag 分布**，练出的权重能直接迁移回真游戏。
+`meanHeight` 是**每次锁定后（且消行之后）最高列高度**的全局平均，由 `simulate.ts` 累加、`SimResult` 带出。它的范围受 `TOTAL_ROWS = 22` 限制，但不会仅因为所有候选活到 piece cap 就自动取同一值：平均把堆压在 3 行的候选仍可与常年顶到 15 行的候选区分。它保留真实的 7-bag 分布，适合作为能迁移回真游戏的整洁度信号。
 
 `heightPenalty = 1.0`，是量出来的，不是拍的。把训练权重按 sigma 0.1 扰动（模拟收敛后的精英池）后两项的跨度：
 
@@ -156,11 +159,20 @@ fitness = meanLines - heightPenalty * meanHeight
 
 ## 5. 坑（会浪费时间的那种）
 
-### 有毒的 checkpoint（已处理，2026-07-28）
+### Checkpoint 决策门
 
-那个 `maxPieces = 76800` 的 checkpoint **已经退役归档**，现在 `public/ai/` 是干净的：直接 `npm run train` 从 gen 0、上限 300 开始；`--resume` 会立刻报 `--resume but no checkpoint at ...` 而不是闷头跑三小时。
+历史上 `maxPieces = 76800` 的 checkpoint 已退役归档，但这不代表 `public/ai/` 永久保持干净。**2026-07-28 18:20 的观测快照**已经存在新的 `checkpoint.json`（gen 5、`maxPieces = 2000`）和 gen 0–4 日志；这只是说明“当时有一轮进行中”，开始工作时必须重新读取文件。
 
-退役的那轮在仓库根目录的 `training-archive/`（同目录 README 记了原委）。**不放在 `public/ai/` 下**：Vite 会把 `public/` 原样拷进 `dist/`，死掉的运行没必要跟着发布。当时的状态与判断：
+任何训练前都按以下顺序判断：
+
+1. 检查是否有训练进程正在写这些文件。
+2. 读取 checkpoint 的 `gen`、`maxPieces`、`config`、目标函数相关字段，并检查日志尾部是否与之连续。
+3. 如果要保留本轮，只能在确认格式和目标兼容后使用 `--resume`。
+4. 如果要新跑，先取得用户授权并把现有 checkpoint、日志和权重作为一组归档或改用独立输出位置。
+
+**不要在已有产物时直接省略 `--resume`。** `train.ts` 会从新状态初始化，继续向同一个日志追加，并覆盖 checkpoint，造成世代混杂和进度丢失。
+
+退役的 76800-cap 历史轮次位于仓库根目录的 `training-archive/`（同目录 README 记录原委）。不放在 `public/ai/` 下：Vite 会把 `public/` 原样拷进 `dist/`。当时的状态与判断：
 
 | | |
 |---|---|
@@ -171,7 +183,7 @@ fitness = meanLines - heightPenalty * meanHeight
 
 加上适应度已经换成组合式，旧日志里 cap 38400 下的 `best = 15358` 与新目标的百位数值混在同一个 `training-log.jsonl` 里会让面板的图彻底失真，所以选择了归档重来而不是把 `maxPieces` 改回 300。
 
-**下次再遇到跑飞的 checkpoint**，两条路：
+**下次再遇到跑飞的 checkpoint**，只能在停止写入进程、核对目标函数并获得用户授权后选择修正或成组归档。以下是历史示例，不是可直接粘贴的默认操作：
 
 ```bash
 # 改回 300，保留已有的 mu/sigma 进度（仅当目标函数没变过）
@@ -181,7 +193,7 @@ node -e "const f='public/ai/checkpoint.json';const c=require('./'+f);c.maxPieces
 mkdir -p training-archive && mv public/ai/checkpoint.json public/ai/training-log.jsonl training-archive/
 ```
 
-`.gitignore` 现在忽略整个 `public/ai/`（原先只列了三个文件名）与 `training-archive/`，两边都不会漏进 git。
+`.gitignore` 忽略整个 `public/ai/` 与 `training-archive/`。Git 状态看不到这些产物并不表示它们不存在；必须直接检查目录。
 
 ### 杀训练进程要按内存/CPU 找，不能 grep 命令行
 
@@ -204,7 +216,10 @@ Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
 
 ### 训练会写 `src/ai/trained-weights.json`
 
-复评产出更好的权重时会覆写它（这是被跟踪的文件）。跑冒烟测试后记得 `git checkout src/ai/trained-weights.json`，别把测试产物当成模型提交上去。
+复评产出更好的权重时会覆写这个被跟踪的文件。训练前先记录
+`git diff -- src/ai/trained-weights.json`，确认是否已有用户修改。训练后只撤销能够
+明确归因于本次运行的生成差异；若训练前已有修改或无法区分来源，停止并请用户决定，
+绝不使用无条件的 `git checkout` 或 `git restore` 覆盖工作树文件。
 
 ### 不想让训练占满 CPU
 
@@ -262,7 +277,8 @@ CEM 是搜索式演化，「模型」只有 9 个浮点数，算力全花在博�
 
 按价值排序：
 
-1. **用新适应度重跑一轮训练**——指标已经就位（第 4 节），旧 checkpoint 也已退役（第 5 节），`npm run train` 直接就是干净的从头开始。跑起来之后看 `eliteH` 这一列是否持续下降；判断标准不是 `best`（它的消行部分仍然饱和）
-2. **推送到远端**（当时 SSL 握手失败，46 个提交还在本地）
-3. 修复 `npm run lint`（补 `eslint.config.js`）——这是 master 上本来就有的问题
-4. 让 `searchDepth` 元数据真正起作用：权重文件的深度与 UI 当前深度不一致时给出提示
+1. **先审计当前训练产物**——检查进程、checkpoint、日志尾部、目标配置和候选权重，明确是续跑、归档重跑还是只做 benchmark；没有用户授权不要启动或改动产物。
+2. **用同一组种子和参数比较手调基线与候选权重**——先跑不带 `--weights` 的内置基线，再对已核验的候选文件运行相同命令，重点比较 `meanHeight`、分布和 capped 比例。
+3. **若获准继续训练，先做有限 generations 的短跑**——续跑必须显式 `--resume`；新跑必须先隔离旧产物。观察 `eliteH`、分布统计和 sigma，而不是只看已饱和的消行部分。
+4. 重新核验并处理当前 lint 配置；不要把 2026-07-28 的失败状态当成永久事实。
+5. 让 `searchDepth` 元数据真正起作用：权重文件的深度与 UI 当前深度不一致时给出提示。
