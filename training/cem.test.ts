@@ -154,69 +154,75 @@ describe('nextMaxPieces', () => {
 describe('aggregateFitness', () => {
   // results[i * gamesPerCandidate + j] belongs to candidate i, game j.
   const results = [
-    { lines: 10, pieces: 100, meanHeight: 4 }, { lines: 20, pieces: 200, meanHeight: 6 }, // candidate 0
-    { lines: 1, pieces: 11, meanHeight: 8 }, { lines: 3, pieces: 13, meanHeight: 10 },    // candidate 1
-    { lines: 0, pieces: 5, meanHeight: 2 }, { lines: 0, pieces: 7, meanHeight: 4 },       // candidate 2
+    { score: 900, lines: 10, pieces: 100, meanHeight: 4 },
+    { score: 1500, lines: 20, pieces: 200, meanHeight: 6 },
+    { score: 600, lines: 1, pieces: 20, meanHeight: 8 },
+    { score: 900, lines: 3, pieces: 30, meanHeight: 10 },
   ];
 
-  it('averages each candidate over its own games', () => {
-    const stats = aggregateFitness(results, 3, 2, 0);
-    expect(stats.meanLines).toEqual([15, 2, 0]);
-    expect(stats.meanPieces).toEqual([150, 12, 6]);
-    expect(stats.meanHeight).toEqual([5, 9, 3]);
+  it('aggregates mean score and diagnostics candidate by candidate', () => {
+    const stats = aggregateFitness(results, 2, 2, 300);
+    expect(stats.meanScore).toEqual([1200, 750]);
+    expect(stats.meanLines).toEqual([15, 2]);
+    expect(stats.meanPieces).toEqual([150, 25]);
+    expect(stats.meanHeight).toEqual([5, 9]);
+  });
+
+  it('uses meanScore divided by the scheduled maxPieces as fitness', () => {
+    const stats = aggregateFitness(results, 2, 2, 300);
+    expect(stats.fitness).toEqual([4, 2.5]);
+  });
+
+  it('keeps height diagnostic instead of subtracting it from fitness', () => {
+    const tidy = { score: 900, lines: 10, pieces: 300, meanHeight: 2 };
+    const messy = { score: 900, lines: 10, pieces: 300, meanHeight: 18 };
+    const stats = aggregateFitness([tidy, messy], 2, 1, 300);
+    expect(stats.fitness).toEqual([3, 3]);
+    expect(stats.meanHeight).toEqual([2, 18]);
+  });
+
+  it('does not reward an early death by dividing by actual survived pieces', () => {
+    const quitter = { score: 600, lines: 1, pieces: 20, meanHeight: 3 };
+    const survivor = { score: 1200, lines: 100, pieces: 300, meanHeight: 9 };
+    const { fitness } = aggregateFitness([quitter, survivor], 2, 1, 300);
+
+    expect(quitter.score / quitter.pieces).toBeGreaterThan(survivor.score / survivor.pieces);
+    expect(fitness[1]).toBeGreaterThan(fitness[0]);
+    expect(fitness).toEqual([2, 4]);
   });
 
   it('would notice a transposed flattening', () => {
+    const rowMajor = [
+      ...results,
+      { score: 0, lines: 0, pieces: 5, meanHeight: 2 },
+      { score: 0, lines: 0, pieces: 7, meanHeight: 4 },
+    ];
     // If the loop read results[j * population + i] instead, candidate 0 would
-    // average games 0 and 2 (10 and 1) giving 5.5 rather than 15. Pin the
+    // average games 0 and 3 (10 and 3) giving 6.5 rather than 15. Pin the
     // correct attribution down so a refactor cannot silently swap it.
-    const { meanLines } = aggregateFitness(results, 3, 2, 0);
+    const { meanLines } = aggregateFitness(rowMajor, 3, 2, 300);
     expect(meanLines[0]).toBe(15);
-    expect(meanLines[0]).not.toBe(5.5);
+    expect(meanLines[0]).not.toBe(6.5);
   });
 
   it('rejects a result count that does not match population x games', () => {
-    expect(() => aggregateFitness(results, 3, 3, 0)).toThrow(/expected 9/);
-    expect(() => aggregateFitness(results.slice(1), 3, 2, 0)).toThrow(/expected 6/);
+    expect(() => aggregateFitness(results, 2, 3, 300)).toThrow(/expected 6/);
+    expect(() => aggregateFitness(results.slice(1), 2, 2, 300)).toThrow(/expected 4/);
   });
 
   it('handles a single game per candidate', () => {
-    const { meanLines } = aggregateFitness(
-      [{ lines: 4, pieces: 40, meanHeight: 3 }, { lines: 8, pieces: 80, meanHeight: 3 }], 2, 1, 0,
+    const { meanScore, meanLines } = aggregateFitness(
+      [
+        { score: 400, lines: 4, pieces: 40, meanHeight: 3 },
+        { score: 800, lines: 8, pieces: 80, meanHeight: 3 },
+      ], 2, 1, 300,
     );
+    expect(meanScore).toEqual([400, 800]);
     expect(meanLines).toEqual([4, 8]);
   });
 
-  it('is exactly mean lines when the height penalty is switched off', () => {
-    const { fitness, meanLines } = aggregateFitness(results, 3, 2, 0);
-    expect(fitness).toEqual(meanLines);
-  });
-
-  it('charges the height penalty per unit of mean stack height', () => {
-    const { fitness } = aggregateFitness(results, 3, 2, 1);
-    expect(fitness).toEqual([15 - 5, 2 - 9, 0 - 3]);
-  });
-
-  it('ranks the tidier of two candidates whose lines are tied', () => {
-    // The reason this metric exists: competent candidates never die, so their
-    // lines saturate at 0.4 x the piece cap and CEM can no longer tell its best
-    // elite from its worst. Height is unbounded above and never saturates.
-    const tied = [
-      { lines: 120, pieces: 300, meanHeight: 4 },
-      { lines: 120, pieces: 300, meanHeight: 11 },
-    ];
-    const { fitness } = aggregateFitness(tied, 2, 1, 1);
-    expect(fitness[0]).toBeGreaterThan(fitness[1]);
-  });
-
-  it('still prefers surviving over dying tidily', () => {
-    // The failure mode of too large a penalty: a candidate that tops out after
-    // five pieces leaves a nearly empty board, so it looks immaculate. At the
-    // default penalty the lines term has to dominate that.
-    const quitter = { lines: 0, pieces: 5, meanHeight: 1.5 };
-    const survivor = { lines: 120, pieces: 300, meanHeight: 12 };
-    const { fitness } = aggregateFitness([quitter, survivor], 2, 1, 1);
-    expect(fitness[1]).toBeGreaterThan(fitness[0]);
+  it('rejects a non-positive scheduled piece cap', () => {
+    expect(() => aggregateFitness(results, 2, 2, 0)).toThrow(/maxPieces/);
   });
 });
 

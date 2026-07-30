@@ -3,10 +3,9 @@ import { Worker } from 'node:worker_threads';
 import { TOTAL_ROWS } from '../src/constants';
 
 /**
- * What a game that never ran is scored at. Zero lines is obvious; the height is
- * NOT zero, because fitness subtracts it — a crashed game reporting height 0
- * would look like the tidiest board ever played and could outrank a real
- * candidate. The worst possible height is the honest reading for "no result".
+ * A game that never ran earns zero score, so fixed-schedule score rate ranks it
+ * below any scoring game. TOTAL_ROWS remains the honest diagnostic height for
+ * a failed result; height does not enter primary fitness.
  */
 export const FAILED_RESULT = {
   lines: 0, score: 0, pieces: 0, meanHeight: TOTAL_ROWS, reason: 'error',

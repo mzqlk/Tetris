@@ -1,4 +1,5 @@
 import { cpus } from 'node:os';
+import { PUBLICATION_GAMES, PUBLICATION_MAX_PIECES } from './objective';
 
 /**
  * How many worker threads a run gets, from an optional `--workers N`.
@@ -49,46 +50,13 @@ export interface TrainConfig {
    * informative, and treat `best` as saturated.
    */
   maxPiecesCap: number;
-  /**
-   * Fitness is `meanLines - heightPenalty * meanHeight`. This is the term that
-   * makes training mean anything once candidates stop dying.
-   *
-   * Why a second objective at all: lines saturate. Four cells per piece against
-   * ten per row caps lines at 0.4 per piece, so a candidate that survives the
-   * whole game scores 0.4 x maxPieces regardless of how well it plays — three
-   * independent measurements landed within 1% of that ceiling, and hand-tuned
-   * weights scored the same as trained ones. CEM fits its next distribution to
-   * the top 10%; when all ten are tied at the ceiling there is nothing to fit.
-   * Mean stack height has no ceiling, so it keeps ranking them.
-   *
-   * Why exactly 1.0 — measured, by perturbing the trained weights at sigma 0.1
-   * (a converged elite pool) and looking at the spread of each term:
-   *
-   *   cap  300: lines span 3.33, height span 2.93   (12/12 candidates saturate)
-   *   cap 1200: lines span 6.00, height span 4.38   (10/12 saturate)
-   *
-   * At weight 1.0 the two contribute comparably, and they stay comparable as
-   * the cap doubles, so the tidiness signal does not fade out of the objective
-   * later in a run. Lines are still worth keeping in: under common random
-   * numbers a 3-line gap at the ceiling is real packing skill, not luck.
-   *
-   * Raising it much inverts the objective. Height is bounded by TOTAL_ROWS =
-   * 22, so the penalty can move a candidate by at most 22 * heightPenalty,
-   * while surviving the game is worth 0.4 * maxPieces lines. A candidate that
-   * tops out after five pieces leaves an almost empty board and so reads as
-   * immaculate — once 22 * heightPenalty approaches 0.4 * initialMaxPieces (120
-   * at the current settings) CEM starts preferring a quick tidy death to a long
-   * messy life. Keep `heightPenalty * TOTAL_ROWS` well under 0.4 *
-   * initialMaxPieces; at 1.0 the margin is 22 against 120.
-   */
-  heightPenalty: number;
   /** Extra variance added to sigma^2 each generation. */
   initialNoise: number;
   noiseDecay: number;
   noiseFloor: number;
   baseSeed: number;
   workers: number;
-  /** Re-evaluate mu on fresh seeds every N generations. */
+  /** Re-evaluate mu on the fixed publication schedule every N generations. */
   reevalEvery: number;
   reevalGames: number;
   reevalMaxPieces: number;
@@ -101,13 +69,12 @@ export const DEFAULT_CONFIG: TrainConfig = {
   depth: 2,
   initialMaxPieces: 300,
   maxPiecesCap: 2000,
-  heightPenalty: 1.0,
   initialNoise: 0.5,
   noiseDecay: 0.95,
   noiseFloor: 0.01,
   baseSeed: 20260727,
   workers: resolveWorkers(null),
   reevalEvery: 10,
-  reevalGames: 30,
-  reevalMaxPieces: 5000,
+  reevalGames: PUBLICATION_GAMES,
+  reevalMaxPieces: PUBLICATION_MAX_PIECES,
 };

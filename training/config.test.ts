@@ -45,10 +45,8 @@ describe('DEFAULT_CONFIG', () => {
     expect(Number.isInteger(DEFAULT_CONFIG.workers)).toBe(true);
   });
 
-  it('keeps the height penalty far below the point where dying tidily wins', () => {
-    // See the heightPenalty comment: once heightPenalty * TOTAL_ROWS (22)
-    // approaches 0.4 * initialMaxPieces, a candidate that tops out early
-    // outranks one that survives, because an empty board reads as immaculate.
-    expect(DEFAULT_CONFIG.heightPenalty * 22).toBeLessThan(0.4 * DEFAULT_CONFIG.initialMaxPieces / 2);
+  it('uses the fixed publication schedule required by the score objective', () => {
+    expect(DEFAULT_CONFIG.reevalGames).toBe(30);
+    expect(DEFAULT_CONFIG.reevalMaxPieces).toBe(5000);
   });
 });

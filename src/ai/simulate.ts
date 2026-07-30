@@ -152,13 +152,9 @@ export function applyAction(state: SimState, action: SimAction): void {
 }
 
 /**
- * Headless game driven entirely by the evaluator. Gravity and timing are
- * skipped: the AI always hard-drops, so gravity could never be what locks a
- * piece — simulating it would change nothing and cost tens of times the runtime.
- *
- * The planned pose is assigned directly rather than replayed key by key, so the
- * hard-drop and soft-drop bonuses differ from a browser game. Fitness is measured
- * in lines, not score, so this does not affect training.
+ * The simulator skips real-time gravity, but it returns the engine score used
+ * by training's fixed-schedule score-rate objective. No per-second metric is
+ * derived here.
  */
 export function simulateGame(opts: {
   weights: number[];

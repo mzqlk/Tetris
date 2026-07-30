@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { cpus } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,58 +6,62 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_CONFIG, resolveWorkers, type TrainConfig } from './config';
 import { WorkerPool, type SimTask } from './pool';
 import {
-  initCem, sampleCandidates, updateCem, noiseAt, nextMaxPieces, median,
-  aggregateFitness, eliteCount, type CemState,
+  aggregateFitness,
+  eliteCount,
+  initCem,
+  median,
+  nextMaxPieces,
+  noiseAt,
+  sampleCandidates,
+  updateCem,
+  type CandidateStats,
+  type CemState,
 } from './cem';
 import { hashSeed, mulberry32 } from '../src/ai/rng';
-import { fromVector, normalize } from '../src/ai/weights';
-import { shouldPublishReevaluation } from './publication';
+import {
+  DEFAULT_WEIGHTS,
+  DEFAULT_WEIGHTS_META,
+  fromVector,
+  normalize,
+  toVector,
+} from '../src/ai/weights';
+import { SCORE_RATE_OBJECTIVE } from './objective';
+import {
+  fixedReevaluationSeeds,
+  shouldPublishScoreReevaluation,
+  type ReevaluationSummary,
+} from './publication';
+import { planReevaluation } from './reevaluation';
+import {
+  assertFreshRun,
+  readCompatibleCheckpoint,
+  resolveRunPaths,
+} from './runArtifacts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 /** Salt keeping the candidate-sampling stream disjoint from the game seeds. */
 const SAMPLE_STREAM = 0xce41;
 const PUBLIC_AI = resolve(ROOT, 'public/ai');
-const CHECKPOINT = resolve(PUBLIC_AI, 'checkpoint.json');
-const LOG = resolve(PUBLIC_AI, 'training-log.jsonl');
 const BEST_PUBLIC = resolve(PUBLIC_AI, 'best-weights.json');
 const BEST_SRC = resolve(ROOT, 'src/ai/trained-weights.json');
 
-interface BestEver {
+interface BestEver extends ReevaluationSummary {
   weights: number[];
-  /**
-   * The combined objective, `meanLines - heightPenalty * meanHeight`, used for
-   * publication while either re-evaluation can still die. Once both line terms
-   * saturate (measured: 1998.2 of a possible 2000), publication instead ranks
-   * the remaining non-saturated signal, mean stack height.
-   */
-  score: number;
-  meanLines: number;
-  meanHeight: number;
   gen: number;
   evalGames: number;
+  evalMaxPieces: number;
 }
 
-/**
- * Sentinel for "nothing published yet", chosen so any real evaluation beats it.
- * Not -Infinity: this is written to checkpoint.json, and JSON.stringify turns
- * -Infinity into null, which comes back from --resume as a broken comparison.
- */
-const NO_BEST = -1e9;
-
 interface Checkpoint {
-  version: 1;
+  version: 2;
+  objective: typeof SCORE_RATE_OBJECTIVE;
   gen: number;
   mu: number[];
   sigma: number[];
   baseSeed: number;
   maxPieces: number;
-  /**
-   * Forensic only — deliberately NOT restored by --resume. A resumed run uses
-   * whatever config.ts currently says, so hyperparameters can be tuned between
-   * sessions; this field records what actually produced the checkpoint.
-   */
   config: TrainConfig;
-  bestEver: BestEver;
+  bestEver: BestEver | null;
 }
 
 /**
@@ -78,26 +82,38 @@ function parseArgs(argv: string[]): {
   generations: number | null;
   resume: boolean;
   workers: number | null;
+  outputDir: string | null;
 } {
-  const out = { generations: null as number | null, resume: false, workers: null as number | null };
+  const out = {
+    generations: null as number | null,
+    resume: false,
+    workers: null as number | null,
+    outputDir: null as string | null,
+  };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--resume') out.resume = true;
     else if (argv[i] === '--generations') out.generations = num(argv[i], argv[++i]);
     else if (argv[i] === '--workers') out.workers = num(argv[i], argv[++i]);
-    else throw new Error(`unknown flag ${argv[i]}`);
+    else if (argv[i] === '--output-dir') {
+      const value = argv[++i];
+      if (value === undefined) throw new Error('missing value for --output-dir');
+      out.outputDir = value;
+    } else throw new Error(`unknown flag ${argv[i]}`);
   }
   return out;
 }
 
 function writeWeightsFiles(best: BestEver, depth: 1 | 2) {
-  const { weights, meanLines, meanHeight, evalGames, gen } = best;
   const payload = JSON.stringify({
-    version: 1,
-    weights: fromVector(weights),
-    meanLines,
-    meanHeight,
-    evalGames,
-    gen,
+    version: 2,
+    weights: fromVector(best.weights),
+    objective: SCORE_RATE_OBJECTIVE,
+    meanScore: best.meanScore,
+    evalMaxPieces: best.evalMaxPieces,
+    meanLines: best.meanLines,
+    meanHeight: best.meanHeight,
+    evalGames: best.evalGames,
+    gen: best.gen,
     searchDepth: depth,
     trainedAt: new Date().toISOString(),
   }, null, 2);
@@ -109,48 +125,51 @@ function writeWeightsFiles(best: BestEver, depth: 1 | 2) {
   writeFileSync(BEST_SRC, payload);
 }
 
-/**
- * A checkpoint written before fitness gained its height term carries no
- * `score`, and its `meanLines` is not comparable with one — it was measured
- * against a different objective. Reset the bar in that case instead of
- * inheriting an incomparable number, and the next re-eval republishes under the
- * objective actually in force.
- */
-function restoreBestEver(raw: Partial<BestEver>): BestEver {
+function reevaluationSummary(
+  stats: CandidateStats,
+  index: number,
+): ReevaluationSummary {
   return {
-    weights: raw.weights ?? [],
-    score: raw.score ?? NO_BEST,
-    meanLines: raw.meanLines ?? 0,
-    meanHeight: raw.meanHeight ?? 0,
-    gen: raw.gen ?? -1,
-    evalGames: raw.evalGames ?? 0,
+    meanScore: stats.meanScore[index],
+    scoreRate: stats.fitness[index],
+    meanLines: stats.meanLines[index],
+    meanHeight: stats.meanHeight[index],
   };
 }
 
 const args = parseArgs(process.argv.slice(2));
+const paths = resolveRunPaths(ROOT, args.outputDir);
+
+let checkpoint: Checkpoint | null = null;
+if (args.resume) {
+  if (!existsSync(paths.checkpoint)) {
+    throw new Error(`--resume but no checkpoint at ${paths.checkpoint}`);
+  }
+  checkpoint = readCompatibleCheckpoint(paths.checkpoint) as unknown as Checkpoint;
+} else {
+  assertFreshRun(paths);
+}
+
 // `--workers` is the throttle: the pool is the only thing in this script that
 // consumes more than one core, so N workers means N busy cores and the rest of
 // the machine stays responsive. Everything else comes from config.ts.
 const cfg: TrainConfig = { ...DEFAULT_CONFIG, workers: resolveWorkers(args.workers) };
-mkdirSync(PUBLIC_AI, { recursive: true });
+mkdirSync(paths.outputDir, { recursive: true });
 
 let state: CemState = initCem();
 let maxPieces = cfg.initialMaxPieces;
 let baseSeed = cfg.baseSeed;
-let bestEver: BestEver = {
-  weights: state.mu.slice(), score: NO_BEST, meanLines: 0, meanHeight: 0, gen: -1, evalGames: 0,
-};
+let bestEver: BestEver | null = null;
 
-if (args.resume) {
-  if (!existsSync(CHECKPOINT)) throw new Error(`--resume but no checkpoint at ${CHECKPOINT}`);
-  const cp = JSON.parse(readFileSync(CHECKPOINT, 'utf8')) as Checkpoint;
-  state = { mu: cp.mu, sigma: cp.sigma, gen: cp.gen };
-  maxPieces = cp.maxPieces;
-  baseSeed = cp.baseSeed;
-  bestEver = restoreBestEver(cp.bestEver);
+if (checkpoint !== null) {
+  state = { mu: checkpoint.mu, sigma: checkpoint.sigma, gen: checkpoint.gen };
+  maxPieces = checkpoint.maxPieces;
+  baseSeed = checkpoint.baseSeed;
+  bestEver = checkpoint.bestEver;
   console.log(
-    `resumed from gen ${cp.gen}, maxPieces ${maxPieces}, ` +
-    `bestEver score ${bestEver.score === NO_BEST ? 'none' : bestEver.score.toFixed(1)}`,
+    `resumed ${checkpoint.objective} from gen ${checkpoint.gen}, ` +
+    `maxPieces ${maxPieces}, best mean score ` +
+    `${bestEver === null ? 'none' : bestEver.meanScore.toFixed(1)}`,
   );
 }
 
@@ -163,10 +182,17 @@ console.log(
 
 function saveCheckpoint() {
   const cp: Checkpoint = {
-    version: 1, gen: state.gen, mu: state.mu, sigma: state.sigma,
-    baseSeed, maxPieces, config: cfg, bestEver,
+    version: 2,
+    objective: SCORE_RATE_OBJECTIVE,
+    gen: state.gen,
+    mu: state.mu,
+    sigma: state.sigma,
+    baseSeed,
+    maxPieces,
+    config: cfg,
+    bestEver,
   };
-  writeFileSync(CHECKPOINT, JSON.stringify(cp, null, 2));
+  writeFileSync(paths.checkpoint, JSON.stringify(cp, null, 2));
 }
 
 let stopping = false;
@@ -200,47 +226,71 @@ async function runGeneration(): Promise<void> {
 
   const results = await pool.run(tasks);
 
-  const { fitness, meanLines, meanPieces, meanHeight } = aggregateFitness(
-    results, candidates.length, cfg.gamesPerCandidate, cfg.heightPenalty,
-  );
+  const {
+    fitness: scoreRates,
+    meanScore,
+    meanLines,
+    meanPieces,
+    meanHeight,
+  } = aggregateFitness(results, candidates.length, cfg.gamesPerCandidate, maxPieces);
 
-  const best = Math.max(...fitness);
-  const worst = Math.min(...fitness);
-  const mean = fitness.reduce((s, x) => s + x, 0) / fitness.length;
-  const std = Math.sqrt(fitness.reduce((s, x) => s + (x - mean) ** 2, 0) / fitness.length);
-  const bestWeights = candidates[fitness.indexOf(best)];
+  const bestScoreRate = Math.max(...scoreRates);
+  const worstScoreRate = Math.min(...scoreRates);
+  const meanScoreRate = scoreRates.reduce((sum, value) => sum + value, 0) / scoreRates.length;
+  const scoreRateStd = Math.sqrt(
+    scoreRates.reduce((sum, value) => sum + (value - meanScoreRate) ** 2, 0) /
+    scoreRates.length,
+  );
+  const bestWeights = candidates[scoreRates.indexOf(bestScoreRate)];
   const elapsedMs = Date.now() - started;
 
-  // Median survival among the ELITES. This drives the piece cap (see below) and
-  // is worth logging in its own right: it is the one number that shows whether
-  // the cap is currently truncating the candidates CEM actually learns from.
-  const elites = fitness
-    .map((fit, i) => ({ fit, pieces: meanPieces[i], height: meanHeight[i] }))
+  const elites = scoreRates
+    .map((fit, index) => ({
+      fit,
+      pieces: meanPieces[index],
+      score: meanScore[index],
+      height: meanHeight[index],
+    }))
     .sort((a, b) => b.fit - a.fit)
     .slice(0, eliteCount(cfg.eliteFrac, candidates.length));
-  const elitePieces = median(elites.map((e) => e.pieces));
-  // The elites' tidiness — the half of fitness that still moves once their
-  // lines have all pinned the 0.4 x maxPieces ceiling. When `best` stops
-  // climbing, this is the number that says whether the run is still learning.
-  const eliteHeight = median(elites.map((e) => e.height));
+  const elitePieces = median(elites.map((elite) => elite.pieces));
+  const eliteScore = median(elites.map((elite) => elite.score));
+  const eliteHeight = median(elites.map((elite) => elite.height));
 
-  appendFileSync(LOG, JSON.stringify({
-    gen, ts: Date.now(), best, mean, median: median(fitness), worst, std,
-    mu: state.mu, sigma: state.sigma, bestWeights,
-    maxPieces, medianPieces: median(meanPieces), elitePieces,
-    medianLines: median(meanLines), medianHeight: median(meanHeight), eliteHeight,
-    heightPenalty: cfg.heightPenalty,
-    gamesPerCandidate: cfg.gamesPerCandidate, elapsedMs,
+  appendFileSync(paths.log, JSON.stringify({
+    objective: SCORE_RATE_OBJECTIVE,
+    gen,
+    ts: Date.now(),
+    bestScoreRate,
+    meanScoreRate,
+    medianScoreRate: median(scoreRates),
+    worstScoreRate,
+    scoreRateStd,
+    mu: state.mu,
+    sigma: state.sigma,
+    bestWeights,
+    maxPieces,
+    medianPieces: median(meanPieces),
+    elitePieces,
+    medianScore: median(meanScore),
+    eliteScore: median(elites.map((elite) => elite.score)),
+    medianLines: median(meanLines),
+    medianHeight: median(meanHeight),
+    eliteHeight: median(elites.map((elite) => elite.height)),
+    gamesPerCandidate: cfg.gamesPerCandidate,
+    elapsedMs,
   }) + '\n');
 
   console.log(
-    `gen ${String(gen).padStart(4)}  best ${best.toFixed(1).padStart(9)}` +
-    `  median ${median(fitness).toFixed(1).padStart(9)}  worst ${worst.toFixed(1).padStart(7)}` +
+    `gen ${String(gen).padStart(4)}` +
+    `  bestRate ${bestScoreRate.toFixed(3).padStart(10)}` +
+    `  medianRate ${median(scoreRates).toFixed(3).padStart(10)}` +
+    `  eliteScore ${eliteScore.toFixed(1).padStart(12)}` +
     `  eliteH ${eliteHeight.toFixed(1).padStart(5)}` +
     `  cap ${maxPieces}  ${(elapsedMs / 1000).toFixed(1)}s`,
   );
 
-  state = updateCem(state, candidates, fitness, {
+  state = updateCem(state, candidates, scoreRates, {
     eliteFrac: cfg.eliteFrac,
     noise: noiseAt(gen, cfg),
   });
@@ -251,57 +301,62 @@ async function runGeneration(): Promise<void> {
     maxPieces = raised;
   }
 
-  // The top candidate of a generation is often just lucky. Re-score the current
-  // mu on fresh seeds and long games before letting it become the published model.
   if (state.gen % cfg.reevalEvery === 0) {
     const mu = normalize(state.mu);
-    const evalTasks: SimTask[] = Array.from({ length: cfg.reevalGames }, (_, j) => ({
-      taskId: j,
-      weights: mu,
-      seed: hashSeed(baseSeed ^ 0x5eed, state.gen, j),
-      maxPieces: cfg.reevalMaxPieces,
-      depth: cfg.depth,
-    }));
+    const reevaluation = planReevaluation(
+      bestEver,
+      toVector(DEFAULT_WEIGHTS),
+      mu,
+    );
+    const evaluationWeights = reevaluation.weights;
+    const seeds = fixedReevaluationSeeds(baseSeed, cfg.reevalGames);
+    const evalTasks: SimTask[] = [];
+    evaluationWeights.forEach((weights, candidateIndex) => {
+      seeds.forEach((seed, gameIndex) => {
+        evalTasks.push({
+          taskId: candidateIndex * cfg.reevalGames + gameIndex,
+          weights,
+          seed,
+          maxPieces: cfg.reevalMaxPieces,
+          depth: cfg.depth,
+        });
+      });
+    });
+
     const evalResults = await pool.run(evalTasks);
-    // Scored by the same formula training selects on — all 30 games treated as
-    // one candidate. Note the balance is not identical to a training
-    // generation's: reevalMaxPieces is larger than maxPieces, and the lines
-    // term grows with the cap while the height term does not, so re-eval leans
-    // further toward lines. Every re-eval uses the same cap, so the comparison
-    // against bestEver is still like-for-like.
-    const { fitness: evalFitness, meanLines: evalLines, meanHeight: evalHeight } =
-      aggregateFitness(evalResults, 1, cfg.reevalGames, cfg.heightPenalty);
-    const [score] = evalFitness;
-    const [lines] = evalLines;
-    const [height] = evalHeight;
-    console.log(
-      `  re-eval of mu over ${cfg.reevalGames} fresh seeds: ${lines.toFixed(1)} lines, ` +
-      `mean height ${height.toFixed(2)}, score ${score.toFixed(1)}`,
+    const evalStats = aggregateFitness(
+      evalResults,
+      evaluationWeights.length,
+      cfg.reevalGames,
+      cfg.reevalMaxPieces,
     );
 
-    // Theoretical ceiling: a piece contributes 4 cells and a line needs 10, so
-    // lines/pieces can never exceed 0.4 — thus 0.4 * reevalMaxPieces is the most
-    // lines re-eval can EVER report, no matter how good the candidate is.
-    const reevalCeiling = 0.4 * cfg.reevalMaxPieces;
-    if (lines > 0.99 * reevalCeiling) {
-      console.warn(
-        `  NOTE: re-eval lines (${lines.toFixed(1)}) are within 1% of their theoretical ceiling ` +
-        `(0.4 x reevalMaxPieces = ${reevalCeiling.toFixed(1)}). A competent candidate never dies ` +
-        `within reevalMaxPieces pieces, so the lines term is pinned regardless of how much better ` +
-        `the policy actually is; only the height term (${height.toFixed(2)}, worth ` +
-        `${(cfg.heightPenalty * height).toFixed(1)} points here) can still separate models. Read ` +
-        `mean height, not lines, when judging whether this run is improving.`,
+    if (reevaluation.baselineIndex !== null) {
+      const baseline = reevaluationSummary(evalStats, reevaluation.baselineIndex);
+      bestEver = {
+        weights: evaluationWeights[reevaluation.baselineIndex],
+        ...baseline,
+        gen: DEFAULT_WEIGHTS_META?.gen ?? -1,
+        evalGames: cfg.reevalGames,
+        evalMaxPieces: cfg.reevalMaxPieces,
+      };
+      console.log(
+        `  established published baseline: mean score ${baseline.meanScore.toFixed(1)}, ` +
+        `score rate ${baseline.scoreRate.toFixed(3)}, mean height ${baseline.meanHeight.toFixed(2)}`,
       );
     }
 
-    if (shouldPublishReevaluation(
-      { score, meanLines: lines, meanHeight: height },
-      bestEver,
-      reevalCeiling,
-    )) {
+    const candidate = reevaluationSummary(evalStats, reevaluation.candidateIndex);
+    if (bestEver === null) {
+      throw new Error('fixed reevaluation did not establish a published score baseline');
+    }
+    if (shouldPublishScoreReevaluation(candidate, bestEver)) {
       bestEver = {
-        weights: mu, score, meanLines: lines, meanHeight: height,
-        gen: state.gen, evalGames: cfg.reevalGames,
+        weights: mu,
+        ...candidate,
+        gen: state.gen,
+        evalGames: cfg.reevalGames,
+        evalMaxPieces: cfg.reevalMaxPieces,
       };
       writeWeightsFiles(bestEver, cfg.depth);
       console.log(`  new best — wrote best-weights.json and trained-weights.json`);
@@ -319,9 +374,10 @@ while (!stopping) {
 saveCheckpoint();
 await pool.destroy();
 console.log(
-  bestEver.score === NO_BEST
-    ? `stopped at gen ${state.gen}; no model published yet (re-eval runs every ${cfg.reevalEvery} generations)`
-    : `stopped at gen ${state.gen}; bestEver score ${bestEver.score.toFixed(1)} ` +
-      `(${bestEver.meanLines.toFixed(1)} lines at mean height ${bestEver.meanHeight.toFixed(2)}, gen ${bestEver.gen})`,
+  bestEver === null
+    ? `stopped at gen ${state.gen}; no fixed-schedule reevaluation yet`
+    : `stopped at gen ${state.gen}; bestEver mean score ${bestEver.meanScore.toFixed(1)}, ` +
+      `score rate ${bestEver.scoreRate.toFixed(3)}, mean height ` +
+      `${bestEver.meanHeight.toFixed(2)} (gen ${bestEver.gen})`,
 );
 process.exit(0);
