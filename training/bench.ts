@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { simulateGame } from '../src/ai/simulate';
 import { hashSeed } from '../src/ai/rng';
 import { parseWeightsFile, toVector, HANDCRAFTED_WEIGHTS } from '../src/ai/weights';
+import { summarizeBench, type Distribution } from './benchSummary';
 
 interface Args {
   weights: string | null;
@@ -55,16 +56,9 @@ function loadWeights(path: string | null): number[] {
   }
   const parsed = parseWeightsFile(JSON.parse(readFileSync(path, 'utf8')));
   if (parsed === null) throw new Error(`${path} is not a valid weights file`);
-  console.log(`weights: ${path} (gen ${parsed.gen}, meanLines ${parsed.meanLines})`);
+  const scoreLabel = parsed.meanScore === null ? 'unmeasured' : parsed.meanScore.toFixed(1);
+  console.log(`weights: ${path} (gen ${parsed.gen}, meanScore ${scoreLabel})`);
   return toVector(parsed.weights);
-}
-
-function quantile(sorted: number[], q: number): number {
-  if (sorted.length === 0) return 0;
-  const pos = (sorted.length - 1) * q;
-  const lo = Math.floor(pos);
-  const hi = Math.ceil(pos);
-  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
 }
 
 const args = parseArgs(process.argv.slice(2));
@@ -72,10 +66,7 @@ const weights = loadWeights(args.weights);
 console.log(`games=${args.games} depth=${args.depth} maxPieces=${args.maxPieces}\n`);
 
 const started = Date.now();
-const lines: number[] = [];
-const heights: number[] = [];
-let totalPieces = 0;
-let capped = 0;
+const results = [];
 
 for (let i = 0; i < args.games; i++) {
   const result = simulateGame({
@@ -84,43 +75,38 @@ for (let i = 0; i < args.games; i++) {
     maxPieces: args.maxPieces,
     depth: args.depth,
   });
-  lines.push(result.lines);
-  heights.push(result.meanHeight);
-  totalPieces += result.pieces;
-  if (result.reason === 'pieceCap') capped++;
+  results.push(result);
+  const scoreRate = result.score / args.maxPieces;
+  const survived = result.reason === 'pieceCap' ? 'survived=yes' : 'survived=no';
   console.log(
-    `  game ${String(i + 1).padStart(3)}  lines ${String(result.lines).padStart(7)}` +
-    `  pieces ${String(result.pieces).padStart(7)}` +
-    `  height ${result.meanHeight.toFixed(2).padStart(6)}  ${result.reason}`,
+    `  game ${String(i + 1).padStart(3)}` +
+    `  score ${String(result.score).padStart(10)}` +
+    `  score/piece ${scoreRate.toFixed(3).padStart(9)}` +
+    `  lines ${String(result.lines).padStart(6)}` +
+    `  height ${result.meanHeight.toFixed(2).padStart(6)}` +
+    `  pieces ${String(result.pieces).padStart(6)}` +
+    `  ${survived}  ${result.reason}`,
   );
 }
 
 const elapsedMs = Date.now() - started;
-const sorted = [...lines].sort((a, b) => a - b);
-const mean = lines.reduce((s, x) => s + x, 0) / lines.length;
-const meanHeight = heights.reduce((s, x) => s + x, 0) / heights.length;
-const sortedHeights = [...heights].sort((a, b) => a - b);
-
-// Lines top out at 0.4 per piece (4 cells per piece, 10 per row), so once a
-// weight set stops dying its line count just restates the cap — measured, two
-// clearly different weight sets both scored 398 of a possible 400. Height is
-// what actually tells them apart, so it is reported next to the ceiling that
-// makes lines useless.
-const ceiling = 0.4 * args.maxPieces;
+const summary = summarizeBench(results, args.maxPieces);
+const row = (label: string, values: Distribution, digits: number) =>
+  `${label}\n` +
+  `  mean    ${values.mean.toFixed(digits)}\n` +
+  `  median  ${values.median.toFixed(digits)}\n` +
+  `  min     ${values.min.toFixed(digits)}\n` +
+  `  max     ${values.max.toFixed(digits)}`;
 
 console.log(`
-lines
-  mean    ${mean.toFixed(1)}  (${(100 * mean / ceiling).toFixed(1)}% of the 0.4 x maxPieces ceiling, ${ceiling})
-  median  ${quantile(sorted, 0.5).toFixed(1)}
-  min     ${sorted[0]}
-  max     ${sorted[sorted.length - 1]}
-  capped  ${capped}/${args.games} games hit the piece cap
+${row('score', summary.score, 1)}
 
-mean stack height  (lower is tidier; no ceiling, so this still ranks survivors)
-  mean    ${meanHeight.toFixed(2)}
-  median  ${quantile(sortedHeights, 0.5).toFixed(2)}
-  min     ${sortedHeights[0].toFixed(2)}
-  max     ${sortedHeights[sortedHeights.length - 1].toFixed(2)}
+${row('score per scheduled piece', summary.scorePerScheduledPiece, 3)}
 
-throughput  ${Math.round(totalPieces / (elapsedMs / 1000))} pieces/sec (single core)
+${row('lines', summary.lines, 1)}
+
+${row('mean stack height (diagnostic)', summary.height, 2)}
+
+survival  ${summary.cappedGames}/${args.games} games hit the piece cap
+throughput  ${Math.round(summary.totalPieces / (elapsedMs / 1000))} pieces/sec (single core)
 elapsed     ${(elapsedMs / 1000).toFixed(1)}s`);
