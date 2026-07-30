@@ -1,10 +1,17 @@
 import { useEffect, useState } from 'react';
+import { SCORE_RATE_OBJECTIVE } from '../../ai/trainingObjective';
 import type { LogEntry } from './types';
 
-export const LOG_URL = '/ai/training-log.jsonl';
+export const LOG_URL = '/ai/score-rate-v1/training-log.jsonl';
 
 /** Without these a line is meaningless, so it is dropped. */
-const NUMBER_FIELDS = ['gen', 'best', 'mean', 'median', 'worst'] as const;
+const NUMBER_FIELDS = [
+  'gen',
+  'bestScoreRate',
+  'meanScoreRate',
+  'medianScoreRate',
+  'worstScoreRate',
+] as const;
 const ARRAY_FIELDS = ['mu', 'sigma', 'bestWeights'] as const;
 
 const num = (value: unknown, fallback: number): number =>
@@ -40,18 +47,21 @@ export function parseLog(text: string): LogEntry[] {
     const e = value as Record<string, unknown>;
     if (NUMBER_FIELDS.some((f) => typeof e[f] !== 'number' || !Number.isFinite(e[f]))) continue;
     if (ARRAY_FIELDS.some((f) => !Array.isArray(e[f]))) continue;
+    if (e.objective !== SCORE_RATE_OBJECTIVE) continue;
 
     entries.push({
       ...(value as LogEntry),
+      objective: SCORE_RATE_OBJECTIVE,
       ts: num(e.ts, 0),
-      std: num(e.std, 0),
+      scoreRateStd: num(e.scoreRateStd, 0),
       maxPieces: num(e.maxPieces, 0),
       medianPieces: num(e.medianPieces, 0),
       elitePieces: num(e.elitePieces, 0),
+      medianScore: num(e.medianScore, 0),
+      eliteScore: num(e.eliteScore, 0),
       medianLines: num(e.medianLines, 0),
       medianHeight: num(e.medianHeight, 0),
       eliteHeight: num(e.eliteHeight, 0),
-      heightPenalty: num(e.heightPenalty, 0),
       gamesPerCandidate: num(e.gamesPerCandidate, 0),
       elapsedMs: num(e.elapsedMs, 0),
     });

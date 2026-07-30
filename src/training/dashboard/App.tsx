@@ -1,5 +1,5 @@
 import { useTrainingLog } from './useTrainingLog';
-import { FitnessChart, WeightEvolutionChart, SigmaHeatmap, BestWeightsChart } from './charts';
+import { ScoreRateChart, WeightEvolutionChart, SigmaHeatmap, BestWeightsChart } from './charts';
 import styles from './App.module.css';
 
 function formatDuration(ms: number): string {
@@ -16,24 +16,23 @@ export default function App() {
     return (
       <div className={styles.page}>
         <h1 className={styles.title}>Tetris AI — Training</h1>
-        <p className={styles.subtitle}>public/ai/training-log.jsonl</p>
+        <p className={styles.subtitle}>public/ai/score-rate-v1/training-log.jsonl</p>
         <div className={styles.empty}>No training data yet — run <code>npm run train</code> and the charts will appear automatically</div>
       </div>
     );
   }
 
   const latest = entries[entries.length - 1];
-  const bestEver = Math.max(...entries.map((e) => e.best));
+  const bestEver = Math.max(...entries.map((entry) => entry.bestScoreRate));
   const totalMs = entries.reduce((s, e) => s + e.elapsedMs, 0);
 
-  // Fitness is `lines - heightPenalty * height`, so labelling any of it "lines"
-  // would be wrong — and the lines half saturates at 0.4 x the piece cap, which
-  // is exactly why elite height is on the board next to it.
   const metrics: [string, string][] = [
     ['Generation', String(latest.gen)],
-    ['Best fitness', Math.round(bestEver).toLocaleString()],
-    ['Median fitness', Math.round(latest.median).toLocaleString()],
+    ['Best score rate', bestEver.toFixed(2)],
+    ['Median score rate', latest.medianScoreRate.toFixed(2)],
+    ['Elite score', Math.round(latest.eliteScore).toLocaleString()],
     ['Median lines', Math.round(latest.medianLines).toLocaleString()],
+    ['Median height', latest.medianHeight.toFixed(1)],
     ['Elite height', latest.eliteHeight.toFixed(1)],
     ['Piece cap', latest.maxPieces.toLocaleString()],
     ['Elapsed', formatDuration(totalMs)],
@@ -42,7 +41,7 @@ export default function App() {
   return (
     <div className={styles.page}>
       <h1 className={styles.title}>Tetris AI — Training</h1>
-      <p className={styles.subtitle}>{entries.length} generations · live from public/ai/training-log.jsonl</p>
+      <p className={styles.subtitle}>{entries.length} generations · live from public/ai/score-rate-v1/training-log.jsonl</p>
 
       <div className={styles.metrics}>
         {metrics.map(([label, value]) => (
@@ -55,8 +54,8 @@ export default function App() {
 
       <div className={styles.grid}>
         <div className={styles.card}>
-          <div className={styles.cardTitle}>Fitness per generation</div>
-          <FitnessChart entries={entries} />
+          <div className={styles.cardTitle}>Score rate per generation</div>
+          <ScoreRateChart entries={entries} />
         </div>
         <div className={styles.card}>
           <div className={styles.cardTitle}>Weight evolution (mu)</div>
@@ -68,7 +67,7 @@ export default function App() {
         </div>
         <div className={styles.card}>
           <div className={styles.cardTitle}>Best weights so far</div>
-          <BestWeightsChart entry={entries.reduce((a, b) => (a.best >= b.best ? a : b))} />
+          <BestWeightsChart entry={entries.reduce((a, b) => (a.bestScoreRate >= b.bestScoreRate ? a : b))} />
         </div>
       </div>
     </div>

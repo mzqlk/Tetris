@@ -90,24 +90,26 @@ function Axes({ xTicks, yTicks, x, y, xFmt = fmt }: {
 const path = (points: [number, number][]) =>
   points.map(([px, py], i) => `${i === 0 ? 'M' : 'L'}${px.toFixed(1)},${py.toFixed(1)}`).join(' ');
 
-export function FitnessChart({ entries }: { entries: LogEntry[] }) {
-  const [g0, g1] = extent(entries.map((e) => e.gen));
-  const [, yMax] = extent(entries.map((e) => e.best));
+export function ScoreRateChart({ entries }: { entries: LogEntry[] }) {
+  const [g0, g1] = extent(entries.map((entry) => entry.gen));
+  const [, yMax] = extent(entries.map((entry) => entry.bestScoreRate));
   const x = linearScale(g0, g1, M.left, M.left + PLOT_W);
   const y = linearScale(0, yMax, M.top + PLOT_H, M.top);
 
   const band = [
-    ...entries.map((e): [number, number] => [x(e.gen), y(e.best)]),
-    ...entries.slice().reverse().map((e): [number, number] => [x(e.gen), y(e.worst)]),
+    ...entries.map((entry): [number, number] => [x(entry.gen), y(entry.bestScoreRate)]),
+    ...entries.slice().reverse().map(
+      (entry): [number, number] => [x(entry.gen), y(entry.worstScoreRate)],
+    ),
   ];
 
   return (
-    <svg width={W} height={H} role="img" aria-label="Fitness per generation">
+    <svg width={W} height={H} role="img" aria-label="Score rate per generation">
       <Axes x={x} y={y} xTicks={niceTicks(g0, g1, 5)} yTicks={niceTicks(0, yMax, 5)} xFmt={fmtInt} />
       <path d={`${path(band)} Z`} fill={BEST} fillOpacity={0.1} stroke="none" />
-      <path d={path(entries.map((e) => [x(e.gen), y(e.worst)]))} fill="none" stroke={WORST} strokeWidth={1} opacity={0.7} />
-      <path d={path(entries.map((e) => [x(e.gen), y(e.median)]))} fill="none" stroke={MEDIAN} strokeWidth={1.5} />
-      <path d={path(entries.map((e) => [x(e.gen), y(e.best)]))} fill="none" stroke={BEST} strokeWidth={2} />
+      <path d={path(entries.map((entry) => [x(entry.gen), y(entry.worstScoreRate)]))} fill="none" stroke={WORST} strokeWidth={1} opacity={0.7} />
+      <path d={path(entries.map((entry) => [x(entry.gen), y(entry.medianScoreRate)]))} fill="none" stroke={MEDIAN} strokeWidth={1.5} />
+      <path d={path(entries.map((entry) => [x(entry.gen), y(entry.bestScoreRate)]))} fill="none" stroke={BEST} strokeWidth={2} />
       <g fontSize="10">
         {([['best', BEST], ['median', MEDIAN], ['worst', WORST]] as const).map(([label, color], i) => (
           <text key={label} x={M.left + 6 + i * 58} y={M.top + 12} fill={color}>{label}</text>
@@ -225,7 +227,7 @@ export function BestWeightsChart({ entry }: { entry: LogEntry }) {
         );
       })}
       <text x={M.left} y={H - 8} fontSize="10" fill={AXIS_TEXT}>
-        gen {entry.gen} · {Math.round(entry.best).toLocaleString()} lines
+        gen {entry.gen} · score rate {entry.bestScoreRate.toFixed(2)}
       </text>
     </svg>
   );

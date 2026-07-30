@@ -2,11 +2,27 @@ import { describe, it, expect } from 'vitest';
 import { parseLog } from './useTrainingLog';
 
 const line = (gen: number) => JSON.stringify({
-  gen, ts: 1785000000000 + gen, best: 100 + gen, mean: 50, median: 40, worst: 1, std: 10,
-  mu: Array(9).fill(0.1), sigma: Array(9).fill(0.5), bestWeights: Array(9).fill(0.2),
-  maxPieces: 300, medianPieces: 120, elitePieces: 260,
-  medianLines: 45, medianHeight: 7.5, eliteHeight: 4.2, heightPenalty: 1,
-  gamesPerCandidate: 5, elapsedMs: 1000,
+  objective: 'score-rate-v1',
+  gen,
+  ts: 1785000000000 + gen,
+  bestScoreRate: 125.5 + gen,
+  meanScoreRate: 80,
+  medianScoreRate: 75,
+  worstScoreRate: 0,
+  scoreRateStd: 10,
+  mu: Array(9).fill(0.1),
+  sigma: Array(9).fill(0.5),
+  bestWeights: Array(9).fill(0.2),
+  maxPieces: 300,
+  medianPieces: 120,
+  elitePieces: 260,
+  medianScore: 22500,
+  eliteScore: 37650,
+  medianLines: 45,
+  medianHeight: 7.5,
+  eliteHeight: 4.2,
+  gamesPerCandidate: 5,
+  elapsedMs: 1000,
 });
 
 describe('parseLog', () => {
@@ -15,6 +31,25 @@ describe('parseLog', () => {
     expect(entries).toHaveLength(2);
     expect(entries[1].gen).toBe(1);
     expect(entries[0].mu).toHaveLength(9);
+  });
+
+  it('parses score-rate fields used by the dashboard', () => {
+    const [entry] = parseLog(line(0));
+    expect(entry).toMatchObject({
+      objective: 'score-rate-v1',
+      bestScoreRate: 125.5,
+      medianScoreRate: 75,
+      medianScore: 22500,
+      eliteScore: 37650,
+      eliteHeight: 4.2,
+    });
+  });
+
+  it('does not mix a legacy objective into the score-rate dashboard', () => {
+    const legacy = JSON.parse(line(0));
+    legacy.objective = 'lines-height-v1';
+    expect(parseLog(`${JSON.stringify(legacy)}\n${line(1)}`)).toHaveLength(1);
+    expect(parseLog(`${JSON.stringify(legacy)}\n${line(1)}`)[0].gen).toBe(1);
   });
 
   it('returns an empty array for empty input', () => {
@@ -32,7 +67,7 @@ describe('parseLog', () => {
     expect(parseLog(`{"gen":0}\n${line(1)}`)).toHaveLength(1);
   });
 
-  it('keeps older lines that predate a schema addition, with defaults', () => {
+  it('defaults optional diagnostics added after the first score-rate generation', () => {
     // elitePieces was added to the log partway through the project, so a
     // resumed run's file legitimately mixes old and new lines. Dropping the old
     // ones would blank the dashboard; passing them through undefined crashes
@@ -40,28 +75,29 @@ describe('parseLog', () => {
     const parsed = JSON.parse(line(0));
     delete parsed.elitePieces;
     delete parsed.maxPieces;
-    // Same story for the tidiness fields, added later still.
+    delete parsed.medianScore;
+    delete parsed.eliteScore;
     delete parsed.medianLines;
     delete parsed.medianHeight;
     delete parsed.eliteHeight;
-    delete parsed.heightPenalty;
 
     const entries = parseLog(JSON.stringify(parsed));
     expect(entries).toHaveLength(1);
     expect(entries[0].elitePieces).toBe(0);
     expect(entries[0].maxPieces).toBe(0);
+    expect(entries[0].medianScore).toBe(0);
+    expect(entries[0].eliteScore).toBe(0);
     expect(entries[0].medianLines).toBe(0);
     expect(entries[0].medianHeight).toBe(0);
     expect(entries[0].eliteHeight).toBe(0);
-    expect(entries[0].heightPenalty).toBe(0);
     expect(() => entries[0].maxPieces.toLocaleString()).not.toThrow();
   });
 
   it('never yields an undefined numeric field', () => {
     const entries = parseLog(`${line(0)}\n${line(1)}`);
     for (const e of entries) {
-      for (const key of ['ts', 'std', 'maxPieces', 'medianPieces', 'elitePieces',
-                         'medianLines', 'medianHeight', 'eliteHeight', 'heightPenalty',
+      for (const key of ['ts', 'scoreRateStd', 'maxPieces', 'medianPieces', 'elitePieces',
+                         'medianScore', 'eliteScore', 'medianLines', 'medianHeight', 'eliteHeight',
                          'gamesPerCandidate', 'elapsedMs'] as const) {
         expect(typeof e[key]).toBe('number');
       }
@@ -70,7 +106,7 @@ describe('parseLog', () => {
 
   it('rejects a line whose required field is present but not finite', () => {
     const parsed = JSON.parse(line(0));
-    parsed.best = null;
+    parsed.bestScoreRate = null;
     expect(parseLog(JSON.stringify(parsed))).toHaveLength(0);
   });
 
