@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  evaluateScoreReevaluation,
   fixedReevaluationSeeds,
   shouldPublishScoreReevaluation,
   type ReevaluationSummary,
@@ -61,6 +62,60 @@ describe('shouldPublishScoreReevaluation', () => {
       summary(998.999999, 2),
       summary(1000, 8),
     )).toBe(false);
+  });
+});
+
+describe('evaluateScoreReevaluation', () => {
+  it('explains a material score improvement', () => {
+    expect(evaluateScoreReevaluation(
+      summary(1002, 8),
+      summary(1000, 3),
+    )).toEqual({
+      shouldPublish: true,
+      scoreTolerance: 1.002,
+      reason: 'higher-score',
+    });
+  });
+
+  it('explains a material score regression', () => {
+    expect(evaluateScoreReevaluation(
+      summary(998, 2),
+      summary(1000, 8),
+    )).toEqual({
+      shouldPublish: false,
+      scoreTolerance: 1,
+      reason: 'lower-score',
+    });
+  });
+
+  it('explains both height decisions inside the score tolerance', () => {
+    expect(evaluateScoreReevaluation(
+      summary(1000.5, 3),
+      summary(1000, 4),
+    )).toEqual({
+      shouldPublish: true,
+      scoreTolerance: 1.0005,
+      reason: 'lower-height-within-score-tolerance',
+    });
+    expect(evaluateScoreReevaluation(
+      summary(1000.5, 5),
+      summary(1000, 4),
+    )).toEqual({
+      shouldPublish: false,
+      scoreTolerance: 1.0005,
+      reason: 'height-not-lower-within-score-tolerance',
+    });
+  });
+
+  it('keeps the exact 0.1 percent boundary inside the height tie-break', () => {
+    expect(evaluateScoreReevaluation(
+      summary(1000, 8),
+      summary(999, 3),
+    )).toEqual({
+      shouldPublish: false,
+      scoreTolerance: 1,
+      reason: 'height-not-lower-within-score-tolerance',
+    });
   });
 });
 
