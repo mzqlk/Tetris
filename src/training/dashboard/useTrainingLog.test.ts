@@ -67,6 +67,22 @@ describe('parseLog', () => {
     expect(parseLog(`{"gen":0}\n${line(1)}`)).toHaveLength(1);
   });
 
+  it('ignores reevaluation events between generation records', () => {
+    const reevaluation = JSON.stringify({
+      objective: 'score-rate-v1',
+      kind: 'reevaluation',
+      gen: 10,
+      ts: 1785000000010,
+      schedule: {},
+      currentBest: {},
+      candidate: {},
+      comparison: {},
+    });
+
+    const entries = parseLog(`${line(9)}\n${reevaluation}\n${line(10)}\n`);
+    expect(entries.map((entry) => entry.gen)).toEqual([9, 10]);
+  });
+
   it('defaults optional diagnostics added after the first score-rate generation', () => {
     // elitePieces was added to the log partway through the project, so a
     // resumed run's file legitimately mixes old and new lines. Dropping the old

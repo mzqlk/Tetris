@@ -71,9 +71,11 @@ export function parseLog(text: string): LogEntry[] {
 }
 
 /**
- * Full re-fetch every poll. The log is one line per generation, so even a
- * multi-day run is a few hundred kilobytes — an incremental protocol would be
- * complexity with nothing to buy.
+ * Full re-fetch every poll. The log has one generation line per generation
+ * plus sparse typed events such as fixed reevaluations; this parser
+ * intentionally returns only generation records. Even a multi-day run is a
+ * few hundred kilobytes, so an incremental protocol would be complexity with
+ * nothing to buy.
  */
 export function useTrainingLog(pollMs = 1000): { entries: LogEntry[]; error: string | null } {
   const [entries, setEntries] = useState<LogEntry[]>([]);
