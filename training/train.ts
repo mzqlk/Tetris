@@ -27,11 +27,12 @@ import {
 } from '../src/ai/weights';
 import { SCORE_RATE_OBJECTIVE } from './objective';
 import {
+  evaluateScoreReevaluation,
   fixedReevaluationSeeds,
-  shouldPublishScoreReevaluation,
   type ReevaluationSummary,
 } from './publication';
 import { planReevaluation } from './reevaluation';
+import { buildReevaluationLogEntry } from './reevaluationLog';
 import {
   assertFreshRun,
   readCompatibleCheckpoint,
@@ -339,7 +340,9 @@ async function runGeneration(): Promise<void> {
     if (bestEver === null) {
       throw new Error('fixed reevaluation did not establish a published score baseline');
     }
-    if (shouldPublishScoreReevaluation(candidate, bestEver)) {
+    const currentBest = bestEver;
+    const decision = evaluateScoreReevaluation(candidate, currentBest);
+    if (decision.shouldPublish) {
       bestEver = {
         weights: mu,
         ...candidate,
@@ -350,6 +353,32 @@ async function runGeneration(): Promise<void> {
       writeWeightsFiles(bestEver, cfg.depth);
       console.log(`  new best — wrote best-weights.json and trained-weights.json`);
     }
+
+    const reevaluationEvent = buildReevaluationLogEntry({
+      gen: state.gen,
+      ts: Date.now(),
+      schedule: {
+        games: cfg.reevalGames,
+        maxPieces: cfg.reevalMaxPieces,
+        depth: cfg.depth,
+        baseSeed,
+      },
+      currentBest: {
+        weights: currentBest.weights,
+        meanScore: currentBest.meanScore,
+        scoreRate: currentBest.scoreRate,
+        meanLines: currentBest.meanLines,
+        meanHeight: currentBest.meanHeight,
+        gen: currentBest.gen,
+      },
+      candidate: {
+        weights: mu,
+        ...candidate,
+        gen: state.gen,
+      },
+      decision,
+    });
+    appendFileSync(paths.log, `${JSON.stringify(reevaluationEvent)}\n`);
   }
 
   saveCheckpoint();
