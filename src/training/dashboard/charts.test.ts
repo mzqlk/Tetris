@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SERIES_COLORS, sigmaColor } from './charts';
+import { SERIES_COLORS, sigmaColor } from './chartColors';
 import { FEATURE_NAMES } from '../../ai/features';
 
 describe('SERIES_COLORS', () => {

@@ -109,8 +109,10 @@ describe('parseWeightsFile', () => {
   });
 
   it('rejects a missing feature key', () => {
-    const { holes, ...rest } = valid.weights;
-    expect(parseWeightsFile({ ...valid, weights: rest })).toBeNull();
+    const withoutHoles = Object.fromEntries(
+      Object.entries(valid.weights).filter(([name]) => name !== 'holes'),
+    );
+    expect(parseWeightsFile({ ...valid, weights: withoutHoles })).toBeNull();
   });
 
   it('rejects an unknown extra key', () => {
