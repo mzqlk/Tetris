@@ -152,9 +152,11 @@ export function applyAction(state: SimState, action: SimAction): void {
 }
 
 /**
- * The simulator skips real-time gravity, but it returns the engine score used
- * by training's fixed-schedule score-rate objective. No per-second metric is
- * derived here.
+ * The simulator skips real-time gravity and assigns the chosen landing pose
+ * directly before locking it. Its score therefore uses the engine's line-clear
+ * rules but omits the per-input soft/hard-drop bonuses a browser replay can
+ * accumulate. That deterministic score is the score-rate-v1 contract; it is
+ * not a per-second metric or a byte-for-byte prediction of the UI score.
  */
 export function simulateGame(opts: {
   weights: number[];

@@ -1,16 +1,32 @@
 # Tetris AI 训练系统 — 交接文档
 
-**写于**：2026-07-28；2026-07-29 按迁移审计修正动态状态
+**写于**：2026-07-28；**更新于**：2026-08-03（score-rate-v1 gen 20 最终收口）
 **当前状态的读取方式**：每次先运行 `git status` / `git log`，检查 `public/ai/` 产物与训练进程，再决定操作。旧 HEAD、未推送状态和固定测试数都只是历史快照，不是本交接的持久指令。
 **验证**：运行当前 `npm test`、`npm run build` 与 `npm run typecheck:train`；以实际输出为准。
-**设计文档**：[`docs/superpowers/specs/2026-07-27-tetris-ai-training-design.md`](superpowers/specs/2026-07-27-tetris-ai-training-design.md)
-**实施计划**：[`docs/superpowers/plans/2026-07-27-tetris-ai-training.md`](superpowers/plans/2026-07-27-tetris-ai-training.md)（约 5000 行，含每个模块的完整代码与理由）
+**当前目标设计**：[`docs/superpowers/specs/2026-07-30-fixed-schedule-score-rate-design.md`](superpowers/specs/2026-07-30-fixed-schedule-score-rate-design.md)
+**当前目标计划**：[`docs/superpowers/plans/2026-07-30-fixed-schedule-score-rate.md`](superpowers/plans/2026-07-30-fixed-schedule-score-rate.md)
+**复评证据设计与计划**：[`2026-08-02 design`](superpowers/specs/2026-08-02-score-rate-reevaluation-observability-design.md) / [`2026-08-02 plan`](superpowers/plans/2026-08-02-score-rate-reevaluation-observability.md)
+**原始训练系统设计**：[`2026-07-27 design`](superpowers/specs/2026-07-27-tetris-ai-training-design.md) / [`2026-07-27 plan`](superpowers/plans/2026-07-27-tetris-ai-training.md)；其中目标函数与产物路径部分是历史设计，不代表当前状态。
 
 ---
 
 ## 1. 一句话现状
 
-AI 已经能打得很好（历史样本中 30 局 × 5000 步全程未死），训练系统完整可用。**消行数这个指标会在 piece cap 下饱和**，所以适应度已经改成 `消行 - 平均堆叠高度`。高度受棋盘总高 22 限制，但不会像“所有候选都活到 cap”时的消行数那样机械并列，因此仍能把幸存候选排出高下（细节见第 4 节）。指标本身现在可用；**「训练比手调好多少」仍需在相同配置、种子和当前产物上重新测量**。
+当前训练目标是 **`score-rate-v1`**：在固定 piece schedule 下以
+
+```
+fitness = meanScore / maxPieces
+```
+
+选择候选。分母是调度给每局的 piece cap，不是候选实际存活的 pieces；提前死亡不会因为分母变小而得到虚高分。`meanHeight` 继续记录，但只是诊断指标，并仅在固定复评分数落入包含边界的 0.1% 近似平分区间时作为发布 tie-breaker。旧的 `meanLines - heightPenalty * meanHeight` 属于已退役的 **`lines-height-v1`**，不得再描述为当前适应度，也不得把它的 checkpoint 恢复到 score-rate-v1。
+
+### gen 20 发布依据
+
+- 固定复评：30 局 × 5000 pieces、depth 2、固定复评种子策略；gen 20 候选 `meanScore = 3,104,830`、`scoreRate = 620.966`、`meanHeight = 3.35646`，相对当时已发布权重的 `scoreRate = 611.653`，裁决为 `publish / higher-score`。
+- 独立 paired benchmark：使用新 seed `20260803`，旧已发布权重与 gen 20 各跑 30 局 × 5000 pieces、depth 2；两组都 30/30 达到 cap。旧权重 `scoreRate = 612.228`，gen 20 `621.272`；gen 20 逐局 30 胜、0 平、0 负，平均差 `+9.044 score/piece`，95% paired 区间 `[+7.813, +10.275]`。
+- 因而“优于旧已发布权重”的结论来自独立同参数 paired 证据，**不是**由某代训练日志里的 `bestScoreRate` 推出。固定复评负责候选发布门，独立 paired benchmark 负责相对基线的验收，二者不能混为一谈。
+
+发布权重由提交 `ef3cbac feat(ai): publish gen-20 score-rate weights` 纳入 Git。该 SHA、测试数、ahead/push 状态都只是发布时快照；接手时仍须现场核实。
 
 ---
 
@@ -36,7 +52,7 @@ AI 已经能打得很好（历史样本中 30 局 × 5000 步全程未死），�
 | 文件 | 作用 |
 |---|---|
 | `config.ts` | 全部超参数。**改这里调训练** |
-| `cem.ts` | CEM 纯数学：采样、精英更新、噪声、局长调度、`aggregateFitness` |
+| `cem.ts` | CEM 纯数学：采样、精英更新、噪声、局长调度、score-rate `aggregateFitness` |
 | `pool.ts` | worker 池，**任务粒度是「一局」而非「一个候选」** |
 | `worker.ts` | worker 入口，只跑 `simulateGame` |
 | `train.ts` | 主循环、共同随机数、日志、断点、复评、CLI |
@@ -50,9 +66,12 @@ AI 已经能打得很好（历史样本中 30 局 × 5000 步全程未死），�
 
 ### 产物（`public/ai/`，已 gitignore）
 
-- `training-log.jsonl` — 每代一行，面板每秒轮询它
-- `checkpoint.json` — 断点续训用
-- `best-weights.json` — 训练发布后供运行时 `fetch`；不是每个 checkout 或每个训练阶段都一定存在
+- `score-rate-v1/training-log.jsonl` — 当前目标每代一行，另含稀疏的 typed reevaluation 事件；面板每秒轮询并只绘制 generation 记录
+- `score-rate-v1/checkpoint.json` — 当前 score-rate-v1 断点；schema version 2、objective 和固定发布调度必须完整校验后才能 resume
+- `best-weights.json` — 固定复评通过发布门后供运行时 `fetch`
+- `../src/ai/trained-weights.json` — 与 `best-weights.json` 同字节的 tracked bundled 权重；构建无需 runtime fetch 也能工作
+- 根目录的 `checkpoint.json` / `training-log.jsonl` — 退役 `lines-height-v1` 的 legacy 产物；不得与当前目标混用
+- `score-rate-v1-smoke/` — 目标实现阶段的隔离 smoke 产物；不是当前可续训轮次
 
 ---
 
@@ -68,21 +87,34 @@ npm run dev                 # http://localhost:5190/          游戏 + AI 面板
 
 npm run bench -- --games 30 --depth 2 --max-pieces 2000  # 内置手调基线
 # 仅在文件存在且已核验时追加：--weights <权重文件>
-npm run train -- --generations 20
-npm run train -- --generations 20 --workers 8   # 只占 8 个核心（缺省是核心数-1，上限 31）
-npm run train -- --resume
-npm run train               # 无限跑，Ctrl-C 存盘退出
+npm run train -- --generations 20 --output-dir public/ai/<new-run-id>  # 仅限已授权的空目录
+npm run train -- --generations 20 --workers 8 --output-dir public/ai/<new-run-id>
+npm run train -- --resume   # 默认 score-rate-v1；必须先完整核验并获得授权
 ```
 
-训练命令会修改产物，不能把上面的示例当成顺序执行清单。运行前先读第 5 节的 checkpoint 决策门。
+训练命令会修改 score-rate checkpoint/log，并可能同时改写发布权重，不能把上面的示例当成顺序执行清单。默认输出目录已有 checkpoint 或非空日志时，新跑会拒绝覆盖；不要通过删除文件绕过保护。运行前先读第 5 节的 checkpoint 决策门。
 
 `npm run lint` 的可用性也应在当前分支实测；不要继承旧会话的“本来就是坏的”结论。
 
 ---
 
-## 4. 最重要的一件事：适应度会封顶
+## 4. 目标演进：消行封顶、旧高度目标与 score-rate-v1
 
-这是整个项目最关键的发现，**不看这段会白跑几小时**。
+这是整个项目最关键的演进，**不看这段会白跑几小时**。
+
+### 当前目标：固定调度 score rate
+
+`score-rate-v1` 直接使用引擎一致的对局分数，并按调度 cap 归一化：
+
+```
+fitness = meanScore / maxPieces
+```
+
+模拟器跳过真实时间和重力，并把选定落点直接赋给当前方块后锁定，因此这里优化的是每个**调度方块**带来的确定性模拟分数，而不是每秒分数。这个分数使用引擎的消行计分规则，但不包含浏览器逐键回放可能累积的 soft/hard-drop bonus；它是 score-rate-v1 的既定契约，不是浏览器 UI 总分的逐分预测。若候选提前死亡，分母仍是相同的 scheduled `maxPieces`；用 survived pieces 作分母会奖励提前退出。高度继续输出用于诊断，在固定复评中只有候选与当前最佳的 `meanScore` 差距落入包含边界的 0.1% 容差时，更低高度才决定是否发布。
+
+训练过程中的 `bestScoreRate` 只是在当代共同随机数下对候选排序；它既不是固定复评，也不是独立 baseline 对照。判断收敛要结合整代 score-rate 分布与 sigma；判断是否优于旧发布权重要使用同 seeds、depth、piece cap 的独立 paired benchmark。
+
+### 历史根因：消行数封顶
 
 ### 现象
 
@@ -107,19 +139,19 @@ CEM 是按前 10% 的精英拟合下一代分布的。精英全部并列在天�
 
 已经有三版触发条件先后撞在同一堵墙上：中位消行数（数学上不可达）、中位存活步数（可达但实际到不了）、精英中位存活步数（触发正确，但**永远触发**）。**问题从来不在触发条件，在指标本身。**
 
-### 处置一：给局长上限封顶
+### 历史处置一：给局长上限封顶
 
 `maxPiecesCap` 已压到 **2000**，并且复评的消行项饱和时会打印提示。**消行**这一项仍然是饱和量——它只是在复述局长上限，别拿它判断收敛。
 
-### 处置二：棋盘整洁度（已实现）
+### 历史处置二：棋盘整洁度（已退役）
 
-适应度现在是组合式的：
+`lines-height-v1` 当时采用组合式适应度：
 
 ```
 fitness = meanLines - heightPenalty * meanHeight
 ```
 
-`meanHeight` 是**每次锁定后（且消行之后）最高列高度**的全局平均，由 `simulate.ts` 累加、`SimResult` 带出。它的范围受 `TOTAL_ROWS = 22` 限制，但不会仅因为所有候选活到 piece cap 就自动取同一值：平均把堆压在 3 行的候选仍可与常年顶到 15 行的候选区分。它保留真实的 7-bag 分布，适合作为能迁移回真游戏的整洁度信号。
+`meanHeight` 是**每次锁定后（且消行之后）最高列高度**的全局平均，由 `simulate.ts` 累加、`SimResult` 带出。它的范围受 `TOTAL_ROWS = 22` 限制，但不会仅因为所有候选活到 piece cap 就自动取同一值：平均把堆压在 3 行的候选仍可与常年顶到 15 行的候选区分。这个指标仍保留在当前系统中用于诊断，但不再直接从 score-rate fitness 中扣除。
 
 `heightPenalty = 1.0`，是量出来的，不是拍的。把训练权重按 sigma 0.1 扰动（模拟收敛后的精英池）后两项的跨度：
 
@@ -128,7 +160,7 @@ fitness = meanLines - heightPenalty * meanHeight
 | 300 | 3.33 | 2.93 | 12/12 |
 | 1200 | 6.00 | 4.38 | 10/12 |
 
-两项量级相当，且**局长上限翻倍后仍然相当**，所以后期不会退化成只看消行。权重不能调太大：高度上限是 `TOTAL_ROWS = 22`，而活满全场值 `0.4 × maxPieces` 分；一旦 `22 × heightPenalty` 逼近 `0.4 × initialMaxPieces`（当前是 120），**5 个方块就顶死的候选因为棋盘几乎全空反而显得最整洁**，CEM 会开始偏爱「干净地速死」。理由与算术都写在 `training/config.ts` 的 `heightPenalty` 注释里。
+两项量级相当，且**局长上限翻倍后仍然相当**，所以当时预计后期不会退化成只看消行。权重不能调太大：高度上限是 `TOTAL_ROWS = 22`，而活满全场值 `0.4 × maxPieces` 分；一旦 `22 × heightPenalty` 逼近 `0.4 × initialMaxPieces`（当时 `initialMaxPieces = 300`，对应 120 行天花板），**5 个方块就顶死的候选因为棋盘几乎全空反而显得最整洁**，CEM 会开始偏爱「干净地速死」。这是 lines-height-v1 的历史设计约束；当前 `training/config.ts` 已不再包含 `heightPenalty`。
 
 实测确实区分出来了（`npm run bench --games 3 --depth 2 --max-pieces 600`）：
 
@@ -141,9 +173,9 @@ fitness = meanLines - heightPenalty * meanHeight
 
 冒烟跑（`npm run train -- --generations 2`）里信号也在动：精英中位高度 gen 0 是 7.0，gen 1 降到 3.5，而同期全体中位高度是 14.3。
 
-配套改动：
+以下配套改动描述的是 `lines-height-v1` 历史快照；当前类型、日志与发布代码已经由 score-rate-v1 取代：
 
-- `aggregateFitness` 现在返回 `{ fitness, meanLines, meanPieces, meanHeight }`，多收一个 `heightPenalty` 参数
+- `aggregateFitness` 当时返回 `{ fitness, meanLines, meanPieces, meanHeight }`，多收一个 `heightPenalty` 参数
 - 日志每代多写 `medianLines / medianHeight / eliteHeight / heightPenalty`，控制台多打一列 `eliteH`
 - 复评与 `bestEver` **改用组合分 `score` 排名**。只按消行排名的话，复评一饱和（实测 1998.2/2000）就此永远并列，模型再也不会更新
 - 旧 checkpoint 没有 `score` 字段，`--resume` 时会把标杆清零（旧的 `meanLines` 是另一套目标下量的，不可比），下次复评重新发布
@@ -161,16 +193,21 @@ fitness = meanLines - heightPenalty * meanHeight
 
 ### Checkpoint 决策门
 
-历史上 `maxPieces = 76800` 的 checkpoint 已退役归档，但这不代表 `public/ai/` 永久保持干净。**2026-07-28 18:20 的观测快照**已经存在新的 `checkpoint.json`（gen 5、`maxPieces = 2000`）和 gen 0–4 日志；这只是说明“当时有一轮进行中”，开始工作时必须重新读取文件。
+当前训练器默认使用 `public/ai/score-rate-v1/`，也可通过 `--output-dir` 选择隔离目录。根 `public/ai/checkpoint.json` / `training-log.jsonl` 是旧目标产物，`score-rate-v1-smoke/` 是隔离冒烟产物；路径相邻不表示目标兼容。
+
+**2026-08-03 收口快照**：默认 score-rate-v1 checkpoint 为 gen 20，日志包含 gen 0–19 的 20 条 generation 记录和一条 gen 20 reevaluation，发布权重已经写入根 `best-weights.json` 与 tracked `src/ai/trained-weights.json`。这是核对本轮发布的证据，不是未来可跳过现场检查的许可。
 
 任何训练前都按以下顺序判断：
 
-1. 检查是否有训练进程正在写这些文件。
-2. 读取 checkpoint 的 `gen`、`maxPieces`、`config`、目标函数相关字段，并检查日志尾部是否与之连续。
-3. 如果要保留本轮，只能在确认格式和目标兼容后使用 `--resume`。
-4. 如果要新跑，先取得用户授权并把现有 checkpoint、日志和权重作为一组归档或改用独立输出位置。
+1. 检查 Node 命令行、CPU 和内存，确认没有训练进程正在写目标目录或发布权重。
+2. 明确实际 output dir；读取其中 checkpoint 的 schema version、`objective`、`gen`、`maxPieces`、完整 `config` 与 `bestEver`，并检查日志尾部是否连续。
+3. 如果保留本轮，只能在 score-rate-v1 schema、固定发布调度和权重维度全部校验后显式使用 `--resume`。
+4. 如果新跑，先取得用户授权并选择空的独立 output dir；归档、移动或删除任何已有产物都需要单独授权。
+5. 训练还可能改写 `public/ai/best-weights.json` 与 tracked `src/ai/trained-weights.json`；启动前必须记录二者状态和哈希。
 
-**不要在已有产物时直接省略 `--resume`。** `train.ts` 会从新状态初始化，继续向同一个日志追加，并覆盖 checkpoint，造成世代混杂和进度丢失。
+**不要在已有产物时省略 `--resume`。** 当前 `assertFreshRun` 会在创建 worker 或写文件前拒绝已有 checkpoint/非空日志；不要通过删除、清空或迁移文件绕过它。
+
+### Legacy 高 cap 轮次（历史背景）
 
 退役的 76800-cap 历史轮次位于仓库根目录的 `training-archive/`（同目录 README 记录原委）。不放在 `public/ai/` 下：Vite 会把 `public/` 原样拷进 `dist/`。当时的状态与判断：
 
@@ -181,7 +218,7 @@ fitness = meanLines - heightPenalty * meanHeight
 | `sigma` | 仍在 0.61–0.68，几乎没收敛 |
 | `mu` | 按新指标实测（depth 2、cap 600、3 局）平均高度 **3.18**，介于手调 3.12 与已发布训练权重 3.23 之间——8 代什么也没换来 |
 
-加上适应度已经换成组合式，旧日志里 cap 38400 下的 `best = 15358` 与新目标的百位数值混在同一个 `training-log.jsonl` 里会让面板的图彻底失真，所以选择了归档重来而不是把 `maxPieces` 改回 300。
+加上适应度当时已经换成组合式，旧日志里 cap 38400 下的 `best = 15358` 与 lines-height 目标的百位数值混在同一个 `training-log.jsonl` 里会让面板的图彻底失真，所以当时选择了归档重来而不是把 `maxPieces` 改回 300。
 
 **下次再遇到跑飞的 checkpoint**，只能在停止写入进程、核对目标函数并获得用户授权后选择修正或成组归档。以下是历史示例，不是可直接粘贴的默认操作：
 
@@ -258,7 +295,7 @@ CEM 是搜索式演化，「模型」只有 9 个浮点数，算力全花在博�
 - `src/ai/` 必须保持纯净：无 `node:` 导入、无 DOM API、无文件系统、无模块级可变状态。唯一的例外是 `loadWeights.ts`（浏览器专用），已在 `tsconfig.train.json` 排除。
 - `FEATURE_NAMES` 是特征顺序的唯一真相。权重向量是**按位置**点乘特征向量的。
 - 落点枚举必须走引擎的 `rotatePiece`，否则会漏掉靠踢墙才能到达的落点。
-- 运行时依赖只有 react / react-dom / zustand，devDependency 只加了 vitest / tsx / @types/node。**面板的四张图是手写 SVG，不要引图表库。**
+- AI/训练改动不应增加新的运行时依赖；训练面板的四张图是手写 SVG，**不要为它们引入图表库。**
 
 ---
 
@@ -269,16 +306,16 @@ CEM 是搜索式演化，「模型」只有 9 个浮点数，算力全花在博�
 - 权重文件里的 `searchDepth` 元数据没有任何地方读取——它本来是为了防止「2 层练的权重拿去 1 层跑」这个已知失效模式
 - `parseWeightsFile` 对损坏的**元数据**字段（gen / trainedAt）静默取默认值，只有权重向量本身是严格校验的
 - `simulate.ts` 的 `lockAndSpawn` 有一个不可达的 `preview ? ... : drawFromBag(state)` 兜底分支
-- 没有任何测试覆盖「同一次锁定里跨越等级边界的消行」——这是「计分用消行前的等级」唯一可观测的场景。实际无害：模拟器跳过重力，等级只影响 score，而适应度读的是 lines
 
 ---
 
-## 8. 一个新会话可以直接接手的任务
+## 8. 后续会话的接手顺序
 
 按价值排序：
 
-1. **先审计当前训练产物**——检查进程、checkpoint、日志尾部、目标配置和候选权重，明确是续跑、归档重跑还是只做 benchmark；没有用户授权不要启动或改动产物。
-2. **用同一组种子和参数比较手调基线与候选权重**——先跑不带 `--weights` 的内置基线，再对已核验的候选文件运行相同命令，重点比较 `meanHeight`、分布和 capped 比例。
-3. **若获准继续训练，先做有限 generations 的短跑**——续跑必须显式 `--resume`；新跑必须先隔离旧产物。观察 `eliteH`、分布统计和 sigma，而不是只看已饱和的消行部分。
-4. 重新核验并处理当前 lint 配置；不要把 2026-07-28 的失败状态当成永久事实。
-5. 让 `searchDepth` 元数据真正起作用：权重文件的深度与 UI 当前深度不一致时给出提示。
+1. **先审计 Git、进程和全部 `public/ai/` 产物**——Git 干净不代表 ignored 产物没变；没有用户授权不要启动训练/benchmark，也不要归档、删除或覆盖产物。
+2. **把 gen 20 当作当前已发布候选，而不是永久最优真理**——本轮发布证据见第 1 节；未来若比较另一候选，必须用相同 seeds、depth、piece cap 的 paired 设计，且不能用训练 `bestScoreRate` 代替基线验收。
+3. **若获准继续训练，先明确 resume 还是隔离新跑**——resume 必须指向经完整校验的 score-rate-v1 checkpoint；新跑必须使用空 output dir。观察 score-rate 分布、固定复评与 sigma，高度只作诊断。
+4. 运行当前 `npm run lint`、`npm test`、`npm run typecheck:train` 和 `npm run build`；不要继承旧测试数或成功结论。
+5. 浏览器验收时区分 bundled 与 runtime：bundled 来自 tracked JSON，runtime 来自 `/ai/best-weights.json`；二者可以同内容但来源标签不同。
+6. 让 `searchDepth` 元数据真正起作用：权重文件的深度与 UI 当前深度不一致时给出提示。

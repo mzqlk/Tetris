@@ -95,7 +95,7 @@ npm run lint
   - `bundled`：打包进构建产物的权重（`src/ai/trained-weights.json`，训练产出，缺省时回退到手工设定的 Dellacherie 式权重）。
   - `trained`：运行时从 `public/ai/best-weights.json` 拉取的最新训练权重，无需重新构建即可生效；训练尚未产出该文件前此选项不可用。
 
-面板上会显示当前实际生效的权重来源及其代数（gen）、平均消行数与平均堆叠高度，便于确认 AI 到底在用哪一套权重下棋。
+面板会显示当前实际生效的权重来源。`bundled` 会显示打包权重的代数；运行时 `trained` 权重还会显示固定复评的平均消行数与平均堆叠高度，便于确认 AI 到底在用哪一套权重下棋。
 
 ## 🧠 AI 训练与评测
 
@@ -108,26 +108,28 @@ npm test
 # 对一组权重跑基准评测（局数/搜索深度/单局最大方块数可调）
 npm run bench -- --games 20 --depth 2 --max-pieces 5000
 
-# 启动 CEM（交叉熵方法）训练循环 —— 多小时级、会持续运行直至达到代数上限或 Ctrl-C
-npm run train -- --generations 200
+# 新建 CEM（交叉熵方法）训练轮次 —— 仅在已授权且 output dir 为空时
+npm run train -- --generations 200 --output-dir public/ai/<new-run-id>
 
-# 只用 8 个核心跑，把机器留给自己用（缺省是核心数 - 1）
+# 新轮次只用 8 个核心跑，把机器留给自己用（缺省是核心数 - 1）
 # 代价很小：实测 31 → 8 个 worker，单代只慢 16%（一代的耗时由少数长对局的尾巴决定）
-npm run train -- --generations 200 --workers 8
+npm run train -- --generations 200 --workers 8 --output-dir public/ai/<new-run-id>
 
-# 从上次的 checkpoint 继续训练
+# 从默认 score-rate-v1 checkpoint 继续训练（须先完整核验并获得授权）
 npm run train -- --resume
 
 # 只对训练脚本做类型检查（与主应用的 tsconfig 分开）
 npm run typecheck:train
 ```
 
-训练过程会把每一代的统计数据追加写入 `public/ai/training-log.jsonl`，并在每次刷新最佳权重时同步更新 `public/ai/best-weights.json` 与 `src/ai/trained-weights.json`。
+当前 `score-rate-v1` 训练默认把 checkpoint 和每代统计写入 `public/ai/score-rate-v1/`。固定复评通过发布门时，才会同步更新运行时权重 `public/ai/best-weights.json` 与 bundled 权重 `src/ai/trained-weights.json`。`public/ai/checkpoint.json` 和 `public/ai/training-log.jsonl` 是退役高度目标的 legacy 产物，不得与当前轮次混用。
 
-访问 `training.html`（开发模式下即 `npm run dev` 后的 `/training.html`）可以打开训练可视化面板，它会持续轮询 `public/ai/training-log.jsonl`，训练运行时图表随日志增长自动刷新，无需手动刷新页面。
+访问 `training.html`（开发模式下即 `npm run dev` 后的 `/training.html`）可以打开训练可视化面板，它会持续轮询 `public/ai/score-rate-v1/training-log.jsonl`，训练运行时图表随日志增长自动刷新，无需手动刷新页面。
 
 > **动手改训练之前，请先读 [`docs/ai-training-handoff.md`](docs/ai-training-handoff.md)。**
-> 它记录了当前进度、几个会浪费数小时的坑，以及最关键的一点：**消行数这个指标会封顶**——称职的候选根本不会死，消行数恒等于 `0.4 × 局长上限`，训练权重与手调权重在任何只看消行的基准上都区分不出来。所以适应度已改为 `平均消行 - heightPenalty × 平均堆叠高度`，用不封顶的棋盘整洁度把它们区分开。
+> 它记录了当前进度、几个会浪费数小时的坑，以及最关键的一点：**消行数这个指标会封顶**——称职的候选根本不会死，消行数恒等于 `0.4 × 局长上限`，任何只看消行的基准都区分不出它们。项目曾使用 `平均消行 - heightPenalty × 平均堆叠高度`，但该目标现已退役；当前 `score-rate-v1` 在固定调度下优化 `meanScore / maxPieces`，高度仅作诊断和 0.1% 近似平分时的发布 tie-breaker。
+
+当前发布的 gen 20 权重先在固定 `30 × 5000` 复评中取得 `meanScore = 3,104,830`、`scoreRate = 620.966`，随后又以新 seed `20260803` 对旧已发布权重进行了独立 paired benchmark：旧权重 `612.228`、gen 20 `621.272`，逐局 `30` 胜 `0` 负，平均差 `+9.044 score/piece`，95% paired 区间为 `[+7.813, +10.275]`。发布结论依赖这组同参数 paired 证据，不能由训练日志中的 `bestScoreRate` 单独推出。
 
 ## 📁 项目结构
 
