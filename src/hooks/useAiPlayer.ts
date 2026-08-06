@@ -3,7 +3,7 @@ import type { Board, Piece } from '../types';
 import { useGameStore } from '../store/gameStore';
 import { bestPlacement } from '../ai/search';
 import { projectPath, samePiece } from '../ai/replay';
-import type { AiMove } from '../ai/placements';
+import { cellKey, projectHardDrop, type AiMove } from '../ai/placements';
 import { toVector, type Weights } from '../ai/weights';
 
 export type AiSpeed = 'instant' | 'normal' | 'slow';
@@ -17,10 +17,11 @@ export interface AiPlayerOptions {
 
 export interface AiPlan {
   moves: AiMove[];
-  /** path[i] is the pose after moves[i]. */
+  /** path[i] is the pose after moves[i], before the final hard drop. */
   path: Piece[];
   cursor: number;
   origin: Piece;
+  target: Piece;
 }
 
 const STEP_DELAY_MS: Record<AiSpeed, number> = {
@@ -48,7 +49,38 @@ export function planPlacement(
   // happen. Bail to a fresh plan rather than executing a half-valid sequence.
   if (path.length !== moves.length) return null;
 
-  return { moves, path, cursor: 0, origin: current };
+  const preDrop = path.at(-1) ?? current;
+  if (cellKey(projectHardDrop(board, preDrop)) !== cellKey(decision.placement.piece)) {
+    return null;
+  }
+
+  return {
+    moves,
+    path,
+    cursor: 0,
+    origin: current,
+    target: decision.placement.piece,
+  };
+}
+
+/** Executes one positioning action and hard-drops when the plan is complete. */
+export function advanceAiPlan(
+  plan: AiPlan,
+  dispatch: (move: AiMove) => void,
+  hardDrop: () => void,
+): boolean {
+  if (plan.cursor >= plan.moves.length) {
+    hardDrop();
+    return true;
+  }
+
+  dispatch(plan.moves[plan.cursor]);
+  plan.cursor++;
+  if (plan.cursor === plan.moves.length) {
+    hardDrop();
+    return true;
+  }
+  return false;
 }
 
 /** The pose the board must be in for the plan's next move to make sense. */
@@ -122,25 +154,25 @@ export function useAiPlayer(opts: AiPlayerOptions): void {
       if (speed === 'instant') {
         // Run the whole placement in one turn of the event loop, so gravity
         // cannot interleave and invalidate the plan.
-        while (active.cursor < active.moves.length) {
-          dispatch(active.moves[active.cursor]);
-          active.cursor++;
+        while (!advanceAiPlan(
+          active,
+          dispatch,
+          () => useGameStore.getState().hardDrop(),
+        )) {
+          // All positioning actions intentionally run in this event-loop callback.
         }
-        useGameStore.getState().hardDrop();
+        // UI hard-drop bonuses may change the displayed score; simulation fitness excludes them.
         plan = null;
         schedule(0);
         return;
       }
 
-      if (active.cursor >= active.moves.length) {
-        store.hardDrop();
-        plan = null;
-        schedule(STEP_DELAY_MS[speed]);
-        return;
-      }
-
-      dispatch(active.moves[active.cursor]);
-      active.cursor++;
+      const placed = advanceAiPlan(
+        active,
+        dispatch,
+        () => useGameStore.getState().hardDrop(),
+      );
+      if (placed) plan = null;
       schedule(STEP_DELAY_MS[speed]);
     };
 
