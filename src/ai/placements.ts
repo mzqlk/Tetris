@@ -8,8 +8,17 @@ export type AiMove = 'left' | 'right' | 'rotate' | 'down';
 export interface Placement {
   /** The locked pose: valid, and one row further down is not. */
   piece: Piece;
-  /** Shortest key sequence from the spawn pose to this pose. */
+  /** Shortest path to a pose whose hard drop reaches `piece`. */
   moves: AiMove[];
+}
+
+export function projectHardDrop(board: Board, piece: Piece): Piece {
+  let dropped = piece;
+  for (;;) {
+    const next = movePiece(board, dropped, 0, 1);
+    if (next === null) return dropped;
+    dropped = next;
+  }
 }
 
 // A 4x4 matrix can have up to 3 empty leading rows/columns, so piece.position
@@ -56,6 +65,7 @@ export function enumeratePlacements(board: Board, spawn: Piece): Placement[] {
   const visited = new Set<number>([stateKey(spawn)]);
   const seenCells = new Set<string>();
   const results: Placement[] = [];
+  const preDropMoves = new Map<string, AiMove[]>();
   let frontier: Placement[] = [{ piece: spawn, moves: [] }];
 
   while (frontier.length > 0) {
@@ -63,12 +73,20 @@ export function enumeratePlacements(board: Board, spawn: Piece): Placement[] {
 
     for (const node of frontier) {
       const down = movePiece(board, node.piece, 0, 1);
+      const projectedKey = cellKey(projectHardDrop(board, node.piece));
+      if (!preDropMoves.has(projectedKey)) {
+        preDropMoves.set(projectedKey, node.moves);
+      }
 
       if (down === null) {
         const key = cellKey(node.piece);
         if (!seenCells.has(key)) {
+          const moves = preDropMoves.get(key);
+          if (moves === undefined) {
+            throw new Error(`missing pre-drop path for reachable placement ${key}`);
+          }
           seenCells.add(key);
-          results.push(node);
+          results.push({ piece: node.piece, moves });
         }
       }
 
