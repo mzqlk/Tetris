@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { SCORE_RATE_OBJECTIVE } from '../../ai/trainingObjective';
 import type { LogEntry } from './types';
 
-export const LOG_URL = '/ai/score-rate-v1/training-log.jsonl';
+export const LOG_URL = '/ai/score-rate-v2/training-log.jsonl';
 
 /** Without these a line is meaningless, so it is dropped. */
 const NUMBER_FIELDS = [
@@ -62,6 +62,9 @@ export function parseLog(text: string): LogEntry[] {
       medianLines: num(e.medianLines, 0),
       medianHeight: num(e.medianHeight, 0),
       eliteHeight: num(e.eliteHeight, 0),
+      bestTetrisLineShare: num(e.bestTetrisLineShare, 0),
+      medianTetrisLineShare: num(e.medianTetrisLineShare, 0),
+      eliteTetrisLineShare: num(e.eliteTetrisLineShare, 0),
       gamesPerCandidate: num(e.gamesPerCandidate, 0),
       elapsedMs: num(e.elapsedMs, 0),
     });

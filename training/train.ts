@@ -20,7 +20,6 @@ import {
 import { hashSeed, mulberry32 } from '../src/ai/rng';
 import {
   DEFAULT_WEIGHTS,
-  DEFAULT_WEIGHTS_META,
   fromVector,
   normalize,
   toVector,
@@ -89,13 +88,15 @@ function parseArgs(argv: string[]): {
 
 function writeWeightsFiles(best: ScoreRateBestEver, depth: 1 | 2) {
   const payload = JSON.stringify({
-    version: 2,
+    version: 3,
     weights: fromVector(best.weights),
     objective: SCORE_RATE_OBJECTIVE,
     meanScore: best.meanScore,
     evalMaxPieces: best.evalMaxPieces,
     meanLines: best.meanLines,
     meanHeight: best.meanHeight,
+    meanClearCounts: best.meanClearCounts,
+    tetrisLineShare: best.tetrisLineShare,
     evalGames: best.evalGames,
     gen: best.gen,
     searchDepth: depth,
@@ -118,6 +119,8 @@ function reevaluationSummary(
     scoreRate: stats.fitness[index],
     meanLines: stats.meanLines[index],
     meanHeight: stats.meanHeight[index],
+    meanClearCounts: stats.meanClearCounts[index],
+    tetrisLineShare: stats.tetrisLineShares[index],
   };
 }
 
@@ -172,7 +175,7 @@ console.log(
 
 function saveCheckpoint() {
   const cp: ScoreRateCheckpoint = {
-    version: 2,
+    version: 3,
     objective: SCORE_RATE_OBJECTIVE,
     gen: state.gen,
     mu: state.mu,
@@ -222,6 +225,7 @@ async function runGeneration(): Promise<void> {
     meanLines,
     meanPieces,
     meanHeight,
+    tetrisLineShares,
   } = aggregateFitness(results, candidates.length, cfg.gamesPerCandidate, maxPieces);
 
   const bestScoreRate = Math.max(...scoreRates);
@@ -231,7 +235,8 @@ async function runGeneration(): Promise<void> {
     scoreRates.reduce((sum, value) => sum + (value - meanScoreRate) ** 2, 0) /
     scoreRates.length,
   );
-  const bestWeights = candidates[scoreRates.indexOf(bestScoreRate)];
+  const bestIndex = scoreRates.indexOf(bestScoreRate);
+  const bestWeights = candidates[bestIndex];
   const elapsedMs = Date.now() - started;
 
   const elites = scoreRates
@@ -240,12 +245,15 @@ async function runGeneration(): Promise<void> {
       pieces: meanPieces[index],
       score: meanScore[index],
       height: meanHeight[index],
+      tetrisLineShare: tetrisLineShares[index],
     }))
     .sort((a, b) => b.fit - a.fit)
     .slice(0, eliteCount(cfg.eliteFrac, candidates.length));
   const elitePieces = median(elites.map((elite) => elite.pieces));
   const eliteScore = median(elites.map((elite) => elite.score));
   const eliteHeight = median(elites.map((elite) => elite.height));
+  const bestTetrisLineShare = tetrisLineShares[bestIndex];
+  const eliteTetrisLineShare = median(elites.map((elite) => elite.tetrisLineShare));
 
   appendFileSync(paths.log, JSON.stringify({
     objective: SCORE_RATE_OBJECTIVE,
@@ -267,6 +275,9 @@ async function runGeneration(): Promise<void> {
     medianLines: median(meanLines),
     medianHeight: median(meanHeight),
     eliteHeight: median(elites.map((elite) => elite.height)),
+    bestTetrisLineShare,
+    medianTetrisLineShare: median(tetrisLineShares),
+    eliteTetrisLineShare,
     gamesPerCandidate: cfg.gamesPerCandidate,
     elapsedMs,
   }) + '\n');
@@ -277,6 +288,8 @@ async function runGeneration(): Promise<void> {
     `  medianRate ${median(scoreRates).toFixed(3).padStart(10)}` +
     `  eliteScore ${eliteScore.toFixed(1).padStart(12)}` +
     `  eliteH ${eliteHeight.toFixed(1).padStart(5)}` +
+    `  bestT4 ${(100 * bestTetrisLineShare).toFixed(1)}%` +
+    `  eliteT4 ${(100 * eliteTetrisLineShare).toFixed(1)}%` +
     `  cap ${maxPieces}  ${(elapsedMs / 1000).toFixed(1)}s`,
   );
 
@@ -326,7 +339,7 @@ async function runGeneration(): Promise<void> {
       bestEver = {
         weights: evaluationWeights[reevaluation.baselineIndex],
         ...baseline,
-        gen: DEFAULT_WEIGHTS_META?.gen ?? -1,
+        gen: reevaluation.baselineGen,
         evalGames: cfg.reevalGames,
         evalMaxPieces: cfg.reevalMaxPieces,
       };
@@ -369,6 +382,8 @@ async function runGeneration(): Promise<void> {
         scoreRate: currentBest.scoreRate,
         meanLines: currentBest.meanLines,
         meanHeight: currentBest.meanHeight,
+        meanClearCounts: currentBest.meanClearCounts,
+        tetrisLineShare: currentBest.tetrisLineShare,
         gen: currentBest.gen,
       },
       candidate: {

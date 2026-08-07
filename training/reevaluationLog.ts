@@ -47,6 +47,7 @@ interface BuildReevaluationLogEntryArgs {
 const snapshot = (evaluation: LoggedReevaluation): LoggedReevaluation => ({
   ...evaluation,
   weights: evaluation.weights.slice(),
+  meanClearCounts: { ...evaluation.meanClearCounts },
 });
 
 export function buildReevaluationLogEntry(

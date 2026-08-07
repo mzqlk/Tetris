@@ -1,4 +1,5 @@
 import { hashSeed } from '../src/ai/rng';
+import type { LineClearCounts } from '../src/ai/lineClears';
 import { SCORE_TIE_RELATIVE_TOLERANCE } from './objective';
 
 const REEVALUATION_STREAM = 0x5eed;
@@ -8,6 +9,8 @@ export interface ReevaluationSummary {
   scoreRate: number;
   meanLines: number;
   meanHeight: number;
+  meanClearCounts: LineClearCounts;
+  tetrisLineShare: number;
 }
 
 export type ReevaluationDecisionReason =

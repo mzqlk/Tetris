@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createSimState, applyAction, simulateGame, type SimAction } from './simulate';
 import { mulberry32 } from './rng';
-import { toVector, HANDCRAFTED_WEIGHTS } from './weights';
+import { toVector, DEFAULT_WEIGHTS, HANDCRAFTED_WEIGHTS } from './weights';
 import { useGameStore } from '../store/gameStore';
 import { FEATURE_COUNT, columnHeights } from './features';
+import { totalLinesFromCounts } from './lineClears';
 import { enumeratePlacements } from './placements';
 import { boardFrom } from './testUtils';
 import { getPieceCells } from '../engine/board';
@@ -168,9 +169,17 @@ describe('line-clear parity', () => {
   // tetris, so the multi-row scoring and level-up paths get pinned down here
   // instead. Both sides start from an identical board and an identical
   // non-empty bag, so neither consumes any RNG.
-  const CASES: [string, string[], number][] = [
+  const EXPECTED_COUNTS = {
+    single: { singles: 1, doubles: 0, triples: 0, tetrises: 0 },
+    double: { singles: 0, doubles: 1, triples: 0, tetrises: 0 },
+    triple: { singles: 0, doubles: 0, triples: 1, tetrises: 0 },
+    tetris: { singles: 0, doubles: 0, triples: 0, tetrises: 1 },
+  } as const;
+
+  const CASES: [keyof typeof EXPECTED_COUNTS, string[], number][] = [
     ['single', ['.#########'], 1],
     ['double', ['.#########', '.#########'], 2],
+    ['triple', ['.#########', '.#########', '.#########'], 3],
     ['tetris', ['.#########', '.#########', '.#########', '.#########'], 4],
   ];
 
@@ -193,6 +202,8 @@ describe('line-clear parity', () => {
       const after = useGameStore.getState();
       expect(after.lines).toBe(expectedLines);
       expect(sim.lines).toBe(expectedLines);
+      expect(sim.clearCounts).toEqual(EXPECTED_COUNTS[name]);
+      expect(sim.lines).toBe(totalLinesFromCounts(sim.clearCounts));
       expect(sim.board).toEqual(after.board);
       expect(sim.score).toBe(after.score);
       expect(sim.level).toBe(after.level);
@@ -273,6 +284,19 @@ describe('simulateGame', () => {
     expect(a).toEqual(b);
   }, SLOW);
 
+  it.each([
+    [7, { lines: 22, score: 3800, pieces: 60, meanHeight: 3.1166666666666667 }],
+    [11, { lines: 22, score: 3600, pieces: 60, meanHeight: 3.7 }],
+    [20260806, { lines: 23, score: 4100, pieces: 60, meanHeight: 3.4833333333333334 }],
+  ])('keeps the zero-extended v1 model deterministic for seed %i', (seed, expected) => {
+    const result = simulateGame({
+      weights: toVector(DEFAULT_WEIGHTS), seed, maxPieces: 60, depth: 2,
+    });
+    expect(result).toMatchObject({ ...expected, reason: 'pieceCap' });
+    expect(result.lines).toBe(totalLinesFromCounts(result.clearCounts));
+    Object.values(result.clearCounts).forEach((count) => expect(Number.isSafeInteger(count)).toBe(true));
+  }, SLOW);
+
   it('produces different results for different seeds', () => {
     const a = simulateGame({ weights, seed: 1, maxPieces: 200, depth: 1 });
     const b = simulateGame({ weights, seed: 2, maxPieces: 200, depth: 1 });
@@ -295,7 +319,7 @@ describe('simulateGame', () => {
 
   it('rejects a weight vector of the wrong length', () => {
     expect(() => simulateGame({ weights: [1, 2, 3], seed: 1, maxPieces: 10, depth: 1 }))
-      .toThrow(/9/);
+      .toThrow(new RegExp(String(FEATURE_COUNT)));
   });
 });
 

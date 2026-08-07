@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { parseLog } from './useTrainingLog';
+import { FEATURE_COUNT } from '../../ai/features';
+import { LOG_URL, parseLog } from './useTrainingLog';
 
 const line = (gen: number) => JSON.stringify({
-  objective: 'score-rate-v1',
+  objective: 'score-rate-v2',
   gen,
   ts: 1785000000000 + gen,
   bestScoreRate: 125.5 + gen,
@@ -10,9 +11,9 @@ const line = (gen: number) => JSON.stringify({
   medianScoreRate: 75,
   worstScoreRate: 0,
   scoreRateStd: 10,
-  mu: Array(9).fill(0.1),
-  sigma: Array(9).fill(0.5),
-  bestWeights: Array(9).fill(0.2),
+  mu: Array(FEATURE_COUNT).fill(0.1),
+  sigma: Array(FEATURE_COUNT).fill(0.5),
+  bestWeights: Array(FEATURE_COUNT).fill(0.2),
   maxPieces: 300,
   medianPieces: 120,
   elitePieces: 260,
@@ -21,33 +22,43 @@ const line = (gen: number) => JSON.stringify({
   medianLines: 45,
   medianHeight: 7.5,
   eliteHeight: 4.2,
+  bestTetrisLineShare: 0.25,
+  medianTetrisLineShare: 0.1,
+  eliteTetrisLineShare: 0.2,
   gamesPerCandidate: 5,
   elapsedMs: 1000,
 });
 
 describe('parseLog', () => {
+  it('uses the score-rate-v2 log URL', () => {
+    expect(LOG_URL).toBe('/ai/score-rate-v2/training-log.jsonl');
+  });
+
   it('parses one entry per line', () => {
     const entries = parseLog(`${line(0)}\n${line(1)}\n`);
     expect(entries).toHaveLength(2);
     expect(entries[1].gen).toBe(1);
-    expect(entries[0].mu).toHaveLength(9);
+    expect(entries[0].mu).toHaveLength(FEATURE_COUNT);
   });
 
   it('parses score-rate fields used by the dashboard', () => {
     const [entry] = parseLog(line(0));
     expect(entry).toMatchObject({
-      objective: 'score-rate-v1',
+      objective: 'score-rate-v2',
       bestScoreRate: 125.5,
       medianScoreRate: 75,
       medianScore: 22500,
       eliteScore: 37650,
       eliteHeight: 4.2,
+      bestTetrisLineShare: 0.25,
+      medianTetrisLineShare: 0.1,
+      eliteTetrisLineShare: 0.2,
     });
   });
 
-  it('does not mix a legacy objective into the score-rate dashboard', () => {
+  it('ignores a score-rate-v1 generation line', () => {
     const legacy = JSON.parse(line(0));
-    legacy.objective = 'lines-height-v1';
+    legacy.objective = 'score-rate-v1';
     expect(parseLog(`${JSON.stringify(legacy)}\n${line(1)}`)).toHaveLength(1);
     expect(parseLog(`${JSON.stringify(legacy)}\n${line(1)}`)[0].gen).toBe(1);
   });
@@ -69,7 +80,7 @@ describe('parseLog', () => {
 
   it('ignores reevaluation events between generation records', () => {
     const reevaluation = JSON.stringify({
-      objective: 'score-rate-v1',
+      objective: 'score-rate-v2',
       kind: 'reevaluation',
       gen: 10,
       ts: 1785000000010,
@@ -96,6 +107,9 @@ describe('parseLog', () => {
     delete parsed.medianLines;
     delete parsed.medianHeight;
     delete parsed.eliteHeight;
+    delete parsed.bestTetrisLineShare;
+    delete parsed.medianTetrisLineShare;
+    delete parsed.eliteTetrisLineShare;
 
     const entries = parseLog(JSON.stringify(parsed));
     expect(entries).toHaveLength(1);
@@ -106,6 +120,9 @@ describe('parseLog', () => {
     expect(entries[0].medianLines).toBe(0);
     expect(entries[0].medianHeight).toBe(0);
     expect(entries[0].eliteHeight).toBe(0);
+    expect(entries[0].bestTetrisLineShare).toBe(0);
+    expect(entries[0].medianTetrisLineShare).toBe(0);
+    expect(entries[0].eliteTetrisLineShare).toBe(0);
     expect(() => entries[0].maxPieces.toLocaleString()).not.toThrow();
   });
 
@@ -114,6 +131,7 @@ describe('parseLog', () => {
     for (const e of entries) {
       for (const key of ['ts', 'scoreRateStd', 'maxPieces', 'medianPieces', 'elitePieces',
                          'medianScore', 'eliteScore', 'medianLines', 'medianHeight', 'eliteHeight',
+                         'bestTetrisLineShare', 'medianTetrisLineShare', 'eliteTetrisLineShare',
                          'gamesPerCandidate', 'elapsedMs'] as const) {
         expect(typeof e[key]).toBe('number');
       }

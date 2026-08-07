@@ -1,6 +1,11 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { FEATURE_COUNT } from '../src/ai/features';
+import {
+  totalLinesFromCounts,
+  tetrisLineShare,
+  type LineClearCounts,
+} from '../src/ai/lineClears';
 import type { TrainConfig } from './config';
 import {
   PUBLICATION_GAMES,
@@ -14,13 +19,15 @@ export interface ScoreRateBestEver {
   scoreRate: number;
   meanLines: number;
   meanHeight: number;
+  meanClearCounts: LineClearCounts;
+  tetrisLineShare: number;
   gen: number;
   evalGames: number;
   evalMaxPieces: number;
 }
 
 export interface ScoreRateCheckpoint {
-  version: 2;
+  version: 3;
   objective: typeof SCORE_RATE_OBJECTIVE;
   gen: number;
   mu: number[];
@@ -38,7 +45,7 @@ export interface RunPaths {
 }
 
 export function resolveRunPaths(root: string, requested: string | null): RunPaths {
-  const outputDir = resolve(root, requested ?? 'public/ai/score-rate-v1');
+  const outputDir = resolve(root, requested ?? 'public/ai/score-rate-v2');
   return {
     outputDir,
     checkpoint: resolve(outputDir, 'checkpoint.json'),
@@ -82,17 +89,32 @@ function positiveInteger(value: unknown, label: string): number {
   return integer(value, label, 1);
 }
 
-function vector(value: unknown, label: string, nonNegative = false): number[] {
+function vector(value: unknown, label: string): number[] {
   if (!Array.isArray(value) || value.length !== FEATURE_COUNT) {
     throw new Error(`checkpoint ${label} must contain exactly ${FEATURE_COUNT} numbers`);
   }
   return value.map((element, index) => {
     const number = finite(element, `${label}[${index}]`);
-    if (nonNegative && number < 0) {
-      throw new Error(`checkpoint ${label}[${index}] must be non-negative`);
-    }
     return number;
   });
+}
+
+function normalizedVector(value: unknown, label: string): number[] {
+  const result = vector(value, label);
+  const norm = Math.hypot(...result);
+  if (Math.abs(norm - 1) > 1e-9) {
+    throw new Error(`checkpoint ${label} must be L2-normalized`);
+  }
+  return result;
+}
+
+function positiveVector(value: unknown, label: string): number[] {
+  const result = vector(value, label);
+  const invalidIndex = result.findIndex((number) => number <= 0);
+  if (invalidIndex !== -1) {
+    throw new Error(`checkpoint ${label}[${invalidIndex}] must be greater than 0`);
+  }
+  return result;
 }
 
 function fraction(value: unknown, label: string): number {
@@ -107,6 +129,34 @@ function nonNegative(value: unknown, label: string): number {
   const number = finite(value, label);
   if (number < 0) throw new Error(`checkpoint ${label} must be non-negative`);
   return number;
+}
+
+const LINE_CLEAR_COUNT_KEYS = ['singles', 'doubles', 'triples', 'tetrises'] as const;
+
+function lineClearCounts(value: unknown, label: string): LineClearCounts {
+  const raw = record(value, label);
+  const keys = Object.keys(raw);
+  if (
+    keys.length !== LINE_CLEAR_COUNT_KEYS.length ||
+    LINE_CLEAR_COUNT_KEYS.some((key) => !Object.prototype.hasOwnProperty.call(raw, key))
+  ) {
+    throw new Error(
+      `checkpoint ${label} must contain exactly singles/doubles/triples/tetrises`,
+    );
+  }
+  return {
+    singles: nonNegative(raw.singles, `${label}.singles`),
+    doubles: nonNegative(raw.doubles, `${label}.doubles`),
+    triples: nonNegative(raw.triples, `${label}.triples`),
+    tetrises: nonNegative(raw.tetrises, `${label}.tetrises`),
+  };
+}
+
+function assertClose(actual: number, expected: number, label: string): void {
+  const tolerance = 1e-12 * Math.max(1, Math.abs(expected));
+  if (Math.abs(actual - expected) > tolerance) {
+    throw new Error(`checkpoint bestEver.${label} is inconsistent with its diagnostics`);
+  }
 }
 
 function trainConfig(value: unknown): TrainConfig {
@@ -152,11 +202,7 @@ function trainConfig(value: unknown): TrainConfig {
 function bestEver(value: unknown, config: TrainConfig): ScoreRateBestEver | null {
   if (value === null) return null;
   const raw = record(value, 'bestEver');
-  const weights = vector(raw.weights, 'bestEver.weights');
-  const norm = Math.hypot(...weights);
-  if (Math.abs(norm - 1) > 1e-9) {
-    throw new Error('checkpoint bestEver.weights must be L2-normalized');
-  }
+  const weights = normalizedVector(raw.weights, 'bestEver.weights');
 
   const result: ScoreRateBestEver = {
     weights,
@@ -164,6 +210,8 @@ function bestEver(value: unknown, config: TrainConfig): ScoreRateBestEver | null
     scoreRate: finite(raw.scoreRate, 'bestEver.scoreRate'),
     meanLines: finite(raw.meanLines, 'bestEver.meanLines'),
     meanHeight: finite(raw.meanHeight, 'bestEver.meanHeight'),
+    meanClearCounts: lineClearCounts(raw.meanClearCounts, 'bestEver.meanClearCounts'),
+    tetrisLineShare: finite(raw.tetrisLineShare, 'bestEver.tetrisLineShare'),
     gen: integer(raw.gen, 'bestEver.gen'),
     evalGames: positiveInteger(raw.evalGames, 'bestEver.evalGames'),
     evalMaxPieces: positiveInteger(raw.evalMaxPieces, 'bestEver.evalMaxPieces'),
@@ -172,11 +220,17 @@ function bestEver(value: unknown, config: TrainConfig): ScoreRateBestEver | null
   if (result.evalGames !== config.reevalGames || result.evalMaxPieces !== config.reevalMaxPieces) {
     throw new Error('checkpoint bestEver uses an incompatible fixed publication schedule');
   }
-  const expectedRate = result.meanScore / result.evalMaxPieces;
-  const rateError = Math.abs(result.scoreRate - expectedRate);
-  if (rateError > 1e-12 * Math.max(1, Math.abs(expectedRate))) {
-    throw new Error('checkpoint bestEver.scoreRate is inconsistent with meanScore/evalMaxPieces');
-  }
+  assertClose(result.scoreRate, result.meanScore / result.evalMaxPieces, 'scoreRate');
+  assertClose(
+    result.meanLines,
+    totalLinesFromCounts(result.meanClearCounts),
+    'meanLines',
+  );
+  assertClose(
+    result.tetrisLineShare,
+    tetrisLineShare(result.meanClearCounts),
+    'tetrisLineShare',
+  );
   return result;
 }
 
@@ -192,14 +246,14 @@ export function readCompatibleCheckpoint(path: string): ScoreRateCheckpoint {
   if (objective !== SCORE_RATE_OBJECTIVE) {
     throw new Error(`checkpoint objective ${objective} is incompatible with ${SCORE_RATE_OBJECTIVE}`);
   }
-  if (checkpoint.version !== 2) {
-    throw new Error(`checkpoint schema ${String(checkpoint.version)} is incompatible with version 2`);
+  if (checkpoint.version !== 3) {
+    throw new Error(`checkpoint schema ${String(checkpoint.version)} is incompatible with version 3`);
   }
 
   const config = trainConfig(checkpoint.config);
   const gen = integer(checkpoint.gen, 'gen', 0);
   const mu = vector(checkpoint.mu, 'mu');
-  const sigma = vector(checkpoint.sigma, 'sigma', true);
+  const sigma = positiveVector(checkpoint.sigma, 'sigma');
   const baseSeed = integer(checkpoint.baseSeed, 'baseSeed');
   const maxPieces = positiveInteger(checkpoint.maxPieces, 'maxPieces');
   if (baseSeed !== config.baseSeed) {
@@ -210,7 +264,7 @@ export function readCompatibleCheckpoint(path: string): ScoreRateCheckpoint {
   }
 
   return {
-    version: 2,
+    version: 3,
     objective: SCORE_RATE_OBJECTIVE,
     gen,
     mu,

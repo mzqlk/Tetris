@@ -15,13 +15,19 @@ import { DEFAULT_CONFIG } from './config';
 const ROOT = resolve(import.meta.dirname, '..');
 
 describe('train --resume objective gate', () => {
-  it('rejects a lines-height checkpoint before worker startup', () => {
+  it('rejects a score-rate-v1 checkpoint before workers or writes', () => {
     const outputDir = mkdtempSync(join(tmpdir(), 'tetris-old-checkpoint-'));
+    const checkpointPath = join(outputDir, 'checkpoint.json');
+    const logPath = join(outputDir, 'training-log.jsonl');
     try {
-      writeFileSync(join(outputDir, 'checkpoint.json'), JSON.stringify({
-        version: 1,
-        objective: 'lines-height-v1',
+      writeFileSync(checkpointPath, JSON.stringify({
+        version: 2,
+        objective: 'score-rate-v1',
       }));
+      writeFileSync(logPath, '{"sentinel":true}\n');
+      const beforeEntries = readdirSync(outputDir).sort();
+      const beforeCheckpoint = readFileSync(checkpointPath);
+      const beforeLog = readFileSync(logPath);
 
       const result = spawnSync(process.execPath, [
         '--import', 'tsx',
@@ -32,9 +38,12 @@ describe('train --resume objective gate', () => {
 
       expect(result.status).not.toBe(0);
       expect(`${result.stdout}\n${result.stderr}`).toMatch(
-        /lines-height-v1.*score-rate-v1/,
+        /score-rate-v1.*score-rate-v2/,
       );
       expect(`${result.stdout}\n${result.stderr}`).not.toMatch(/training with .* workers/);
+      expect(readdirSync(outputDir).sort()).toEqual(beforeEntries);
+      expect(readFileSync(checkpointPath)).toEqual(beforeCheckpoint);
+      expect(readFileSync(logPath)).toEqual(beforeLog);
     } finally {
       rmSync(outputDir, { recursive: true, force: true });
     }
@@ -46,8 +55,8 @@ describe('train --resume objective gate', () => {
     const logPath = join(outputDir, 'training-log.jsonl');
     try {
       writeFileSync(checkpointPath, JSON.stringify({
-        version: 2,
-        objective: 'score-rate-v1',
+        version: 3,
+        objective: 'score-rate-v2',
         gen: 0,
         mu: Array(FEATURE_COUNT - 1).fill(0),
         sigma: Array(FEATURE_COUNT).fill(1),

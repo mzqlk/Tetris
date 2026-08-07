@@ -7,6 +7,8 @@ const best: ReevaluationSummary = {
   scoreRate: 0.2,
   meanLines: 1998,
   meanHeight: 3,
+  meanClearCounts: { singles: 2, doubles: 0, triples: 0, tetrises: 499 },
+  tetrisLineShare: 1996 / 1998,
 };
 
 describe('planReevaluation', () => {
@@ -17,6 +19,7 @@ describe('planReevaluation', () => {
     expect(planReevaluation(null, published, candidate)).toEqual({
       weights: [published, candidate],
       baselineIndex: 0,
+      baselineGen: -1,
       candidateIndex: 1,
     });
   });
@@ -25,6 +28,7 @@ describe('planReevaluation', () => {
     expect(planReevaluation(best, published, candidate)).toEqual({
       weights: [candidate],
       baselineIndex: null,
+      baselineGen: null,
       candidateIndex: 0,
     });
   });

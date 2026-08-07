@@ -5,6 +5,11 @@ import {
   calculateScore, calculateSoftDropScore, calculateHardDropScore, calculateLevel,
 } from '../engine/scorer';
 import { FEATURE_COUNT, columnHeights } from './features';
+import {
+  emptyLineClearCounts,
+  recordLineClear,
+  type LineClearCounts,
+} from './lineClears';
 import { mulberry32 } from './rng';
 import { bestPlacement } from './search';
 
@@ -18,6 +23,7 @@ export interface SimState {
   score: number;
   level: number;
   lines: number;
+  clearCounts: LineClearCounts;
   status: 'playing' | 'gameover';
   pieces: number;
   /** Sum of the stack height sampled after every lock; see `meanHeight`. */
@@ -27,6 +33,7 @@ export interface SimState {
 
 export interface SimResult {
   lines: number;
+  clearCounts: LineClearCounts;
   score: number;
   pieces: number;
   /**
@@ -68,6 +75,7 @@ export function createSimState(seed: number): SimState {
     score: 0,
     level: 1,
     lines: 0,
+    clearCounts: emptyLineClearCounts(),
     status: 'playing',
     pieces: 0,
     heightSum: 0,
@@ -88,6 +96,7 @@ function lockAndSpawn(state: SimState, piece: Piece): void {
   const locked = lockPiece(state.board, piece);
   const { clearedRows, newBoard } = clearLines(locked);
   const linesCleared = clearedRows.length;
+  state.clearCounts = recordLineClear(state.clearCounts, linesCleared);
 
   // Line score uses the level from BEFORE this clear, same as the store.
   state.score += calculateScore(linesCleared, state.level);
@@ -155,8 +164,8 @@ export function applyAction(state: SimState, action: SimAction): void {
  * The simulator skips real-time gravity and assigns the chosen landing pose
  * directly before locking it. Its score therefore uses the engine's line-clear
  * rules but omits the per-input soft/hard-drop bonuses a browser replay can
- * accumulate. That deterministic score is the score-rate-v1 contract; it is
- * not a per-second metric or a byte-for-byte prediction of the UI score.
+ * accumulate. Score-rate-v2 continues to use that deterministic scalar-score
+ * contract; it is not a per-second metric or a byte-for-byte prediction of the UI score.
  */
 export function simulateGame(opts: {
   weights: number[];
@@ -184,6 +193,7 @@ export function simulateGame(opts: {
 
   return {
     lines: state.lines,
+    clearCounts: { ...state.clearCounts },
     score: state.score,
     pieces: state.pieces,
     meanHeight: state.pieces === 0 ? 0 : state.heightSum / state.pieces,
