@@ -20,6 +20,9 @@ export interface LogEntry {
   medianLines: number;
   medianHeight: number;
   eliteHeight: number;
+  bestTetrisLineShare: number;
+  medianTetrisLineShare: number;
+  eliteTetrisLineShare: number;
   gamesPerCandidate: number;
   elapsedMs: number;
 }

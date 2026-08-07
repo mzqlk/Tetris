@@ -1,4 +1,12 @@
-import { FEATURE_NAMES, FEATURE_COUNT, type FeatureName } from './features';
+import {
+  LEGACY_FEATURE_NAMES, FEATURE_NAMES, FEATURE_COUNT, type FeatureName,
+} from './features';
+import {
+  totalLinesFromCounts,
+  tetrisLineShare as calculateTetrisLineShare,
+  type LineClearCounts,
+} from './lineClears';
+import { LEGACY_SCORE_RATE_OBJECTIVE, SCORE_RATE_OBJECTIVE } from './trainingObjective';
 import trainedWeightsJson from './trained-weights.json';
 
 export type Weights = Record<FeatureName, number>;
@@ -12,6 +20,8 @@ export interface WeightsFile {
   meanLines: number;
   /** Mean stack height over the same evaluation — 0 in files written before it. */
   meanHeight: number;
+  meanClearCounts: LineClearCounts | null;
+  tetrisLineShare: number | null;
   evalGames: number;
   gen: number;
   searchDepth: 1 | 2;
@@ -46,6 +56,65 @@ export function normalize(v: number[]): number[] {
   return v.map((x) => x / norm);
 }
 
+function parseExactWeights(
+  raw: Record<string, unknown>,
+  names: readonly string[],
+): Record<string, number> | null {
+  if (Object.keys(raw).length !== names.length) return null;
+
+  const parsed: Record<string, number> = {};
+  for (const name of names) {
+    if (!Object.prototype.hasOwnProperty.call(raw, name)) return null;
+    const value = raw[name];
+    if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+    parsed[name] = value;
+  }
+  return parsed;
+}
+
+const LINE_CLEAR_COUNT_KEYS = ['singles', 'doubles', 'triples', 'tetrises'] as const;
+
+function parseLineClearCounts(value: unknown): LineClearCounts | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  if (
+    Object.keys(raw).length !== LINE_CLEAR_COUNT_KEYS.length ||
+    LINE_CLEAR_COUNT_KEYS.some((key) => !Object.prototype.hasOwnProperty.call(raw, key))
+  ) return null;
+
+  const result = {} as LineClearCounts;
+  for (const key of LINE_CLEAR_COUNT_KEYS) {
+    const count = raw[key];
+    if (typeof count !== 'number' || !Number.isFinite(count) || count < 0) return null;
+    result[key] = count;
+  }
+  return result;
+}
+
+function closeEnough(actual: number, expected: number): boolean {
+  return Math.abs(actual - expected) <= 1e-12 * Math.max(1, Math.abs(expected));
+}
+
+function nonNegativeFinite(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
+}
+
+function integerAtLeast(value: unknown, minimum: number): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum
+    ? value
+    : null;
+}
+
+function isoTimestamp(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value
+    ? value
+    : null;
+}
+
 /**
  * Validate an untrusted weights file. Returns null rather than throwing so the
  * browser and the dashboard can quietly fall back to the built-in weights.
@@ -56,13 +125,86 @@ export function parseWeightsFile(data: unknown): WeightsFile | null {
 
   if (typeof d.weights !== 'object' || d.weights === null) return null;
   const raw = d.weights as Record<string, unknown>;
-  if (Object.keys(raw).length !== FEATURE_COUNT) return null;
 
-  const weights = {} as Weights;
-  for (const name of FEATURE_NAMES) {
-    const value = raw[name];
-    if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-    weights[name] = value;
+  const version = d.version === undefined ? 1 : d.version;
+  if (typeof version !== 'number' || !Number.isSafeInteger(version)) return null;
+  const objectiveDeclared = Object.prototype.hasOwnProperty.call(d, 'objective');
+  const objective = typeof d.objective === 'string' ? d.objective : null;
+
+  let weights: Weights;
+  let currentMetadata: {
+    meanScore: number;
+    evalMaxPieces: number;
+    meanLines: number;
+    meanHeight: number;
+    meanClearCounts: LineClearCounts;
+    tetrisLineShare: number;
+    evalGames: number;
+    gen: number;
+    searchDepth: 1 | 2;
+    trainedAt: string;
+  } | null = null;
+  if (version === 1 && !objectiveDeclared) {
+    const legacy = parseExactWeights(raw, LEGACY_FEATURE_NAMES);
+    if (legacy === null) return null;
+    weights = { ...legacy, lineClearValue: 0 } as Weights;
+  } else if (version === 2 && objective === LEGACY_SCORE_RATE_OBJECTIVE) {
+    const legacy = parseExactWeights(raw, LEGACY_FEATURE_NAMES);
+    if (legacy === null) return null;
+    weights = { ...legacy, lineClearValue: 0 } as Weights;
+  } else if (version === 3 && objective === SCORE_RATE_OBJECTIVE) {
+    const current = parseExactWeights(raw, FEATURE_NAMES);
+    if (current === null) return null;
+    weights = current as Weights;
+
+    const meanScore = nonNegativeFinite(d.meanScore);
+    const evalMaxPieces = integerAtLeast(d.evalMaxPieces, 1);
+    const meanLines = nonNegativeFinite(d.meanLines);
+    const meanHeight = nonNegativeFinite(d.meanHeight);
+    const meanClearCounts = parseLineClearCounts(d.meanClearCounts);
+    const parsedTetrisLineShare = nonNegativeFinite(d.tetrisLineShare);
+    const evalGames = integerAtLeast(d.evalGames, 1);
+    const gen = integerAtLeast(d.gen, -1);
+    const searchDepth = d.searchDepth === 1 || d.searchDepth === 2
+      ? d.searchDepth
+      : null;
+    const trainedAt = isoTimestamp(d.trainedAt);
+    if (
+      meanScore === null ||
+      evalMaxPieces === null ||
+      meanLines === null ||
+      meanHeight === null ||
+      meanClearCounts === null ||
+      parsedTetrisLineShare === null ||
+      evalGames === null ||
+      gen === null ||
+      searchDepth === null ||
+      trainedAt === null
+    ) return null;
+    let expectedMeanLines: number;
+    let expectedTetrisLineShare: number;
+    try {
+      expectedMeanLines = totalLinesFromCounts(meanClearCounts);
+      expectedTetrisLineShare = calculateTetrisLineShare(meanClearCounts);
+    } catch {
+      return null;
+    }
+    if (!closeEnough(meanLines, expectedMeanLines)) return null;
+    if (!closeEnough(parsedTetrisLineShare, expectedTetrisLineShare)) return null;
+    currentMetadata = {
+      meanScore,
+      evalMaxPieces,
+      meanLines,
+      meanHeight,
+      meanClearCounts,
+      tetrisLineShare: parsedTetrisLineShare,
+      evalGames,
+      gen,
+      searchDepth,
+      trainedAt,
+    };
+  } else {
+    return null;
   }
 
   const num = (v: unknown, fallback: number) =>
@@ -71,23 +213,25 @@ export function parseWeightsFile(data: unknown): WeightsFile | null {
     typeof v === 'number' && Number.isFinite(v) ? v : null;
 
   return {
-    version: num(d.version, 1),
+    version,
     weights,
-    objective: typeof d.objective === 'string' ? d.objective : null,
-    meanScore: nullableNum(d.meanScore),
-    evalMaxPieces: nullableNum(d.evalMaxPieces),
-    meanLines: num(d.meanLines, 0),
-    meanHeight: num(d.meanHeight, 0),
-    evalGames: num(d.evalGames, 0),
-    gen: num(d.gen, 0),
-    searchDepth: d.searchDepth === 1 ? 1 : 2,
-    trainedAt: typeof d.trainedAt === 'string' ? d.trainedAt : '',
+    objective,
+    meanScore: currentMetadata?.meanScore ?? nullableNum(d.meanScore),
+    evalMaxPieces: currentMetadata?.evalMaxPieces ?? nullableNum(d.evalMaxPieces),
+    meanLines: currentMetadata?.meanLines ?? num(d.meanLines, 0),
+    meanHeight: currentMetadata?.meanHeight ?? num(d.meanHeight, 0),
+    meanClearCounts: currentMetadata?.meanClearCounts ?? null,
+    tetrisLineShare: currentMetadata?.tetrisLineShare ?? null,
+    evalGames: currentMetadata?.evalGames ?? num(d.evalGames, 0),
+    gen: currentMetadata?.gen ?? num(d.gen, 0),
+    searchDepth: currentMetadata?.searchDepth ?? (d.searchDepth === 1 ? 1 : 2),
+    trainedAt: currentMetadata?.trainedAt ?? (typeof d.trainedAt === 'string' ? d.trainedAt : ''),
   };
 }
 
 /** Dellacherie-style priors. Used until training produces something better. */
 export const HANDCRAFTED_WEIGHTS: Weights = fromVector(
-  normalize([-0.3, -0.6, -0.2, -0.1, 0.25, -0.35, -0.3, -0.4, -0.2]),
+  normalize([-0.3, -0.6, -0.2, -0.1, 0.25, -0.35, -0.3, -0.4, -0.2, 0]),
 );
 
 const trained = parseWeightsFile(trainedWeightsJson);

@@ -1,6 +1,6 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import type { Worker } from 'node:worker_threads';
-import { WorkerPool, type SimTask } from './pool';
+import { FAILED_RESULT, WorkerPool, type SimTask } from './pool';
 import { toVector, HANDCRAFTED_WEIGHTS } from '../src/ai/weights';
 import { TOTAL_ROWS } from '../src/constants';
 
@@ -37,6 +37,7 @@ describe('WorkerPool', () => {
     expect(viaWorker.score).toBe(direct.score);
     expect(viaWorker.pieces).toBe(direct.pieces);
     expect(viaWorker.meanHeight).toBe(direct.meanHeight);
+    expect(viaWorker.clearCounts).toEqual(direct.clearCounts);
   }, 60000);
 
   it('records a failed task as zero score instead of hanging or throwing', async () => {
@@ -47,11 +48,28 @@ describe('WorkerPool', () => {
     expect(results[1].failed).toBe(true);
     expect(results[1].score).toBe(0);
     expect(results[1].lines).toBe(0);
+    expect(results[1].clearCounts).toEqual({
+      singles: 0, doubles: 0, triples: 0, tetrises: 0,
+    });
     // Score is the primary target; height remains a diagnostic. The worst legal
     // height is the honest stand-in when no diagnostic result exists.
     expect(results[1].meanHeight).toBe(TOTAL_ROWS);
     expect(results[0].failed).toBe(false);
     expect(results[2].failed).toBe(false);
+  }, 60000);
+
+  it('defines zero clear counts for a failed result', () => {
+    expect(FAILED_RESULT.clearCounts).toEqual({
+      singles: 0, doubles: 0, triples: 0, tetrises: 0,
+    });
+  });
+
+  it('gives each failed result its own clear-count object', async () => {
+    const results = await pool.run([task(0, 1, [1]), task(1, 2, [1])]);
+
+    expect(results[0].failed).toBe(true);
+    expect(results[1].failed).toBe(true);
+    expect(results[0].clearCounts).not.toBe(results[1].clearCounts);
   }, 60000);
 
   it('handles more tasks than workers without dropping any', async () => {

@@ -5,8 +5,29 @@ import {
 } from './cem';
 import { mulberry32 } from '../src/ai/rng';
 import { FEATURE_COUNT } from '../src/ai/features';
+import type { LineClearCounts } from '../src/ai/lineClears';
 
 const l2 = (v: number[]) => Math.sqrt(v.reduce((s, x) => s + x * x, 0));
+
+const result = (overrides: Partial<{
+  score: number;
+  lines: number;
+  pieces: number;
+  meanHeight: number;
+  clearCounts: LineClearCounts;
+}> = {}) => {
+  const lines = overrides.lines ?? 0;
+  return {
+    score: 0,
+    lines,
+    pieces: 0,
+    meanHeight: 0,
+    clearCounts: overrides.clearCounts ?? {
+      singles: lines, doubles: 0, triples: 0, tetrises: 0,
+    },
+    ...overrides,
+  };
+};
 
 describe('initCem', () => {
   it('starts at the origin with unit sigma and no prior', () => {
@@ -154,10 +175,10 @@ describe('nextMaxPieces', () => {
 describe('aggregateFitness', () => {
   // results[i * gamesPerCandidate + j] belongs to candidate i, game j.
   const results = [
-    { score: 900, lines: 10, pieces: 100, meanHeight: 4 },
-    { score: 1500, lines: 20, pieces: 200, meanHeight: 6 },
-    { score: 600, lines: 1, pieces: 20, meanHeight: 8 },
-    { score: 900, lines: 3, pieces: 30, meanHeight: 10 },
+    result({ score: 900, lines: 10, pieces: 100, meanHeight: 4 }),
+    result({ score: 1500, lines: 20, pieces: 200, meanHeight: 6 }),
+    result({ score: 600, lines: 1, pieces: 20, meanHeight: 8 }),
+    result({ score: 900, lines: 3, pieces: 30, meanHeight: 10 }),
   ];
 
   it('aggregates mean score and diagnostics candidate by candidate', () => {
@@ -174,16 +195,16 @@ describe('aggregateFitness', () => {
   });
 
   it('keeps height diagnostic instead of subtracting it from fitness', () => {
-    const tidy = { score: 900, lines: 10, pieces: 300, meanHeight: 2 };
-    const messy = { score: 900, lines: 10, pieces: 300, meanHeight: 18 };
+    const tidy = result({ score: 900, lines: 10, pieces: 300, meanHeight: 2 });
+    const messy = result({ score: 900, lines: 10, pieces: 300, meanHeight: 18 });
     const stats = aggregateFitness([tidy, messy], 2, 1, 300);
     expect(stats.fitness).toEqual([3, 3]);
     expect(stats.meanHeight).toEqual([2, 18]);
   });
 
   it('does not reward an early death by dividing by actual survived pieces', () => {
-    const quitter = { score: 600, lines: 1, pieces: 20, meanHeight: 3 };
-    const survivor = { score: 1200, lines: 100, pieces: 300, meanHeight: 9 };
+    const quitter = result({ score: 600, lines: 1, pieces: 20, meanHeight: 3 });
+    const survivor = result({ score: 1200, lines: 100, pieces: 300, meanHeight: 9 });
     const { fitness } = aggregateFitness([quitter, survivor], 2, 1, 300);
 
     expect(quitter.score / quitter.pieces).toBeGreaterThan(survivor.score / survivor.pieces);
@@ -194,8 +215,8 @@ describe('aggregateFitness', () => {
   it('would notice a transposed flattening', () => {
     const rowMajor = [
       ...results,
-      { score: 0, lines: 0, pieces: 5, meanHeight: 2 },
-      { score: 0, lines: 0, pieces: 7, meanHeight: 4 },
+      result({ score: 0, lines: 0, pieces: 5, meanHeight: 2 }),
+      result({ score: 0, lines: 0, pieces: 7, meanHeight: 4 }),
     ];
     // If the loop read results[j * population + i] instead, candidate 0 would
     // average games 0 and 3 (10 and 3) giving 6.5 rather than 15. Pin the
@@ -213,8 +234,8 @@ describe('aggregateFitness', () => {
   it('handles a single game per candidate', () => {
     const { meanScore, meanLines } = aggregateFitness(
       [
-        { score: 400, lines: 4, pieces: 40, meanHeight: 3 },
-        { score: 800, lines: 8, pieces: 80, meanHeight: 3 },
+        result({ score: 400, lines: 4, pieces: 40, meanHeight: 3 }),
+        result({ score: 800, lines: 8, pieces: 80, meanHeight: 3 }),
       ], 2, 1, 300,
     );
     expect(meanScore).toEqual([400, 800]);
@@ -223,6 +244,35 @@ describe('aggregateFitness', () => {
 
   it('rejects a non-positive scheduled piece cap', () => {
     expect(() => aggregateFitness(results, 2, 2, 0)).toThrow(/maxPieces/);
+  });
+
+  it('aggregates clear counts and tetris share without changing fitness', () => {
+    const stats = aggregateFitness([
+      result({
+        score: 900, lines: 4, pieces: 100,
+        clearCounts: { singles: 0, doubles: 0, triples: 0, tetrises: 1 },
+      }),
+      result({
+        score: 1100, lines: 4, pieces: 100,
+        clearCounts: { singles: 4, doubles: 0, triples: 0, tetrises: 0 },
+      }),
+    ], 1, 2, 100);
+
+    expect(stats.meanScore).toEqual([1000]);
+    expect(stats.fitness).toEqual([10]);
+    expect(stats.meanClearCounts).toEqual([
+      { singles: 2, doubles: 0, triples: 0, tetrises: 0.5 },
+    ]);
+    expect(stats.tetrisLineShares).toEqual([0.5]);
+  });
+
+  it('rejects a worker result whose line total disagrees with its histogram', () => {
+    expect(() => aggregateFitness([
+      result({
+        lines: 4,
+        clearCounts: { singles: 1, doubles: 0, triples: 0, tetrises: 0 },
+      }),
+    ], 1, 1, 100)).toThrow(/clearCounts.*lines/);
   });
 });
 

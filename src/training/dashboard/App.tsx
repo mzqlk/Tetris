@@ -16,7 +16,7 @@ export default function App() {
     return (
       <div className={styles.page}>
         <h1 className={styles.title}>Tetris AI — Training</h1>
-        <p className={styles.subtitle}>public/ai/score-rate-v1/training-log.jsonl</p>
+        <p className={styles.subtitle}>public/ai/score-rate-v2/training-log.jsonl</p>
         <div className={styles.empty}>No training data yet — run <code>npm run train</code> and the charts will appear automatically</div>
       </div>
     );
@@ -31,6 +31,8 @@ export default function App() {
     ['Best score rate', bestEver.toFixed(2)],
     ['Median score rate', latest.medianScoreRate.toFixed(2)],
     ['Elite score', Math.round(latest.eliteScore).toLocaleString()],
+    ['Best Tetris lines', `${(100 * latest.bestTetrisLineShare).toFixed(1)}%`],
+    ['Elite Tetris lines', `${(100 * latest.eliteTetrisLineShare).toFixed(1)}%`],
     ['Median lines', Math.round(latest.medianLines).toLocaleString()],
     ['Median height', latest.medianHeight.toFixed(1)],
     ['Elite height', latest.eliteHeight.toFixed(1)],
@@ -41,7 +43,7 @@ export default function App() {
   return (
     <div className={styles.page}>
       <h1 className={styles.title}>Tetris AI — Training</h1>
-      <p className={styles.subtitle}>{entries.length} generations · live from public/ai/score-rate-v1/training-log.jsonl</p>
+      <p className={styles.subtitle}>{entries.length} generations · live from public/ai/score-rate-v2/training-log.jsonl</p>
 
       <div className={styles.metrics}>
         {metrics.map(([label, value]) => (

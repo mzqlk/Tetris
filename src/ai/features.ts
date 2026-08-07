@@ -1,10 +1,13 @@
 import type { Board, Position } from '../types';
 import { BOARD_WIDTH, TOTAL_ROWS } from '../constants';
+import { lineClearValue } from './lineClears';
 
-export const FEATURE_NAMES = [
+export const LEGACY_FEATURE_NAMES = [
   'aggregateHeight', 'holes', 'bumpiness', 'maxHeight', 'linesCleared',
   'landingHeight', 'rowTransitions', 'colTransitions', 'wellDepth',
 ] as const;
+
+export const FEATURE_NAMES = [...LEGACY_FEATURE_NAMES, 'lineClearValue'] as const;
 
 export type FeatureName = (typeof FEATURE_NAMES)[number];
 export type FeatureVector = number[];
@@ -122,5 +125,6 @@ export function extractFeatures(
     rowTransitions(boardAfter),
     colTransitions(boardAfter),
     wellDepth(boardAfter, heights),
+    lineClearValue(linesCleared),
   ];
 }

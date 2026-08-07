@@ -1,5 +1,13 @@
 import { FEATURE_COUNT } from '../src/ai/features';
 import { normalize } from '../src/ai/weights';
+import {
+  addLineClearCounts,
+  divideLineClearCounts,
+  emptyLineClearCounts,
+  tetrisLineShare,
+  totalLinesFromCounts,
+  type LineClearCounts,
+} from '../src/ai/lineClears';
 
 export interface CemState {
   mu: number[];
@@ -92,6 +100,8 @@ export interface CandidateStats {
   meanLines: number[];
   meanPieces: number[];
   meanHeight: number[];
+  meanClearCounts: LineClearCounts[];
+  tetrisLineShares: number[];
 }
 
 /**
@@ -112,7 +122,13 @@ export interface CandidateStats {
  * merely for scoring quickly before it dies.
  */
 export function aggregateFitness(
-  results: readonly { score: number; lines: number; pieces: number; meanHeight: number }[],
+  results: readonly {
+    score: number;
+    lines: number;
+    pieces: number;
+    meanHeight: number;
+    clearCounts: LineClearCounts;
+  }[],
   population: number,
   gamesPerCandidate: number,
   maxPieces: number,
@@ -124,24 +140,33 @@ export function aggregateFitness(
   if (results.length !== expected) {
     throw new Error(`expected ${expected} results, got ${results.length}`);
   }
+  for (const result of results) {
+    if (totalLinesFromCounts(result.clearCounts) !== result.lines) {
+      throw new Error('clearCounts must reconstruct lines for every worker result');
+    }
+  }
 
   const fitness: number[] = [];
   const meanScore: number[] = [];
   const meanLines: number[] = [];
   const meanPieces: number[] = [];
   const meanHeight: number[] = [];
+  const meanClearCounts: LineClearCounts[] = [];
+  const tetrisLineShares: number[] = [];
 
   for (let i = 0; i < population; i++) {
     let score = 0;
     let lines = 0;
     let pieces = 0;
     let height = 0;
+    let clearCounts = emptyLineClearCounts();
     for (let j = 0; j < gamesPerCandidate; j++) {
       const r = results[i * gamesPerCandidate + j];
       score += r.score;
       lines += r.lines;
       pieces += r.pieces;
       height += r.meanHeight;
+      clearCounts = addLineClearCounts(clearCounts, r.clearCounts);
     }
     // Height is averaged over GAMES, not over pieces: each game already reports
     // its own per-piece mean. Pooling by pieces instead would silently weight
@@ -152,10 +177,21 @@ export function aggregateFitness(
     meanLines.push(lines / gamesPerCandidate);
     meanPieces.push(pieces / gamesPerCandidate);
     meanHeight.push(height / gamesPerCandidate);
+    const candidateMeanClearCounts = divideLineClearCounts(clearCounts, gamesPerCandidate);
+    meanClearCounts.push(candidateMeanClearCounts);
+    tetrisLineShares.push(tetrisLineShare(candidateMeanClearCounts));
     fitness.push(candidateMeanScore / maxPieces);
   }
 
-  return { fitness, meanScore, meanLines, meanPieces, meanHeight };
+  return {
+    fitness,
+    meanScore,
+    meanLines,
+    meanPieces,
+    meanHeight,
+    meanClearCounts,
+    tetrisLineShares,
+  };
 }
 
 export function median(values: number[]): number {

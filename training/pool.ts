@@ -1,6 +1,7 @@
 import { Worker } from 'node:worker_threads';
 
 import { TOTAL_ROWS } from '../src/constants';
+import { emptyLineClearCounts, type LineClearCounts } from '../src/ai/lineClears';
 
 /**
  * A game that never ran earns zero score, so fixed-schedule score rate ranks it
@@ -8,7 +9,7 @@ import { TOTAL_ROWS } from '../src/constants';
  * a failed result; height does not enter primary fitness.
  */
 export const FAILED_RESULT = {
-  lines: 0, score: 0, pieces: 0, meanHeight: TOTAL_ROWS, reason: 'error',
+  lines: 0, clearCounts: emptyLineClearCounts(), score: 0, pieces: 0, meanHeight: TOTAL_ROWS, reason: 'error',
 } as const;
 
 export interface SimTask {
@@ -22,6 +23,7 @@ export interface SimTask {
 export interface SimTaskResult {
   taskId: number;
   lines: number;
+  clearCounts: LineClearCounts;
   score: number;
   pieces: number;
   meanHeight: number;
@@ -115,6 +117,7 @@ export class WorkerPool {
         complete(item, {
           taskId: item.task.taskId,
           ...FAILED_RESULT,
+          clearCounts: emptyLineClearCounts(),
           failed: true, error: reason,
         });
       };

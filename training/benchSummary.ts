@@ -1,9 +1,18 @@
+import {
+  addLineClearCounts,
+  emptyLineClearCounts,
+  tetrisLineShare,
+  totalLinesFromCounts,
+  type LineClearCounts,
+} from '../src/ai/lineClears';
+
 interface BenchResult {
   score: number;
   lines: number;
   pieces: number;
   meanHeight: number;
   reason: string;
+  clearCounts: LineClearCounts;
 }
 
 export interface Distribution {
@@ -20,6 +29,9 @@ export interface BenchSummary {
   height: Distribution;
   totalPieces: number;
   cappedGames: number;
+  clearCounts: LineClearCounts;
+  tetrisLineShare: number;
+  tetrisesPer100ScheduledPieces: number;
 }
 
 function distribution(values: number[]): Distribution {
@@ -43,6 +55,15 @@ export function summarizeBench(
   if (!Number.isFinite(maxPieces) || maxPieces <= 0) {
     throw new Error(`maxPieces must be positive, got ${maxPieces}`);
   }
+  for (const result of results) {
+    if (totalLinesFromCounts(result.clearCounts) !== result.lines) {
+      throw new Error('clearCounts must reconstruct lines for every benchmark result');
+    }
+  }
+  const clearCounts = results.reduce(
+    (sum, result) => addLineClearCounts(sum, result.clearCounts),
+    emptyLineClearCounts(),
+  );
   return {
     score: distribution(results.map((result) => result.score)),
     scorePerScheduledPiece: distribution(
@@ -52,5 +73,12 @@ export function summarizeBench(
     height: distribution(results.map((result) => result.meanHeight)),
     totalPieces: results.reduce((sum, result) => sum + result.pieces, 0),
     cappedGames: results.filter((result) => result.reason === 'pieceCap').length,
+    clearCounts,
+    tetrisLineShare: tetrisLineShare(clearCounts),
+    tetrisesPer100ScheduledPieces:
+      (100 * clearCounts.tetrises) / (results.length * maxPieces),
   };
 }
+
+export const formatLineClearCounts = (counts: LineClearCounts): string =>
+  `1/2/3/4 clears ${counts.singles}/${counts.doubles}/${counts.triples}/${counts.tetrises}`;

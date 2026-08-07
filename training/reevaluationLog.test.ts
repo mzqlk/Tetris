@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { FEATURE_COUNT } from '../src/ai/features';
 import { evaluateScoreReevaluation } from './publication';
 import { buildReevaluationLogEntry } from './reevaluationLog';
 
@@ -14,12 +15,14 @@ const evaluated = (
   scoreRate: meanScore / 5000,
   meanLines: 1998,
   meanHeight,
+  meanClearCounts: { singles: 2, doubles: 0, triples: 0, tetrises: 499 },
+  tetrisLineShare: 1996 / 1998,
 });
 
 describe('buildReevaluationLogEntry', () => {
   it('records an auditable candidate-minus-current comparison', () => {
-    const currentBest = evaluated(20, Array(9).fill(0.1), 3_000_000, 3.1);
-    const candidate = evaluated(30, Array(9).fill(0.2), 3_006_000, 3.2);
+    const currentBest = evaluated(20, Array(FEATURE_COUNT).fill(0.1), 3_000_000, 3.1);
+    const candidate = evaluated(30, Array(FEATURE_COUNT).fill(0.2), 3_006_000, 3.2);
     const decision = evaluateScoreReevaluation(candidate, currentBest);
 
     const event = buildReevaluationLogEntry({
@@ -37,7 +40,7 @@ describe('buildReevaluationLogEntry', () => {
     });
 
     expect(event).toMatchObject({
-      objective: 'score-rate-v1',
+      objective: 'score-rate-v2',
       kind: 'reevaluation',
       gen: 30,
       schedule: { seedStrategy: 'fixed-reevaluation-v1' },
@@ -54,8 +57,8 @@ describe('buildReevaluationLogEntry', () => {
   });
 
   it('uses zero relative delta when both scores are zero', () => {
-    const currentBest = evaluated(20, Array(9).fill(0.1), 0, 4);
-    const candidate = evaluated(30, Array(9).fill(0.2), 0, 3);
+    const currentBest = evaluated(20, Array(FEATURE_COUNT).fill(0.1), 0, 4);
+    const candidate = evaluated(30, Array(FEATURE_COUNT).fill(0.2), 0, 3);
     const event = buildReevaluationLogEntry({
       gen: 30,
       ts: 123,
@@ -69,9 +72,9 @@ describe('buildReevaluationLogEntry', () => {
     expect(Number.isFinite(event.comparison.relativeScoreDelta)).toBe(true);
   });
 
-  it('copies weight vectors instead of retaining mutable references', () => {
-    const currentWeights = Array(9).fill(0.1);
-    const candidateWeights = Array(9).fill(0.2);
+  it('copies weight vectors and line-clear counts instead of retaining mutable references', () => {
+    const currentWeights = Array(FEATURE_COUNT).fill(0.1);
+    const candidateWeights = Array(FEATURE_COUNT).fill(0.2);
     const currentBest = evaluated(20, currentWeights, 1000, 4);
     const candidate = evaluated(30, candidateWeights, 1001, 3);
     const event = buildReevaluationLogEntry({
@@ -85,7 +88,11 @@ describe('buildReevaluationLogEntry', () => {
 
     currentWeights[0] = 99;
     candidateWeights[0] = 99;
+    currentBest.meanClearCounts.singles = 99;
+    candidate.meanClearCounts.tetrises = 99;
     expect(event.currentBest.weights[0]).toBe(0.1);
     expect(event.candidate.weights[0]).toBe(0.2);
+    expect(event.currentBest.meanClearCounts.singles).toBe(2);
+    expect(event.candidate.meanClearCounts.tetrises).toBe(499);
   });
 });

@@ -6,11 +6,26 @@ import {
   type ReevaluationSummary,
 } from './publication';
 
-const summary = (meanScore: number, meanHeight: number): ReevaluationSummary => ({
+const defaultMeanClearCounts = {
+  singles: 2,
+  doubles: 0,
+  triples: 0,
+  tetrises: 499,
+};
+
+const summary = (
+  meanScore: number,
+  meanHeight: number,
+  diagnostics: Pick<ReevaluationSummary, 'meanClearCounts' | 'tetrisLineShare'> = {
+    meanClearCounts: { ...defaultMeanClearCounts },
+    tetrisLineShare: 1996 / 1998,
+  },
+): ReevaluationSummary => ({
   meanScore,
   scoreRate: meanScore / 5000,
   meanLines: 1998,
   meanHeight,
+  ...diagnostics,
 });
 
 describe('shouldPublishScoreReevaluation', () => {
@@ -66,6 +81,18 @@ describe('shouldPublishScoreReevaluation', () => {
 });
 
 describe('evaluateScoreReevaluation', () => {
+  it('does not use line-clear diagnostics in publication decisions', () => {
+    const currentBest = summary(1000, 4);
+    const candidate = summary(1000.5, 3);
+    const differentDiagnostics = summary(1000.5, 3, {
+      meanClearCounts: { singles: 1998, doubles: 0, triples: 0, tetrises: 0 },
+      tetrisLineShare: 0,
+    });
+
+    expect(evaluateScoreReevaluation(differentDiagnostics, currentBest))
+      .toEqual(evaluateScoreReevaluation(candidate, currentBest));
+  });
+
   it('explains a material score improvement', () => {
     expect(evaluateScoreReevaluation(
       summary(1002, 8),

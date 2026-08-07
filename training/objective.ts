@@ -1,4 +1,7 @@
-export { SCORE_RATE_OBJECTIVE } from '../src/ai/trainingObjective';
+export {
+  LEGACY_SCORE_RATE_OBJECTIVE,
+  SCORE_RATE_OBJECTIVE,
+} from '../src/ai/trainingObjective';
 
 /** Height may break a publication tie only inside this relative score band. */
 export const SCORE_TIE_RELATIVE_TOLERANCE = 0.001;

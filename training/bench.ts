@@ -2,7 +2,11 @@ import { readFileSync } from 'node:fs';
 import { simulateGame } from '../src/ai/simulate';
 import { hashSeed } from '../src/ai/rng';
 import { parseWeightsFile, toVector, HANDCRAFTED_WEIGHTS } from '../src/ai/weights';
-import { summarizeBench, type Distribution } from './benchSummary';
+import {
+  formatLineClearCounts,
+  summarizeBench,
+  type Distribution,
+} from './benchSummary';
 
 interface Args {
   weights: string | null;
@@ -83,6 +87,7 @@ for (let i = 0; i < args.games; i++) {
     `  score ${String(result.score).padStart(10)}` +
     `  score/piece ${scoreRate.toFixed(3).padStart(9)}` +
     `  lines ${String(result.lines).padStart(6)}` +
+    `  ${formatLineClearCounts(result.clearCounts)}` +
     `  height ${result.meanHeight.toFixed(2).padStart(6)}` +
     `  pieces ${String(result.pieces).padStart(6)}` +
     `  ${survived}  ${result.reason}`,
@@ -106,6 +111,10 @@ ${row('score per scheduled piece', summary.scorePerScheduledPiece, 3)}
 ${row('lines', summary.lines, 1)}
 
 ${row('mean stack height (diagnostic)', summary.height, 2)}
+
+${formatLineClearCounts(summary.clearCounts)}
+tetris line share  ${(100 * summary.tetrisLineShare).toFixed(2)}%
+tetrises/100 scheduled pieces  ${summary.tetrisesPer100ScheduledPieces.toFixed(3)}
 
 survival  ${summary.cappedGames}/${args.games} games hit the piece cap
 throughput  ${Math.round(summary.totalPieces / (elapsedMs / 1000))} pieces/sec (single core)

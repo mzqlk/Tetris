@@ -3,11 +3,11 @@ import {
   toVector, fromVector, normalize, parseWeightsFile,
   HANDCRAFTED_WEIGHTS, DEFAULT_WEIGHTS, type Weights,
 } from './weights';
-import { FEATURE_NAMES, FEATURE_COUNT } from './features';
+import { LEGACY_FEATURE_NAMES, FEATURE_NAMES, FEATURE_COUNT } from './features';
 
 const sample: Weights = {
   aggregateHeight: -1, holes: -2, bumpiness: -3, maxHeight: -4, linesCleared: 5,
-  landingHeight: -6, rowTransitions: -7, colTransitions: -8, wellDepth: -9,
+  landingHeight: -6, rowTransitions: -7, colTransitions: -8, wellDepth: -9, lineClearValue: -10,
 };
 
 const l2 = (v: number[]) => Math.sqrt(v.reduce((s, x) => s + x * x, 0));
@@ -18,7 +18,7 @@ describe('toVector / fromVector', () => {
   });
 
   it('orders the vector by FEATURE_NAMES', () => {
-    expect(toVector(sample)).toEqual([-1, -2, -3, -4, 5, -6, -7, -8, -9]);
+    expect(toVector(sample)).toEqual([-1, -2, -3, -4, 5, -6, -7, -8, -9, -10]);
   });
 
   it('rejects a vector of the wrong length', () => {
@@ -28,12 +28,12 @@ describe('toVector / fromVector', () => {
 
 describe('normalize', () => {
   it('produces a unit vector', () => {
-    expect(l2(normalize([3, 4, 0, 0, 0, 0, 0, 0, 0]))).toBeCloseTo(1, 12);
+    expect(l2(normalize([3, 4, ...Array(FEATURE_COUNT - 2).fill(0)]))).toBeCloseTo(1, 12);
     expect(l2(normalize(toVector(sample)))).toBeCloseTo(1, 12);
   });
 
   it('preserves direction', () => {
-    const n = normalize([2, 0, 0, 0, 0, 0, 0, 0, 0]);
+    const n = normalize([2, ...Array(FEATURE_COUNT - 1).fill(0)]);
     expect(n[0]).toBeCloseTo(1, 12);
   });
 
@@ -44,18 +44,44 @@ describe('normalize', () => {
   });
 
   it('does not mutate its input', () => {
-    const input = [3, 4, 0, 0, 0, 0, 0, 0, 0];
+    const input = [3, 4, ...Array(FEATURE_COUNT - 2).fill(0)];
     normalize(input);
-    expect(input).toEqual([3, 4, 0, 0, 0, 0, 0, 0, 0]);
+    expect(input).toEqual([3, 4, ...Array(FEATURE_COUNT - 2).fill(0)]);
   });
 });
 
 describe('parseWeightsFile', () => {
   const valid = {
     version: 1,
-    weights: Object.fromEntries(FEATURE_NAMES.map((n, i) => [n, i - 4])),
+    weights: Object.fromEntries(LEGACY_FEATURE_NAMES.map((n, i) => [n, i - 4])),
     meanLines: 100, evalGames: 30, gen: 12, searchDepth: 2,
     trainedAt: '2026-07-27T10:00:00.000Z',
+  };
+
+  const historical = {
+    weights: { ...valid.weights },
+    meanLines: valid.meanLines,
+    evalGames: valid.evalGames,
+    gen: valid.gen,
+    searchDepth: valid.searchDepth,
+    trainedAt: valid.trainedAt,
+  };
+
+  const meanClearCounts = { singles: 2, doubles: 1, triples: 0, tetrises: 3 };
+  const v2File = {
+    version: 3,
+    objective: 'score-rate-v2',
+    weights: Object.fromEntries(FEATURE_NAMES.map((name, index) => [name, index])),
+    meanScore: 123456,
+    evalMaxPieces: 5000,
+    meanLines: 16,
+    meanHeight: 4,
+    meanClearCounts,
+    tetrisLineShare: 12 / 16,
+    evalGames: 30,
+    gen: 1,
+    searchDepth: 2,
+    trainedAt: '2026-08-06T00:00:00.000Z',
   };
 
   it('accepts a complete file', () => {
@@ -63,6 +89,141 @@ describe('parseWeightsFile', () => {
     expect(parsed).not.toBeNull();
     expect(parsed!.weights.holes).toBe(valid.weights.holes);
     expect(parsed!.gen).toBe(12);
+  });
+
+  it('accepts a historical nine-key file with no version or objective declaration', () => {
+    expect(parseWeightsFile(historical)).not.toBeNull();
+  });
+
+  it('adapts an exact score-rate-v1 file with a zero nonlinear coefficient', () => {
+    const legacyWeights = Object.fromEntries(
+      LEGACY_FEATURE_NAMES.map((name, index) => [name, index - 4]),
+    );
+    const parsed = parseWeightsFile({
+      version: 2,
+      objective: 'score-rate-v1',
+      weights: legacyWeights,
+      meanScore: 123,
+      evalMaxPieces: 5000,
+    });
+
+    expect(parsed).not.toBeNull();
+    expect(parsed!.weights.lineClearValue).toBe(0);
+    expect(Object.keys(parsed!.weights)).toEqual([...FEATURE_NAMES]);
+    expect(parsed!.meanClearCounts).toBeNull();
+    expect(parsed!.tetrisLineShare).toBeNull();
+  });
+
+  it('accepts a complete score-rate-v2 file with consistent diagnostics', () => {
+    expect(parseWeightsFile(v2File)).toMatchObject({
+      version: 3,
+      objective: 'score-rate-v2',
+      meanScore: 123456,
+      evalMaxPieces: 5000,
+      meanLines: 16,
+      meanHeight: 4,
+      meanClearCounts,
+      tetrisLineShare: 0.75,
+      evalGames: 30,
+      gen: 1,
+      searchDepth: 2,
+      trainedAt: '2026-08-06T00:00:00.000Z',
+    });
+  });
+
+  it.each([
+    'meanScore',
+    'evalMaxPieces',
+    'meanLines',
+    'meanHeight',
+    'meanClearCounts',
+    'tetrisLineShare',
+    'evalGames',
+    'gen',
+    'searchDepth',
+    'trainedAt',
+  ])('rejects a score-rate-v2 file missing %s', (field) => {
+    const missing = { ...v2File } as Record<string, unknown>;
+    Reflect.deleteProperty(missing, field);
+    expect(parseWeightsFile(missing)).toBeNull();
+  });
+
+  it.each([
+    ['meanScore', -1],
+    ['evalMaxPieces', 0],
+    ['meanLines', -1],
+    ['meanHeight', -1],
+    ['meanClearCounts', { ...meanClearCounts, singles: -1 }],
+    ['tetrisLineShare', -0.1],
+    ['evalGames', 0],
+    ['gen', -2],
+    ['searchDepth', 3],
+    ['trainedAt', 'not-an-iso-timestamp'],
+  ])('rejects malformed score-rate-v2 %s metadata', (field, value) => {
+    expect(parseWeightsFile({ ...v2File, [field]: value })).toBeNull();
+  });
+
+  it('accepts the score-rate-v2 baseline generation sentinel', () => {
+    expect(parseWeightsFile({ ...v2File, gen: -1 })).toMatchObject({ gen: -1 });
+  });
+
+  it('accepts derived diagnostics inside the relative consistency tolerance', () => {
+    expect(parseWeightsFile({
+      ...v2File,
+      meanLines: 16 + 8e-12,
+      tetrisLineShare: 0.75 + 5e-13,
+    })).not.toBeNull();
+  });
+
+  it('accepts only an exact ten-key score-rate-v2 weight vector', () => {
+    const missing = { ...v2File.weights };
+    Reflect.deleteProperty(missing, 'lineClearValue');
+    expect(parseWeightsFile({ ...v2File, weights: missing })).toBeNull();
+    expect(parseWeightsFile({
+      ...v2File,
+      weights: { ...v2File.weights, extra: 1 },
+    })).toBeNull();
+  });
+
+  it('rejects inconsistent score-rate-v2 diagnostics', () => {
+    expect(parseWeightsFile({ ...v2File, meanLines: 15 })).toBeNull();
+    expect(parseWeightsFile({ ...v2File, tetrisLineShare: 0 })).toBeNull();
+  });
+
+  it.each([
+    ['a missing key', { singles: 2, doubles: 1, tetrises: 3 }],
+    ['an extra key', { ...meanClearCounts, extra: 0 }],
+    ['a negative value', { ...meanClearCounts, triples: -1 }],
+    ['a non-finite value', { ...meanClearCounts, doubles: Number.NaN }],
+  ])('rejects score-rate-v2 clear counts with %s', (_label, counts) => {
+    expect(parseWeightsFile({ ...v2File, meanClearCounts: counts })).toBeNull();
+  });
+
+  it('returns null when finite clear counts overflow their derived totals', () => {
+    const overflowingCounts = {
+      singles: Number.MAX_VALUE,
+      doubles: Number.MAX_VALUE,
+      triples: Number.MAX_VALUE,
+      tetrises: Number.MAX_VALUE,
+    };
+    expect(() => parseWeightsFile({
+      ...v2File,
+      meanClearCounts: overflowingCounts,
+    })).not.toThrow();
+    expect(parseWeightsFile({
+      ...v2File,
+      meanClearCounts: overflowingCounts,
+    })).toBeNull();
+  });
+
+  it('does not downgrade a declared version 2 file with missing objective', () => {
+    const weights = Object.fromEntries(LEGACY_FEATURE_NAMES.map((name) => [name, 0]));
+    expect(parseWeightsFile({ version: 2, weights })).toBeNull();
+  });
+
+  it.each([Number.NaN, '2'])('rejects a malformed declared version %s', (version) => {
+    const weights = Object.fromEntries(LEGACY_FEATURE_NAMES.map((name) => [name, 0]));
+    expect(parseWeightsFile({ version, weights })).toBeNull();
   });
 
   it('carries the mean stack height the model was selected on', () => {
@@ -96,17 +257,16 @@ describe('parseWeightsFile', () => {
     expect(parsed!.objective).toBeNull();
     expect(parsed!.meanScore).toBeNull();
     expect(parsed!.evalMaxPieces).toBeNull();
+    expect(parsed!.meanClearCounts).toBeNull();
+    expect(parsed!.tetrisLineShare).toBeNull();
   });
 
-  it('does not turn malformed score metadata into a false numeric baseline', () => {
-    const parsed = parseWeightsFile({
-      ...valid,
-      objective: 7,
-      meanScore: '123456',
-      evalMaxPieces: Number.NaN,
-    });
-    expect(parsed).toMatchObject({ objective: null, meanScore: null, evalMaxPieces: null });
-  });
+  it.each([7, null, undefined, 'score-rate-v1'])(
+    'rejects a version 1 file with malformed objective declaration %s',
+    (objective) => {
+      expect(parseWeightsFile({ ...valid, objective })).toBeNull();
+    },
+  );
 
   it('rejects a missing feature key', () => {
     const withoutHoles = Object.fromEntries(
