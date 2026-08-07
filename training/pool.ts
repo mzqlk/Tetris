@@ -34,6 +34,17 @@ export interface SimTaskResult {
 
 const WORKER_URL = new URL('./worker.ts', import.meta.url);
 
+export type WorkerFactory = (index: number) => Worker;
+
+// `execArgv` registers tsx's ESM loader inside the worker thread itself. A .ts
+// worker otherwise inherits plain Node under Vitest and cannot resolve the
+// extensionless shared-AI imports. Workers remain referenced; destroy() owns
+// their lifetime and callers must await it.
+const defaultWorkerFactory: WorkerFactory = (index) => new Worker(WORKER_URL, {
+  name: `sim-${index}`,
+  execArgv: ['--import', 'tsx'],
+});
+
 interface QueueItem {
   task: SimTask;
   index: number;
@@ -49,35 +60,36 @@ interface QueueItem {
  * of a generation.
  */
 export class WorkerPool {
-  private workers: Worker[] = [];
+  private workers: Worker[];
   // Set only by destroy(). An 'exit' event fired by terminate() during teardown
   // is expected shutdown, not a crash — without this flag the exit listener
   // below would spawn a fresh replacement worker moments after `this.workers`
   // has been cleared, leaking a thread destroy() never gets to terminate.
   private destroyed = false;
 
-  constructor(size: number) {
-    for (let i = 0; i < size; i++) this.workers.push(this.spawn(i));
+  private constructor(
+    workers: Worker[],
+    private readonly workerFactory: WorkerFactory,
+  ) {
+    this.workers = workers;
+  }
+
+  static async create(
+    size: number,
+    workerFactory: WorkerFactory = defaultWorkerFactory,
+  ): Promise<WorkerPool> {
+    const workers: Worker[] = [];
+    try {
+      for (let i = 0; i < size; i++) workers.push(workerFactory(i));
+    } catch (error) {
+      await Promise.allSettled(workers.map((worker) => worker.terminate()));
+      throw error;
+    }
+    return new WorkerPool(workers, workerFactory);
   }
 
   private spawn(i: number): Worker {
-    // `execArgv` registers tsx's ESM loader inside the worker thread itself, and
-    // it is required rather than optional. Spawning a .ts worker only works when
-    // the PARENT process was started under tsx; `vitest run` starts plain Node,
-    // so a worker spawned from a test inherits no loader, falls back to Node's
-    // native type-stripping, and cannot resolve extensionless relative imports
-    // like '../src/ai/simulate'. Every game then fails with "Cannot find module"
-    // — loudly, via the pool's retry path, but uselessly. This flag makes the
-    // worker self-sufficient no matter how the parent was launched.
-    // No unref() here. It looks like it would let an idle worker stop holding
-    // the process open, but attaching a 'message' listener re-refs the
-    // underlying MessagePort, and attach() always adds one — so unref() is
-    // inert and only misleads. Shutting the pool down is destroy()'s job, and
-    // callers must call it.
-    return new Worker(WORKER_URL, {
-      name: `sim-${i}`,
-      execArgv: ['--import', 'tsx'],
-    });
+    return this.workerFactory(i);
   }
 
   run(tasks: SimTask[]): Promise<SimTaskResult[]> {
@@ -135,15 +147,22 @@ export class WorkerPool {
         // event is a no-op rather than a double replace/requeue.
         let handled = false;
         const handleDeath = (reason: string) => {
-          if (handled) return;
+          if (handled || settled) return;
           handled = true;
 
           const item = inFlight.get(worker);
           inFlight.delete(worker);
 
-          const replacement = this.spawn(slot);
-          this.workers[slot] = replacement;
-          attach(replacement, slot);
+          let replacement: Worker;
+          try {
+            replacement = this.spawn(slot);
+            this.workers[slot] = replacement;
+            attach(replacement, slot);
+          } catch (error) {
+            settled = true;
+            rejectAll(error);
+            return;
+          }
 
           if (item !== undefined) retryOrFail(item, reason);
           feed(replacement);

@@ -34,11 +34,12 @@ import { planReevaluation } from './reevaluation';
 import { buildReevaluationLogEntry } from './reevaluationLog';
 import {
   assertFreshRun,
-  readCompatibleCheckpoint,
+  readCompatibleRunArtifacts,
   resolveRunPaths,
   type ScoreRateBestEver,
   type ScoreRateCheckpoint,
 } from './runArtifacts';
+import { acquireRunLock } from './runLock';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 /** Salt keeping the candidate-sampling stream disjoint from the game seeds. */
@@ -61,6 +62,14 @@ function num(key: string, value: string | undefined): number {
   return n;
 }
 
+function generationTarget(value: string | undefined): number {
+  const result = num('--generations', value);
+  if (!Number.isSafeInteger(result) || result < 0) {
+    throw new Error('--generations expects a safe integer >= 0');
+  }
+  return result;
+}
+
 function parseArgs(argv: string[]): {
   generations: number | null;
   resume: boolean;
@@ -75,7 +84,7 @@ function parseArgs(argv: string[]): {
   };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--resume') out.resume = true;
-    else if (argv[i] === '--generations') out.generations = num(argv[i], argv[++i]);
+    else if (argv[i] === '--generations') out.generations = generationTarget(argv[++i]);
     else if (argv[i] === '--workers') out.workers = num(argv[i], argv[++i]);
     else if (argv[i] === '--output-dir') {
       const value = argv[++i];
@@ -125,18 +134,26 @@ function reevaluationSummary(
 }
 
 const args = parseArgs(process.argv.slice(2));
+if (!args.resume && args.generations !== null && args.generations === 0) {
+  throw new Error('fresh --generations must be greater than 0');
+}
 const paths = resolveRunPaths(ROOT, args.outputDir);
+const runLock = acquireRunLock(ROOT);
 
+try {
 let checkpoint: ScoreRateCheckpoint | null = null;
 if (args.resume) {
   if (!existsSync(paths.checkpoint)) {
     throw new Error(`--resume but no checkpoint at ${paths.checkpoint}`);
   }
-  checkpoint = readCompatibleCheckpoint(paths.checkpoint);
+  checkpoint = readCompatibleRunArtifacts(paths);
 } else {
   assertFreshRun(paths);
 }
 
+if (args.resume && args.generations === 0) {
+  console.log(`validated ${checkpoint!.objective} resume artifacts at gen ${checkpoint!.gen}`);
+} else {
 // `--workers` is the throttle: the pool is the only thing in this script that
 // consumes more than one core, so N workers means N busy cores and the rest of
 // the machine stays responsive. A resume restores every other setting from the
@@ -166,7 +183,8 @@ if (checkpoint !== null) {
   );
 }
 
-const pool = new WorkerPool(cfg.workers);
+const pool = await WorkerPool.create(cfg.workers);
+try {
 console.log(
   `training with ${cfg.workers} workers of ${cpus().length} cores` +
   `${args.workers === null ? '' : ' (--workers)'}` +
@@ -190,7 +208,10 @@ function saveCheckpoint() {
 
 let stopping = false;
 process.on('SIGINT', () => {
-  if (stopping) process.exit(1);
+  if (stopping) {
+    process.exitCode = 1;
+    return;
+  }
   stopping = true;
   console.log('\ncaught SIGINT — writing checkpoint and exiting');
 });
@@ -405,7 +426,6 @@ while (!stopping) {
 }
 
 saveCheckpoint();
-await pool.destroy();
 console.log(
   bestEver === null
     ? `stopped at gen ${state.gen}; no fixed-schedule reevaluation yet`
@@ -413,4 +433,10 @@ console.log(
       `score rate ${bestEver.scoreRate.toFixed(3)}, mean height ` +
       `${bestEver.meanHeight.toFixed(2)} (gen ${bestEver.gen})`,
 );
-process.exit(0);
+} finally {
+  await pool.destroy();
+}
+}
+} finally {
+  runLock.release();
+}

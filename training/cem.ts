@@ -2,6 +2,7 @@ import { FEATURE_COUNT } from '../src/ai/features';
 import { normalize } from '../src/ai/weights';
 import {
   addLineClearCounts,
+  assertLineClearCounts,
   divideLineClearCounts,
   emptyLineClearCounts,
   tetrisLineShare,
@@ -141,6 +142,7 @@ export function aggregateFitness(
     throw new Error(`expected ${expected} results, got ${results.length}`);
   }
   for (const result of results) {
+    assertLineClearCounts(result.clearCounts, true);
     if (totalLinesFromCounts(result.clearCounts) !== result.lines) {
       throw new Error('clearCounts must reconstruct lines for every worker result');
     }

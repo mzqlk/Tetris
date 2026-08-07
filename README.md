@@ -115,19 +115,21 @@ npm run train -- --generations 200 --output-dir public/ai/<new-run-id>
 # 代价很小：实测 31 → 8 个 worker，单代只慢 16%（一代的耗时由少数长对局的尾巴决定）
 npm run train -- --generations 200 --workers 8 --output-dir public/ai/<new-run-id>
 
-# 从默认 score-rate-v1 checkpoint 继续训练（须先完整核验并获得授权）
+# 从默认 score-rate-v2 checkpoint 继续训练（须先完整核验并获得授权）
 npm run train -- --resume
 
 # 只对训练脚本做类型检查（与主应用的 tsconfig 分开）
 npm run typecheck:train
 ```
 
-当前 `score-rate-v1` 训练默认把 checkpoint 和每代统计写入 `public/ai/score-rate-v1/`。固定复评通过发布门时，才会同步更新运行时权重 `public/ai/best-weights.json` 与 bundled 权重 `src/ai/trained-weights.json`。`public/ai/checkpoint.json` 和 `public/ai/training-log.jsonl` 是退役高度目标的 legacy 产物，不得与当前轮次混用。
+当前代码与训练器契约是 **`score-rate-v2`、checkpoint schema 3、10 维特征**，第十维为 `lineClearValue`。标量 fitness 没有改变，仍严格为 `meanScore / scheduled maxPieces`；clear histogram、`tetrisLineShare` 和 `meanHeight` 都只作诊断，其中 `meanHeight` 仅在固定复评落入包含边界的 0.1% 近似平分区间时作为 tie-breaker。
 
-访问 `training.html`（开发模式下即 `npm run dev` 后的 `/training.html`）可以打开训练可视化面板，它会持续轮询 `public/ai/score-rate-v1/training-log.jsonl`，训练运行时图表随日志增长自动刷新，无需手动刷新页面。
+新轮次默认把 checkpoint 和每代统计写入 `public/ai/score-rate-v2/`。当前已经发布的 bundled/runtime 模型仍是 **version 2、`score-rate-v1` gen-20**；其九维权重只在内存中补 `lineClearValue = 0`。`score-rate-v1` checkpoint/log 是 legacy 产物，v2 训练器不得 resume 或向其追加。只有另行授权的 v2 训练通过固定复评发布门时，才可同步更新运行时权重 `public/ai/best-weights.json` 与 bundled 权重 `src/ai/trained-weights.json`。根目录的 `public/ai/checkpoint.json` 和 `public/ai/training-log.jsonl` 是更早退役高度目标的 legacy 产物，同样不得混用。
+
+访问 `training.html`（开发模式下即 `npm run dev` 后的 `/training.html`）可以打开训练可视化面板，它会持续轮询 `/ai/score-rate-v2/training-log.jsonl`，训练运行时图表随日志增长自动刷新，无需手动刷新页面。
 
 > **动手改训练之前，请先读 [`docs/ai-training-handoff.md`](docs/ai-training-handoff.md)。**
-> 它记录了当前进度、几个会浪费数小时的坑，以及最关键的一点：**消行数这个指标会封顶**——称职的候选根本不会死，消行数恒等于 `0.4 × 局长上限`，任何只看消行的基准都区分不出它们。项目曾使用 `平均消行 - heightPenalty × 平均堆叠高度`，但该目标现已退役；当前 `score-rate-v1` 在固定调度下优化 `meanScore / maxPieces`，高度仅作诊断和 0.1% 近似平分时的发布 tie-breaker。
+> 它记录了当前进度、几个会浪费数小时的坑，以及最关键的一点：**消行数这个指标会封顶**——称职的候选根本不会死，消行数恒等于 `0.4 × 局长上限`，任何只看消行的基准都区分不出它们。项目曾使用 `平均消行 - heightPenalty × 平均堆叠高度`，但该目标现已退役；当前 `score-rate-v2` 在固定调度下优化 `meanScore / maxPieces`，高度仅作诊断和 0.1% 近似平分时的发布 tie-breaker。
 
 当前发布的 gen 20 权重先在固定 `30 × 5000` 复评中取得 `meanScore = 3,104,830`、`scoreRate = 620.966`，随后又以新 seed `20260803` 对旧已发布权重进行了独立 paired benchmark：旧权重 `612.228`、gen 20 `621.272`，逐局 `30` 胜 `0` 负，平均差 `+9.044 score/piece`，95% paired 区间为 `[+7.813, +10.275]`。发布结论依赖这组同参数 paired 证据，不能由训练日志中的 `bestScoreRate` 单独推出。
 

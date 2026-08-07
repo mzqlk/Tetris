@@ -274,6 +274,21 @@ describe('aggregateFitness', () => {
       }),
     ], 1, 1, 100)).toThrow(/clearCounts.*lines/);
   });
+
+  it.each([
+    ['fractional', 0.5, 0.5],
+    ['unsafe integer', Number.MAX_SAFE_INTEGER + 1, Number.MAX_SAFE_INTEGER + 1],
+    ['negative', -1, -1],
+    ['NaN', Number.NaN, 0],
+    ['infinite', Number.POSITIVE_INFINITY, 0],
+  ])('rejects %s raw per-game clear counts', (_label, singles, lines) => {
+    expect(() => aggregateFitness([
+      result({
+        lines,
+        clearCounts: { singles, doubles: 0, triples: 0, tetrises: 0 },
+      }),
+    ], 1, 1, 100)).toThrow(/clearCounts|integer|finite|non-negative/);
+  });
 });
 
 describe('median', () => {

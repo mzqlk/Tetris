@@ -2,6 +2,7 @@ import type { Board, Piece } from '../types';
 import { BOARD_WIDTH, TOTAL_ROWS } from '../constants';
 import { getPieceCells, isValidPosition } from '../engine/board';
 import { movePiece, rotatePiece } from '../engine/piece';
+import { samePiece } from './replay';
 
 export type AiMove = 'left' | 'right' | 'rotate' | 'down';
 
@@ -32,6 +33,10 @@ const Y_SPAN = TOTAL_ROWS + Y_OFFSET + 1;
 
 function stateKey(p: Piece): number {
   return (p.rotation * X_SPAN + (p.position.x + X_OFFSET)) * Y_SPAN + (p.position.y + Y_OFFSET);
+}
+
+function pieceKey(piece: Piece): string {
+  return `${piece.type}:${piece.rotation}:${piece.position.x}:${piece.position.y}`;
 }
 
 /** Sorted flat indices of the cells a piece occupies — the deduplication key. */
@@ -65,7 +70,7 @@ export function enumeratePlacements(board: Board, spawn: Piece): Placement[] {
   const visited = new Set<number>([stateKey(spawn)]);
   const seenCells = new Set<string>();
   const results: Placement[] = [];
-  const preDropMoves = new Map<string, AiMove[]>();
+  const preDropPaths = new Map<string, { moves: AiMove[]; target: Piece }>();
   let frontier: Placement[] = [{ piece: spawn, moves: [] }];
 
   while (frontier.length > 0) {
@@ -73,20 +78,21 @@ export function enumeratePlacements(board: Board, spawn: Piece): Placement[] {
 
     for (const node of frontier) {
       const down = movePiece(board, node.piece, 0, 1);
-      const projectedKey = cellKey(projectHardDrop(board, node.piece));
-      if (!preDropMoves.has(projectedKey)) {
-        preDropMoves.set(projectedKey, node.moves);
+      const projected = projectHardDrop(board, node.piece);
+      const projectedKey = pieceKey(projected);
+      if (!preDropPaths.has(projectedKey)) {
+        preDropPaths.set(projectedKey, { moves: node.moves, target: projected });
       }
 
       if (down === null) {
         const key = cellKey(node.piece);
         if (!seenCells.has(key)) {
-          const moves = preDropMoves.get(key);
-          if (moves === undefined) {
+          const preDrop = preDropPaths.get(pieceKey(node.piece));
+          if (preDrop === undefined || !samePiece(preDrop.target, node.piece)) {
             throw new Error(`missing pre-drop path for reachable placement ${key}`);
           }
           seenCells.add(key);
-          results.push({ piece: node.piece, moves });
+          results.push({ piece: node.piece, moves: preDrop.moves });
         }
       }
 

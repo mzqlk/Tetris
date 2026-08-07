@@ -1,11 +1,11 @@
 import { describe, it, expect, afterAll } from 'vitest';
-import type { Worker } from 'node:worker_threads';
-import { FAILED_RESULT, WorkerPool, type SimTask } from './pool';
+import { Worker } from 'node:worker_threads';
+import { FAILED_RESULT, WorkerPool, type SimTask, type WorkerFactory } from './pool';
 import { toVector, HANDCRAFTED_WEIGHTS } from '../src/ai/weights';
 import { TOTAL_ROWS } from '../src/constants';
 
 const W = toVector(HANDCRAFTED_WEIGHTS);
-const pool = new WorkerPool(3);
+const pool = await WorkerPool.create(3);
 
 afterAll(async () => {
   await pool.destroy();
@@ -16,6 +16,64 @@ const task = (taskId: number, seed: number, weights = W): SimTask => ({
 });
 
 describe('WorkerPool', () => {
+  it('terminates already-created workers when a later construction fails', async () => {
+    const created: Worker[] = [];
+    const exits: Promise<unknown>[] = [];
+    const factory: WorkerFactory = (index) => {
+      if (index === 2) throw new Error('worker construction failed at slot 2');
+      const worker = new Worker('setInterval(() => {}, 1000)', { eval: true });
+      created.push(worker);
+      exits.push(new Promise((resolve) => worker.once('exit', resolve)));
+      return worker;
+    };
+
+    try {
+      await expect(WorkerPool.create(4, factory)).rejects.toThrow(
+        /worker construction failed at slot 2/,
+      );
+      const allExited = await Promise.race([
+        Promise.all(exits).then(() => true),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), 2_000)),
+      ]);
+      expect(created).toHaveLength(2);
+      expect(allExited).toBe(true);
+    } finally {
+      await Promise.all(created.map((worker) => worker.terminate()));
+    }
+  });
+
+  it('rejects the run when replacement construction fails', async () => {
+    const created: Worker[] = [];
+    let constructions = 0;
+    const factory: WorkerFactory = (index) => {
+      if (constructions++ === 2) {
+        throw new Error('replacement construction failed');
+      }
+      const worker = new Worker(new URL('./worker.ts', import.meta.url), {
+        name: `replacement-failure-${index}`,
+        execArgv: ['--import', 'tsx'],
+      });
+      created.push(worker);
+      return worker;
+    };
+    const replacementPool = await WorkerPool.create(2, factory);
+
+    try {
+      const run = replacementPool.run(
+        Array.from({ length: 20 }, (_, index) => task(index, 9_000 + index)),
+      );
+      const victim = created[0];
+
+      expect(() => victim.emit('error', new Error('simulated worker crash'))).not.toThrow();
+      await expect(run).rejects.toThrow(/replacement construction failed/);
+    } finally {
+      await replacementPool.destroy();
+    }
+
+    expect(created).toHaveLength(2);
+    expect(created.every((worker) => worker.threadId === -1)).toBe(true);
+  });
+
   it('returns one result per task, in task order', async () => {
     const tasks = Array.from({ length: 20 }, (_, i) => task(i, i + 1));
     const results = await pool.run(tasks);
@@ -88,7 +146,7 @@ describe('WorkerPool', () => {
     // as an 'error' event on the parent Worker object. It is the single path
     // most likely to strand a task and hang run() forever, so it gets a test
     // rather than an argument.
-    const crashPool = new WorkerPool(2);
+    const crashPool = await WorkerPool.create(2);
     const victim = (crashPool as unknown as { workers: Worker[] }).workers[0];
 
     try {

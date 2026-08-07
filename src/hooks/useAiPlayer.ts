@@ -3,7 +3,7 @@ import type { Board, Piece } from '../types';
 import { useGameStore } from '../store/gameStore';
 import { bestPlacement } from '../ai/search';
 import { projectPath, samePiece } from '../ai/replay';
-import { cellKey, projectHardDrop, type AiMove } from '../ai/placements';
+import { projectHardDrop, type AiMove } from '../ai/placements';
 import { toVector, type Weights } from '../ai/weights';
 
 export type AiSpeed = 'instant' | 'normal' | 'slow';
@@ -50,7 +50,7 @@ export function planPlacement(
   if (path.length !== moves.length) return null;
 
   const preDrop = path.at(-1) ?? current;
-  if (cellKey(projectHardDrop(board, preDrop)) !== cellKey(decision.placement.piece)) {
+  if (!samePiece(projectHardDrop(board, preDrop), decision.placement.piece)) {
     return null;
   }
 

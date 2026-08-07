@@ -1,19 +1,130 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+
+const reactHarness = vi.hoisted(() => ({
+  cleanup: undefined as undefined | (() => void),
+}));
+
+vi.mock('react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react')>();
+  return {
+    ...actual,
+    useEffect: (effect: () => void | (() => void)) => {
+      reactHarness.cleanup = effect() ?? undefined;
+    },
+    useRef: (value: unknown) => ({ current: value }),
+  };
+});
+
 import {
   advanceAiPlan,
   type AiPlan,
   expectedPose,
   isPlanValid,
   planPlacement,
+  useAiPlayer,
+  type AiPlayerOptions,
 } from './useAiPlayer';
 import { boardFrom } from '../ai/testUtils';
-import { toVector, HANDCRAFTED_WEIGHTS } from '../ai/weights';
+import { fromVector, toVector, HANDCRAFTED_WEIGHTS } from '../ai/weights';
 import { samePiece } from '../ai/replay';
 import { createEmptyBoard } from '../engine/board';
 import { createPiece, movePiece } from '../engine/piece';
 import { cellKey, projectHardDrop } from '../ai/placements';
+import * as placements from '../ai/placements';
+import { useGameStore } from '../store/gameStore';
+import type { Board, Piece, PieceType } from '../types';
 
 const W = toVector(HANDCRAFTED_WEIGHTS);
+const ZERO_MOVE_WEIGHTS = fromVector([
+  0, 0, 0, -1, 0,
+  0, 0, 0, 0, 0,
+]);
+const ORIGINAL_ACTIONS = (() => {
+  const store = useGameStore.getState();
+  return {
+    moveLeft: store.moveLeft,
+    moveRight: store.moveRight,
+    softDrop: store.softDrop,
+    hardDrop: store.hardDrop,
+    rotate: store.rotate,
+  };
+})();
+
+function resetStore(
+  board: Board = createEmptyBoard(),
+  currentPiece: Piece | null = createPiece(1),
+  status: 'playing' | 'paused' | 'gameover' = 'playing',
+): void {
+  useGameStore.setState({
+    board,
+    currentPiece,
+    nextPiece: createPiece(2),
+    bag: [3, 4, 5, 6, 7, 1] as PieceType[],
+    score: 0,
+    level: 1,
+    lines: 0,
+    status,
+    dropTimer: 0,
+    flashRows: [],
+    flashTimer: 0,
+    hardDropTrail: null,
+    trailTimer: 0,
+    ...ORIGINAL_ACTIONS,
+  });
+}
+
+function recordRealStoreActions(events: string[]): void {
+  useGameStore.setState({
+    moveLeft: () => {
+      events.push('left');
+      ORIGINAL_ACTIONS.moveLeft();
+    },
+    moveRight: () => {
+      events.push('right');
+      ORIGINAL_ACTIONS.moveRight();
+    },
+    softDrop: () => {
+      events.push('down');
+      ORIGINAL_ACTIONS.softDrop();
+    },
+    rotate: () => {
+      events.push('rotate');
+      ORIGINAL_ACTIONS.rotate();
+    },
+    hardDrop: () => {
+      events.push(`hardDrop:timers=${vi.getTimerCount()}`);
+      ORIGINAL_ACTIONS.hardDrop();
+    },
+  });
+}
+
+function options(
+  speed: AiPlayerOptions['speed'],
+  weights = HANDCRAFTED_WEIGHTS,
+  enabled = true,
+): AiPlayerOptions {
+  return { enabled, depth: 1, speed, weights };
+}
+
+function runNextTimer(): void {
+  expect(vi.getTimerCount()).toBeGreaterThan(0);
+  vi.advanceTimersToNextTimer();
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.stubGlobal('window', globalThis);
+  reactHarness.cleanup = undefined;
+  resetStore();
+});
+
+afterEach(() => {
+  reactHarness.cleanup?.();
+  vi.clearAllTimers();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 describe('planPlacement', () => {
   it('returns a plan whose path matches its move list', () => {
@@ -30,8 +141,21 @@ describe('planPlacement', () => {
     const plan = planPlacement(board, origin, null, W, 1)!;
     const preDrop = plan.path.at(-1) ?? origin;
 
-    expect(cellKey(projectHardDrop(board, preDrop))).toBe(cellKey(plan.target));
+    expect(samePiece(projectHardDrop(board, preDrop), plan.target)).toBe(true);
     expect(movePiece(board, plan.target, 0, 1)).toBeNull();
+  });
+
+  it('rejects a cell-equivalent hard drop with a different final pose', () => {
+    const board = boardFrom(['....######', '....######', '.....#####']);
+    const weights = Array(W.length).fill(0);
+    weights[0] = 1;
+    const declaredTarget = { type: 1 as const, rotation: 2, position: { x: 1, y: 16 } };
+    const wrongPose = { type: 1 as const, rotation: 0, position: { x: 1, y: 17 } };
+    expect(cellKey(declaredTarget)).toBe(cellKey(wrongPose));
+    expect(samePiece(declaredTarget, wrongPose)).toBe(false);
+    vi.spyOn(placements, 'projectHardDrop').mockReturnValue(wrongPose);
+
+    expect(planPlacement(board, createPiece(1), null, weights, 1)).toBeNull();
   });
 
   it('returns null when the piece cannot be placed anywhere', () => {
@@ -88,6 +212,126 @@ describe('advanceAiPlan', () => {
       .toBe(false);
     expect(events).toEqual(['left']);
     expect(plan.cursor).toBe(1);
+  });
+});
+
+describe('useAiPlayer timer and lifecycle integration', () => {
+  it.each(['normal', 'slow'] as const)(
+    '%s runs at most one positioning action per timer and hard-drops with the last action',
+    (speed) => {
+      const events: string[] = [];
+      recordRealStoreActions(events);
+
+      useAiPlayer(options(speed));
+      expect(vi.getTimerCount()).toBe(1);
+
+      runNextTimer();
+      expect(events).toEqual(['left']);
+      expect(vi.getTimerCount()).toBe(1);
+
+      runNextTimer();
+      expect(events).toEqual(['left', 'left']);
+      expect(vi.getTimerCount()).toBe(1);
+
+      runNextTimer();
+      expect(events).toEqual([
+        'left',
+        'left',
+        'left',
+        'hardDrop:timers=0',
+      ]);
+      expect(events.filter((event) => event.startsWith('hardDrop'))).toHaveLength(1);
+      expect(useGameStore.getState().currentPiece?.type).toBe(2);
+      expect(vi.getTimerCount()).toBe(1);
+    },
+  );
+
+  it('hard-drops a zero-action plan immediately and exactly once', () => {
+    const events: string[] = [];
+    recordRealStoreActions(events);
+
+    useAiPlayer(options('normal', ZERO_MOVE_WEIGHTS));
+    runNextTimer();
+
+    expect(events).toEqual(['hardDrop:timers=0']);
+    expect(useGameStore.getState().currentPiece?.type).toBe(2);
+    expect(vi.getTimerCount()).toBe(1);
+  });
+
+  it('runs an instant plan to completion with one hard drop', () => {
+    const events: string[] = [];
+    recordRealStoreActions(events);
+
+    useAiPlayer(options('instant'));
+    runNextTimer();
+
+    expect(events).toEqual([
+      'left',
+      'left',
+      'left',
+      'hardDrop:timers=0',
+    ]);
+    expect(events.filter((event) => event.startsWith('hardDrop'))).toHaveLength(1);
+    expect(useGameStore.getState().currentPiece?.type).toBe(2);
+    expect(vi.getTimerCount()).toBe(1);
+  });
+
+  it('replans after gravity changes the pose instead of following the stale path', () => {
+    const events: string[] = [];
+    resetStore(boardFrom(['....######', '....######', '.....#####']));
+    recordRealStoreActions(events);
+
+    useAiPlayer(options('normal', ZERO_MOVE_WEIGHTS));
+    runNextTimer();
+    expect(events).toEqual(['left']);
+
+    useGameStore.getState().tick(1_000);
+    expect(useGameStore.getState().currentPiece).toMatchObject({
+      rotation: 0,
+      position: { x: 2, y: 1 },
+    });
+
+    runNextTimer();
+    expect(events).toEqual(['left', 'down']);
+    expect(events).not.toContain('hardDrop:timers=0');
+    expect(useGameStore.getState().currentPiece).toMatchObject({
+      rotation: 0,
+      position: { x: 2, y: 2 },
+    });
+  });
+
+  it.each([
+    ['paused', 'paused', createPiece(1)],
+    ['game over', 'gameover', createPiece(1)],
+    ['null current piece', 'playing', null],
+  ] as const)('does not act while %s', (_label, status, currentPiece) => {
+    const events: string[] = [];
+    resetStore(createEmptyBoard(), currentPiece, status);
+    recordRealStoreActions(events);
+
+    useAiPlayer(options('normal'));
+    runNextTimer();
+
+    expect(events).toEqual([]);
+    expect(vi.getTimerCount()).toBe(1);
+  });
+
+  it('cleanup and disabling cancel an already scheduled continuation', () => {
+    const events: string[] = [];
+    recordRealStoreActions(events);
+
+    useAiPlayer(options('normal'));
+    runNextTimer();
+    expect(events).toEqual(['left']);
+    expect(vi.getTimerCount()).toBe(1);
+
+    const cleanup = reactHarness.cleanup;
+    cleanup?.();
+    useAiPlayer(options('normal', HANDCRAFTED_WEIGHTS, false));
+    vi.runAllTimers();
+
+    expect(events).toEqual(['left']);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

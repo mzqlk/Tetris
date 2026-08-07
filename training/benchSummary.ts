@@ -1,5 +1,6 @@
 import {
   addLineClearCounts,
+  assertLineClearCounts,
   emptyLineClearCounts,
   tetrisLineShare,
   totalLinesFromCounts,
@@ -56,6 +57,7 @@ export function summarizeBench(
     throw new Error(`maxPieces must be positive, got ${maxPieces}`);
   }
   for (const result of results) {
+    assertLineClearCounts(result.clearCounts, true);
     if (totalLinesFromCounts(result.clearCounts) !== result.lines) {
       throw new Error('clearCounts must reconstruct lines for every benchmark result');
     }

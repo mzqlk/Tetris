@@ -1,6 +1,6 @@
 # Tetris AI 训练系统 — 交接文档
 
-**写于**：2026-07-28；**更新于**：2026-08-06（score-rate-v2 代码/训练器契约迁移；未运行训练或发布）
+**写于**：2026-07-28；**更新于**：2026-08-07（score-rate-v2 恢复产物与执行路径审查修复；未运行训练或发布）
 **当前状态的读取方式**：每次先运行 `git status` / `git log`，检查 `public/ai/` 产物与训练进程，再决定操作。旧 HEAD、未推送状态和固定测试数都只是历史快照，不是本交接的持久指令。
 **验证**：运行当前 `npm test`、`npm run build` 与 `npm run typecheck:train`；以实际输出为准。
 **当前 score-rate-v2 设计**：[`2026-08-06 design`](superpowers/specs/2026-08-06-ai-hard-drop-and-tetris-strategy-design.md)
@@ -69,7 +69,7 @@ fitness = meanScore / maxPieces
 
 ### 产物（`public/ai/`，已 gitignore）
 
-- `score-rate-v2/training-log.jsonl` — 新训练的默认日志位置；每代一行，另含稀疏的 typed reevaluation 事件；面板每秒轮询并只绘制 generation 记录
+- `score-rate-v2/training-log.jsonl` — 新训练的默认日志位置；每代一行，另含稀疏的 typed reevaluation 事件；resume 会在创建目录/worker 或写入前严格校验完整 JSONL、统一 v2 objective、两类 schema、连续 generation 与 checkpoint.gen；面板每秒轮询并只绘制 generation 记录
 - `score-rate-v2/checkpoint.json` — 新训练的默认 checkpoint；必须是 schema version 3、`score-rate-v2`、10 维以及完整固定发布调度才可能 resume；v1 checkpoint/log 绝不兼容或追加
 - `best-weights.json` — 当前 runtime 已发布的仍是 version 2、`score-rate-v1` gen-20 权重；只有经授权的 v2 固定复评通过发布门后才可替换
 - `../src/ai/trained-weights.json` — 当前 tracked bundled 的仍是 version 2、`score-rate-v1` gen-20 权重；构建无需 runtime fetch 也能工作，不能因代码迁移而改写
@@ -95,7 +95,7 @@ npm run train -- --generations 20 --workers 8 --output-dir public/ai/<new-run-id
 npm run train -- --resume   # 默认 score-rate-v2；必须先完整核验并获得授权，且绝不恢复/追加 v1 checkpoint/log
 ```
 
-训练命令会修改 score-rate checkpoint/log，并可能同时改写发布权重，不能把上面的示例当成顺序执行清单。默认输出目录已有 checkpoint 或非空日志时，新跑会拒绝覆盖；不要通过删除文件绕过保护。运行前先读第 5 节的 checkpoint 决策门。
+训练命令会修改 score-rate checkpoint/log，并可能同时改写发布权重，不能把上面的示例当成顺序执行清单。默认输出目录包含任何条目时（包括空日志或其他遗留文件），新跑都会拒绝；不要通过删除文件绕过保护。运行前先读第 5 节的 checkpoint 决策门。
 
 `npm run lint` 的可用性也应在当前分支实测；不要继承旧会话的“本来就是坏的”结论。
 
@@ -203,12 +203,12 @@ fitness = meanLines - heightPenalty * meanHeight
 任何训练前都按以下顺序判断：
 
 1. 检查 Node 命令行、CPU 和内存，确认没有训练进程正在写目标目录或发布权重。
-2. 明确实际 output dir；读取其中 checkpoint 的 schema version、`objective`、`gen`、`maxPieces`、完整 `config` 与 `bestEver`，并检查日志尾部是否连续。
+2. 明确实际 output dir；读取其中 checkpoint 的 schema version、`objective`、`gen`、`maxPieces`、完整 `config` 与 `bestEver`，并检查日志全部记录的 objective、generation/reevaluation schema、连续 generation、固定复评历史和最终换行。
 3. 如果保留 v2 本轮，只能在 score-rate-v2 schema version 3、固定发布调度、10 维权重与完整诊断元数据全部校验后显式使用 `--resume`；v1 checkpoint/log 一律拒绝恢复或追加。
 4. 如果新跑，先取得用户授权并选择空的独立 output dir；归档、移动或删除任何已有产物都需要单独授权。
 5. 训练还可能改写 `public/ai/best-weights.json` 与 tracked `src/ai/trained-weights.json`；启动前必须记录二者状态和哈希。
 
-**不要在已有产物时省略 `--resume`。** 当前 `assertFreshRun` 会在创建 worker 或写文件前拒绝已有 checkpoint/非空日志；不要通过删除、清空或迁移文件绕过它。
+**不要在已有产物时省略 `--resume`。** 当前 `assertFreshRun` 会在创建 worker 或写文件前拒绝 output dir 中的任何现有条目；不要通过删除、清空或迁移文件绕过它。
 
 ### Legacy 高 cap 轮次（历史背景）
 

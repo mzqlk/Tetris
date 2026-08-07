@@ -55,6 +55,23 @@ describe('summarizeBench', () => {
     expect(() => summarizeBench([inconsistent], 300)).toThrow(/clearCounts.*lines/);
   });
 
+  it.each([
+    ['fractional', 0.5, 0.5],
+    ['unsafe integer', Number.MAX_SAFE_INTEGER + 1, Number.MAX_SAFE_INTEGER + 1],
+    ['negative', -1, -1],
+    ['NaN', Number.NaN, 0],
+    ['infinite', Number.POSITIVE_INFINITY, 0],
+  ])('rejects %s raw per-game clear counts', (_label, singles, lines) => {
+    expect(() => summarizeBench([{
+      score: 0,
+      lines,
+      pieces: 0,
+      meanHeight: 0,
+      reason: 'topOut',
+      clearCounts: { singles, doubles: 0, triples: 0, tetrises: 0 },
+    }], 300)).toThrow(/clearCounts|integer|finite|non-negative/);
+  });
+
   it('rejects an empty result set and a non-positive schedule', () => {
     expect(() => summarizeBench([], 300)).toThrow(/result/);
     expect(() => summarizeBench(games, 0)).toThrow(/maxPieces/);
