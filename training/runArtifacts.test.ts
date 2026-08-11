@@ -1,16 +1,14 @@
 import {
   mkdtempSync,
+  readFileSync,
   renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { FEATURE_COUNT } from '../src/ai/features';
-import { initCem, updateCem } from './cem';
-import { DEFAULT_CONFIG } from './config';
 import {
   assertFreshRun,
   readCompatibleCheckpoint,
@@ -20,163 +18,256 @@ import {
 
 const dirs: string[] = [];
 const temp = () => {
-  const dir = mkdtempSync(join(tmpdir(), 'tetris-score-rate-'));
+  const dir = mkdtempSync(join(tmpdir(), 'tetris-score-rate-v3-'));
   dirs.push(dir);
   return dir;
 };
+const copy = <T>(value: T): T => structuredClone(value);
 
-const axisVector = (axis = 0) => Array.from(
-  { length: FEATURE_COUNT },
-  (_, index) => Number(index === axis),
-);
-const unitVector = () => axisVector();
-
-const meanClearCounts = {
-  singles: 10,
-  doubles: 20,
-  triples: 20,
-  tetrises: 460,
+const AXIS_0 = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+const AXIS_1 = [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+const AXIS_2 = [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+const SIGMA = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+const CLEAR_COUNTS = { singles: 10, doubles: 20, triples: 20, tetrises: 460 };
+const STRATEGY = {
+  meanCleanWellDepth: 3,
+  meanTetrisSetupProgress: 2.5,
+  meanTetrisReadyRows: 1,
+};
+const SURVIVAL = { pieceCapGames: 30, gameoverGames: 0 };
+const CONFIG = {
+  population: 100,
+  eliteFrac: 0.1,
+  gamesPerCandidate: 5,
+  depth: 2 as const,
+  initialMaxPieces: 300,
+  maxPiecesCap: 2_000,
+  initialNoise: 0.5,
+  noiseDecay: 0.95,
+  noiseFloor: 0.01,
+  baseSeed: 20_260_727,
+  workers: 4,
+  reevalEvery: 2,
+  reevalGames: 30,
+  reevalMaxPieces: 5_000,
 };
 
-const validCheckpoint = () => ({
-  version: 3,
-  objective: 'score-rate-v2',
-  gen: 2,
-  mu: unitVector(),
-  sigma: Array(FEATURE_COUNT).fill(1),
-  baseSeed: DEFAULT_CONFIG.baseSeed,
-  maxPieces: 1200,
-  config: { ...DEFAULT_CONFIG },
-  bestEver: {
-    weights: unitVector(),
-    meanScore: 25000,
-    scoreRate: 5,
-    meanLines: 1950,
-    meanHeight: 3.5,
-    meanClearCounts: { ...meanClearCounts },
-    tetrisLineShare: (4 * 460) / 1950,
-    gen: 1,
-    evalGames: 30,
-    evalMaxPieces: 5000,
-  },
-});
+const BASELINE = {
+  weights: AXIS_0,
+  meanScore: 25_000,
+  scoreRate: 5,
+  meanLines: 1_950,
+  meanHeight: 3.5,
+  meanClearCounts: CLEAR_COUNTS,
+  tetrisLineShare: 0.9435897435897436,
+  strategyDiagnostics: STRATEGY,
+  survivalDiagnostics: SURVIVAL,
+  gen: -1,
+  evalGames: 30,
+  evalMaxPieces: 5_000,
+};
 
-const validGeneration = (
-  gen: number,
-  maxPieces = DEFAULT_CONFIG.initialMaxPieces * (2 ** gen),
-  elitePieces = maxPieces,
-) => ({
-  objective: 'score-rate-v2',
-  gen,
-  ts: 1_000 + gen,
+const CANDIDATE_2 = {
+  weights: AXIS_1,
+  meanScore: 30_000,
+  scoreRate: 6,
+  meanLines: 1_950,
+  meanHeight: 3.4,
+  meanClearCounts: CLEAR_COUNTS,
+  tetrisLineShare: 0.9435897435897436,
+  strategyDiagnostics: {
+    meanCleanWellDepth: 3.1,
+    meanTetrisSetupProgress: 2.6,
+    meanTetrisReadyRows: 1.1,
+  },
+  survivalDiagnostics: SURVIVAL,
+  gen: 2,
+  evalGames: 30,
+  evalMaxPieces: 5_000,
+};
+
+const CANDIDATE_4_KEEP = {
+  weights: AXIS_2,
+  meanScore: 29_000,
+  scoreRate: 5.8,
+  meanLines: 1_950,
+  meanHeight: 3.3,
+  meanClearCounts: CLEAR_COUNTS,
+  tetrisLineShare: 0.9435897435897436,
+  strategyDiagnostics: {
+    meanCleanWellDepth: 3.2,
+    meanTetrisSetupProgress: 2.7,
+    meanTetrisReadyRows: 1.2,
+  },
+  survivalDiagnostics: SURVIVAL,
+  gen: 4,
+  evalGames: 30,
+  evalMaxPieces: 5_000,
+};
+
+const CHECKPOINT = {
+  version: 4,
+  objective: 'score-rate-v3',
+  gen: 2,
+  mu: AXIS_0,
+  sigma: SIGMA,
+  baseSeed: 20_260_727,
+  maxPieces: 1_200,
+  config: CONFIG,
+  publishedBaseline: BASELINE,
+  bestQualifiedCandidate: CANDIDATE_2,
+};
+
+const GEN_0 = {
+  objective: 'score-rate-v3',
+  gen: 0,
+  ts: 1_000,
   bestScoreRate: 5,
   meanScoreRate: 4,
   medianScoreRate: 4,
   worstScoreRate: 3,
   scoreRateStd: 1,
-  mu: unitVector(),
-  sigma: Array(FEATURE_COUNT).fill(1),
-  bestWeights: unitVector(),
-  maxPieces,
-  medianPieces: Math.min(300, maxPieces),
-  elitePieces,
-  medianScore: 4 * maxPieces,
-  eliteScore: 4.5 * maxPieces,
+  mu: AXIS_0,
+  sigma: SIGMA,
+  bestWeights: AXIS_0,
+  maxPieces: 300,
+  medianPieces: 300,
+  elitePieces: 300,
+  medianScore: 1_200,
+  eliteScore: 1_350,
   medianLines: 10,
   medianHeight: 4,
   eliteHeight: 3,
   bestTetrisLineShare: 0.25,
   medianTetrisLineShare: 0.1,
   eliteTetrisLineShare: 0.2,
-  gamesPerCandidate: DEFAULT_CONFIG.gamesPerCandidate,
+  gamesPerCandidate: 5,
   elapsedMs: 100,
-});
-
-const evaluated = (
-  gen: number,
-  meanScore: number,
-  meanHeight: number,
-  weights = unitVector(),
-) => ({
-  gen,
-  weights,
-  meanScore,
-  scoreRate: meanScore / DEFAULT_CONFIG.reevalMaxPieces,
-  meanLines: 1_950,
-  meanHeight,
-  meanClearCounts: { ...meanClearCounts },
-  tetrisLineShare: (4 * meanClearCounts.tetrises) / 1_950,
-});
-
-type LoggedEvaluation = ReturnType<typeof evaluated>;
-
-const reevaluationRecord = (
-  gen: number,
-  currentBest: LoggedEvaluation,
-  candidate: LoggedEvaluation,
-  decision: 'publish' | 'keep-current',
-  reason: 'higher-score' | 'lower-score',
-) => {
-  const scoreDelta = candidate.meanScore - currentBest.meanScore;
-  const scale = Math.max(Math.abs(candidate.meanScore), Math.abs(currentBest.meanScore));
-  return {
-    objective: 'score-rate-v2',
-    kind: 'reevaluation',
-    gen,
-    ts: 2_000 + gen,
-    schedule: {
-      games: DEFAULT_CONFIG.reevalGames,
-      maxPieces: DEFAULT_CONFIG.reevalMaxPieces,
-      depth: DEFAULT_CONFIG.depth,
-      baseSeed: DEFAULT_CONFIG.baseSeed,
-      seedStrategy: 'fixed-reevaluation-v1',
-    },
-    currentBest,
-    candidate,
-    comparison: {
-      scoreDelta,
-      scoreRateDelta: candidate.scoreRate - currentBest.scoreRate,
-      relativeScoreDelta: scale === 0 ? 0 : scoreDelta / scale,
-      scoreTolerance: 0.001 * scale,
-      heightDelta: candidate.meanHeight - currentBest.meanHeight,
-      decision,
-      reason,
-    },
-  };
+};
+const GEN_1 = {
+  ...GEN_0,
+  gen: 1,
+  ts: 1_001,
+  maxPieces: 600,
+  elitePieces: 600,
+  medianScore: 2_400,
+};
+const GEN_2 = {
+  ...GEN_0,
+  gen: 2,
+  ts: 1_002,
+  maxPieces: 1_200,
+  elitePieces: 1_200,
+  medianScore: 4_800,
+};
+const GEN_3 = {
+  ...GEN_0,
+  gen: 3,
+  ts: 1_003,
+  maxPieces: 2_000,
+  elitePieces: 2_000,
+  medianScore: 8_000,
 };
 
-const validReevaluation = (gen: number) => reevaluationRecord(
-  gen,
-  evaluated(-1, 25_000, 3.5),
-  evaluated(gen, 25_050, 3.4, axisVector(1)),
-  'publish',
-  'higher-score',
-);
+const logged = <T extends typeof BASELINE>(evaluation: T) => {
+  const { evalGames, evalMaxPieces, ...result } = copy(evaluation);
+  void evalGames;
+  void evalMaxPieces;
+  return result;
+};
 
-const checkpointBestEver = (
-  evaluation: LoggedEvaluation,
-  checkpoint = validCheckpoint(),
-) => ({
-  ...evaluation,
-  evalGames: checkpoint.config.reevalGames,
-  evalMaxPieces: checkpoint.config.reevalMaxPieces,
-});
+const REEVALUATION_2 = {
+  objective: 'score-rate-v3',
+  kind: 'reevaluation',
+  gen: 2,
+  ts: 2_002,
+  schedule: {
+    games: 30,
+    maxPieces: 5_000,
+    depth: 2,
+    baseSeed: 20_260_727,
+    seedStrategy: 'fixed-reevaluation-v1',
+  },
+  publishedBaseline: logged(BASELINE),
+  currentQualified: null,
+  candidate: logged(CANDIDATE_2),
+  qualification: {
+    shouldSave: true,
+    reason: 'qualified',
+    scoreTolerance: 30,
+    scoreQualified: true,
+    tetrisQualified: true,
+    survivalQualified: true,
+    betterThanCurrent: true,
+    scoreDelta: 5_000,
+    scoreRateDelta: 1,
+    tetrisLineShareDelta: 0,
+    pieceCapGamesDelta: 0,
+    decision: 'save-candidate',
+  },
+};
 
-const validPublishedRun = () => {
-  const checkpoint = validCheckpoint();
-  checkpoint.config.reevalEvery = 2;
-  const reevaluation = validReevaluation(2);
-  checkpoint.bestEver = checkpointBestEver(reevaluation.candidate, checkpoint);
-  return {
-    checkpoint,
-    records: [validGeneration(0), validGeneration(1), reevaluation],
-    reevaluation,
-  };
+const REEVALUATION_4_KEEP = {
+  objective: 'score-rate-v3',
+  kind: 'reevaluation',
+  gen: 4,
+  ts: 2_004,
+  schedule: copy(REEVALUATION_2.schedule),
+  publishedBaseline: logged(BASELINE),
+  currentQualified: logged(CANDIDATE_2),
+  candidate: logged(CANDIDATE_4_KEEP),
+  qualification: {
+    shouldSave: false,
+    reason: 'not-better-qualified-candidate',
+    scoreTolerance: 29,
+    scoreQualified: true,
+    tetrisQualified: true,
+    survivalQualified: true,
+    betterThanCurrent: false,
+    scoreDelta: 4_000,
+    scoreRateDelta: 0.7999999999999998,
+    tetrisLineShareDelta: 0,
+    pieceCapGamesDelta: 0,
+    decision: 'keep-current',
+  },
+};
+
+const CANDIDATE_FILE = {
+  version: 4,
+  weights: {
+    aggregateHeight: 0,
+    holes: 1,
+    bumpiness: 0,
+    maxHeight: 0,
+    linesCleared: 0,
+    landingHeight: 0,
+    rowTransitions: 0,
+    colTransitions: 0,
+    wellDepth: 0,
+    lineClearValue: 0,
+    cleanWellDepth: 0,
+    tetrisSetupProgress: 0,
+    tetrisReadyRows: 0,
+  },
+  objective: 'score-rate-v3',
+  meanScore: 30_000,
+  evalMaxPieces: 5_000,
+  meanLines: 1_950,
+  meanHeight: 3.4,
+  meanClearCounts: CLEAR_COUNTS,
+  tetrisLineShare: 0.9435897435897436,
+  strategyDiagnostics: CANDIDATE_2.strategyDiagnostics,
+  survivalDiagnostics: SURVIVAL,
+  evalGames: 30,
+  gen: 2,
+  searchDepth: 2,
+  trainedAt: '2026-08-11T00:00:00.000Z',
 };
 
 const writeRun = (
   checkpoint: unknown,
   records: unknown[],
+  candidate: unknown | null = null,
   finalNewline = true,
 ) => {
   const outputDir = temp();
@@ -184,6 +275,7 @@ const writeRun = (
   writeFileSync(paths.checkpoint, JSON.stringify(checkpoint));
   const text = records.map((record) => JSON.stringify(record)).join('\n');
   writeFileSync(paths.log, `${text}${finalNewline ? '\n' : ''}`);
+  if (candidate !== null) writeFileSync(paths.candidate, JSON.stringify(candidate));
   return paths;
 };
 
@@ -192,528 +284,271 @@ afterEach(() => {
 });
 
 describe('resolveRunPaths', () => {
-  it('defaults to the versioned score-rate directory', () => {
-    const paths = resolveRunPaths('D:/repo', null);
-    expect(paths.outputDir.replaceAll('\\', '/')).toBe('D:/repo/public/ai/score-rate-v2');
+  it('uses an isolated score-rate-v3 directory and candidate path', () => {
+    const root = 'D:/repo';
+    expect(resolveRunPaths(root, null)).toEqual({
+      outputDir: resolve(root, 'public/ai/score-rate-v3'),
+      checkpoint: resolve(root, 'public/ai/score-rate-v3/checkpoint.json'),
+      log: resolve(root, 'public/ai/score-rate-v3/training-log.jsonl'),
+      candidate: resolve(root, 'public/ai/score-rate-v3/candidate-weights.json'),
+    });
   });
 });
 
 describe('readCompatibleCheckpoint', () => {
-  it('accepts the current checkpoint schema and objective', () => {
+  it('accepts the exact version-4 checkpoint schema', () => {
     const path = join(temp(), 'checkpoint.json');
-    writeFileSync(path, JSON.stringify(validCheckpoint()));
-    expect(readCompatibleCheckpoint(path)).toMatchObject({
-      version: 3,
-      objective: 'score-rate-v2',
-      gen: 2,
-      config: { reevalGames: 30, reevalMaxPieces: 5000 },
-      bestEver: { meanScore: 25000, scoreRate: 5 },
-    });
+    writeFileSync(path, JSON.stringify(CHECKPOINT));
+    expect(readCompatibleCheckpoint(path)).toEqual(CHECKPOINT);
+  });
+
+  it.each([
+    [{ version: 1 }, /score-rate-v3/],
+    [{ version: 2, objective: 'score-rate-v1' }, /score-rate-v3/],
+    [{ ...CHECKPOINT, version: 3, objective: 'score-rate-v2' }, /score-rate-v3|version 4/],
+    [{ ...CHECKPOINT, version: 3 }, /version 4/],
+  ])('rejects a legacy checkpoint: %j', (checkpoint, error) => {
+    const path = join(temp(), 'checkpoint.json');
+    writeFileSync(path, JSON.stringify(checkpoint));
+    expect(() => readCompatibleCheckpoint(path)).toThrow(error);
+  });
+
+  it.each([
+    ['extra checkpoint key', (checkpoint: Record<string, unknown>) => {
+      checkpoint.extra = true;
+    }],
+    ['missing checkpoint key', (checkpoint: Record<string, unknown>) => {
+      delete checkpoint.bestQualifiedCandidate;
+    }],
+    ['extra evaluation key', (checkpoint: Record<string, unknown>) => {
+      (checkpoint.publishedBaseline as Record<string, unknown>).extra = true;
+    }],
+    ['extra config key', (checkpoint: Record<string, unknown>) => {
+      (checkpoint.config as Record<string, unknown>).extra = true;
+    }],
+    ['extra strategy key', (checkpoint: Record<string, unknown>) => {
+      const baseline = checkpoint.publishedBaseline as Record<string, unknown>;
+      (baseline.strategyDiagnostics as Record<string, unknown>).extra = 0;
+    }],
+    ['extra survival key', (checkpoint: Record<string, unknown>) => {
+      const baseline = checkpoint.publishedBaseline as Record<string, unknown>;
+      (baseline.survivalDiagnostics as Record<string, unknown>).extra = 0;
+    }],
+    ['inconsistent score rate', (checkpoint: Record<string, unknown>) => {
+      (checkpoint.publishedBaseline as Record<string, unknown>).scoreRate = 4;
+    }],
+    ['unnormalized weights', (checkpoint: Record<string, unknown>) => {
+      (checkpoint.bestQualifiedCandidate as Record<string, unknown>).weights = SIGMA;
+    }],
+  ])('rejects %s', (_label, mutate) => {
+    const checkpoint = copy(CHECKPOINT) as unknown as Record<string, unknown>;
+    mutate(checkpoint);
+    const path = join(temp(), 'checkpoint.json');
+    writeFileSync(path, JSON.stringify(checkpoint));
+    expect(() => readCompatibleCheckpoint(path)).toThrow(/checkpoint/i);
+  });
+
+  it.each([
+    ['published baseline generation', (checkpoint: typeof CHECKPOINT) => {
+      checkpoint.publishedBaseline.gen = 0;
+    }],
+    ['qualified candidate generation', (checkpoint: typeof CHECKPOINT) => {
+      checkpoint.bestQualifiedCandidate.gen = -1;
+    }],
+    ['candidate without a baseline', (checkpoint: typeof CHECKPOINT) => {
+      checkpoint.publishedBaseline = null as unknown as typeof BASELINE;
+    }],
+  ])('rejects an inconsistent %s before log replay', (_label, mutate) => {
+    const checkpoint = copy(CHECKPOINT);
+    mutate(checkpoint);
+    const path = join(temp(), 'checkpoint.json');
+    writeFileSync(path, JSON.stringify(checkpoint));
+    expect(() => readCompatibleCheckpoint(path)).toThrow(/baseline|candidate|generation/i);
   });
 
   it('rejects a checkpoint reached through a symbolic link', () => {
     const dir = temp();
-    const target = join(dir, 'checkpoint-target.json');
+    const target = join(dir, 'target.json');
     const path = join(dir, 'checkpoint.json');
-    writeFileSync(target, JSON.stringify(validCheckpoint()));
+    writeFileSync(target, JSON.stringify(CHECKPOINT));
     symlinkSync(target, path, 'file');
-
-    expect(() => readCompatibleCheckpoint(path)).toThrow(/symbolic|reparse|regular file/i);
-  });
-
-  it('round-trips the non-unit arithmetic centroid produced by updateCem', () => {
-    const first = unitVector();
-    const second = [0, 1, ...Array(FEATURE_COUNT - 2).fill(0)];
-    const state = updateCem(initCem(), [first, second], [1, 1], {
-      eliteFrac: 1,
-      noise: 0.01,
-    });
-    expect(Math.hypot(...state.mu)).toBeCloseTo(Math.SQRT1_2, 12);
-
-    const path = join(temp(), 'checkpoint.json');
-    writeFileSync(path, JSON.stringify({
-      ...validCheckpoint(),
-      gen: state.gen,
-      mu: state.mu,
-      sigma: state.sigma,
-    }));
-
-    expect(readCompatibleCheckpoint(path)).toMatchObject({
-      gen: state.gen,
-      mu: state.mu,
-      sigma: state.sigma,
-    });
-  });
-
-  it.each([
-    [{ version: 1 }, 'missing'],
-    [{ version: 2, objective: 'lines-height-v1' }, 'lines-height-v1'],
-  ])('rejects an incompatible checkpoint before resume: %j', (checkpoint, label) => {
-    const path = join(temp(), 'checkpoint.json');
-    writeFileSync(path, JSON.stringify(checkpoint));
-    expect(() => readCompatibleCheckpoint(path)).toThrow(new RegExp(`${label}.*score-rate-v2`));
-  });
-
-  it('preserves the current version mismatch error after the objective matches', () => {
-    const path = join(temp(), 'checkpoint.json');
-    writeFileSync(path, JSON.stringify({ ...validCheckpoint(), version: 2 }));
-    expect(() => readCompatibleCheckpoint(path)).toThrow(
-      /checkpoint schema 2 is incompatible with version 3/,
-    );
-  });
-
-  it('rejects the old objective before reading the rest of the checkpoint', () => {
-    const path = join(temp(), 'checkpoint.json');
-    const checkpoint = validCheckpoint();
-    checkpoint.version = 2 as 3;
-    checkpoint.objective = 'score-rate-v1' as 'score-rate-v2';
-    writeFileSync(path, JSON.stringify(checkpoint));
-    expect(() => readCompatibleCheckpoint(path)).toThrow(/score-rate-v1.*score-rate-v2/);
-  });
-
-  it('rejects an inconsistent tetris share', () => {
-    const path = join(temp(), 'checkpoint.json');
-    const checkpoint = validCheckpoint();
-    checkpoint.bestEver.tetrisLineShare = 0;
-    writeFileSync(path, JSON.stringify(checkpoint));
-    expect(() => readCompatibleCheckpoint(path)).toThrow(/tetrisLineShare/);
-  });
-
-  it('rejects mean lines inconsistent with clear counts', () => {
-    const path = join(temp(), 'checkpoint.json');
-    const checkpoint = validCheckpoint();
-    checkpoint.bestEver.meanLines = 1949;
-    writeFileSync(path, JSON.stringify(checkpoint));
-    expect(() => readCompatibleCheckpoint(path)).toThrow(/meanLines/);
-  });
-
-  it.each([
-    ['a missing clear-count key', (checkpoint: ReturnType<typeof validCheckpoint>) => {
-      delete (checkpoint.bestEver.meanClearCounts as Partial<typeof meanClearCounts>).triples;
-    }],
-    ['an extra clear-count key', (checkpoint: ReturnType<typeof validCheckpoint>) => {
-      (checkpoint.bestEver.meanClearCounts as typeof meanClearCounts & { extra: number }).extra = 0;
-    }],
-    ['a negative clear count', (checkpoint: ReturnType<typeof validCheckpoint>) => {
-      checkpoint.bestEver.meanClearCounts.singles = -1;
-    }],
-    ['a non-finite clear count', (checkpoint: ReturnType<typeof validCheckpoint>) => {
-      checkpoint.bestEver.meanClearCounts.doubles = Number.NaN;
-    }],
-  ])('rejects %s', (_label, mutate) => {
-    const path = join(temp(), 'checkpoint.json');
-    const checkpoint = validCheckpoint();
-    mutate(checkpoint);
-    writeFileSync(path, JSON.stringify(checkpoint));
-    expect(() => readCompatibleCheckpoint(path)).toThrow(/meanClearCounts/);
-  });
-
-  it.each([
-    ['mu length', (checkpoint: ReturnType<typeof validCheckpoint>) => {
-      checkpoint.mu = checkpoint.mu.slice(1);
-    }],
-    ['mu element', (checkpoint: ReturnType<typeof validCheckpoint>) => {
-      checkpoint.mu[2] = Number.NaN;
-    }],
-    ['sigma element', (checkpoint: ReturnType<typeof validCheckpoint>) => {
-      checkpoint.sigma[2] = null as unknown as number;
-    }],
-    ['zero sigma', (checkpoint: ReturnType<typeof validCheckpoint>) => {
-      checkpoint.sigma[2] = 0;
-    }],
-    ['generation', (checkpoint: ReturnType<typeof validCheckpoint>) => {
-      checkpoint.gen = -1;
-    }],
-    ['base seed', (checkpoint: ReturnType<typeof validCheckpoint>) => {
-      checkpoint.baseSeed = 1.5;
-    }],
-    ['scheduled maxPieces', (checkpoint: ReturnType<typeof validCheckpoint>) => {
-      checkpoint.maxPieces = 0;
-    }],
-    ['config field', (checkpoint: ReturnType<typeof validCheckpoint>) => {
-      checkpoint.config.population = 0;
-    }],
-    ['publication games', (checkpoint: ReturnType<typeof validCheckpoint>) => {
-      checkpoint.config.reevalGames = 29;
-    }],
-    ['bestEver weights', (checkpoint: ReturnType<typeof validCheckpoint>) => {
-      checkpoint.bestEver.weights = Array(FEATURE_COUNT).fill(1);
-    }],
-    ['bestEver score record', (checkpoint: ReturnType<typeof validCheckpoint>) => {
-      checkpoint.bestEver.meanScore = null as unknown as number;
-    }],
-    ['bestEver score rate', (checkpoint: ReturnType<typeof validCheckpoint>) => {
-      checkpoint.bestEver.scoreRate = 4;
-    }],
-    ['bestEver publication schedule', (checkpoint: ReturnType<typeof validCheckpoint>) => {
-      checkpoint.bestEver.evalMaxPieces = 4999;
-    }],
-  ])('rejects a correctly tagged v3 checkpoint with malformed %s', (_label, mutate) => {
-    const path = join(temp(), 'checkpoint.json');
-    const checkpoint = validCheckpoint();
-    mutate(checkpoint);
-    writeFileSync(path, JSON.stringify(checkpoint));
-
-    expect(() => readCompatibleCheckpoint(path)).toThrow(/checkpoint/);
+    expect(() => readCompatibleCheckpoint(path)).toThrow(/symbolic|reparse|regular/i);
   });
 });
 
 describe('readCompatibleRunArtifacts', () => {
-  it('accepts a complete generation history matching checkpoint.gen', () => {
-    const checkpoint = { ...validCheckpoint(), bestEver: null };
-    const paths = writeRun(checkpoint, [validGeneration(0), validGeneration(1)]);
+  it('replays continuous generations, the immutable baseline, and save-candidate', () => {
+    const result = readCompatibleRunArtifacts(
+      writeRun(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2]),
+    );
+    expect(result.publishedBaseline).toEqual(BASELINE);
+    expect(result.bestQualifiedCandidate).toEqual(CANDIDATE_2);
+  });
 
-    expect(readCompatibleRunArtifacts(paths)).toMatchObject({
-      objective: 'score-rate-v2',
-      gen: 2,
-    });
+  it('replays keep-current without replacing the qualified candidate', () => {
+    const checkpoint = {
+      ...copy(CHECKPOINT),
+      gen: 4,
+      maxPieces: 2_000,
+    };
+    const records = [GEN_0, GEN_1, REEVALUATION_2, GEN_2, GEN_3, REEVALUATION_4_KEEP];
+    expect(readCompatibleRunArtifacts(writeRun(checkpoint, records)).bestQualifiedCandidate)
+      .toEqual(CANDIDATE_2);
+  });
+
+  it.each([
+    ['missing generation', [GEN_1, REEVALUATION_2], /continuous|history/],
+    ['duplicate generation', [GEN_0, GEN_0, REEVALUATION_2], /continuous|history/],
+    ['missing reevaluation', [GEN_0, GEN_1], /reevaluation.*2/],
+    ['duplicate reevaluation', [GEN_0, GEN_1, REEVALUATION_2, REEVALUATION_2], /duplicated/],
+  ])('rejects %s', (_label, records, error) => {
+    expect(() => readCompatibleRunArtifacts(writeRun(CHECKPOINT, records))).toThrow(error);
+  });
+
+  it('rejects a generation that breaks the replayed piece-cap schedule', () => {
+    const bad = { ...GEN_1, maxPieces: 601, medianScore: 2_404 };
+    expect(() => readCompatibleRunArtifacts(
+      writeRun(CHECKPOINT, [GEN_0, bad, REEVALUATION_2]),
+    )).toThrow(/schedule|maxPieces/i);
+  });
+
+  it('rejects an extra generation record key', () => {
+    const bad = { ...GEN_0, extra: true };
+    expect(() => readCompatibleRunArtifacts(
+      writeRun(CHECKPOINT, [bad, GEN_1, REEVALUATION_2]),
+    )).toThrow(/generation.*schema/i);
+  });
+
+  it('rejects a changed published baseline in a later event', () => {
+    const checkpoint = { ...copy(CHECKPOINT), gen: 4, maxPieces: 2_000 };
+    const later = copy(REEVALUATION_4_KEEP);
+    later.publishedBaseline.meanHeight = 3.6;
+    expect(() => readCompatibleRunArtifacts(writeRun(
+      checkpoint,
+      [GEN_0, GEN_1, REEVALUATION_2, GEN_2, GEN_3, later],
+    ))).toThrow(/publishedBaseline.*changed|baseline/i);
+  });
+
+  it('rejects currentQualified that differs from replayed qualification state', () => {
+    const checkpoint = { ...copy(CHECKPOINT), gen: 4, maxPieces: 2_000 };
+    const later = copy(REEVALUATION_4_KEEP);
+    later.currentQualified.meanHeight = 3.2;
+    expect(() => readCompatibleRunArtifacts(writeRun(
+      checkpoint,
+      [GEN_0, GEN_1, REEVALUATION_2, GEN_2, GEN_3, later],
+    ))).toThrow(/currentQualified/i);
+  });
+
+  it('rejects qualification fields or decisions that do not reproduce', () => {
+    const event = copy(REEVALUATION_2);
+    event.qualification.decision = 'keep-current';
+    expect(() => readCompatibleRunArtifacts(
+      writeRun(CHECKPOINT, [GEN_0, GEN_1, event]),
+    )).toThrow(/qualification.*decision/i);
+  });
+
+  it.each([
+    ['reevaluation', (event: Record<string, unknown>) => { event.extra = true; }],
+    ['schedule', (event: Record<string, unknown>) => {
+      (event.schedule as Record<string, unknown>).extra = true;
+    }],
+    ['evaluation', (event: Record<string, unknown>) => {
+      (event.candidate as Record<string, unknown>).extra = true;
+    }],
+    ['strategy', (event: Record<string, unknown>) => {
+      const candidate = event.candidate as Record<string, unknown>;
+      (candidate.strategyDiagnostics as Record<string, unknown>).extra = true;
+    }],
+    ['survival', (event: Record<string, unknown>) => {
+      const candidate = event.candidate as Record<string, unknown>;
+      (candidate.survivalDiagnostics as Record<string, unknown>).extra = true;
+    }],
+    ['qualification', (event: Record<string, unknown>) => {
+      (event.qualification as Record<string, unknown>).extra = true;
+    }],
+  ])('rejects an extra %s key', (_label, mutate) => {
+    const event = copy(REEVALUATION_2) as unknown as Record<string, unknown>;
+    mutate(event);
+    expect(() => readCompatibleRunArtifacts(
+      writeRun(CHECKPOINT, [GEN_0, GEN_1, event]),
+    )).toThrow(/schema/i);
+  });
+
+  it('rejects checkpoint fields that differ from final replay state', () => {
+    const checkpoint = copy(CHECKPOINT);
+    checkpoint.bestQualifiedCandidate.meanHeight = 3.3;
+    expect(() => readCompatibleRunArtifacts(
+      writeRun(checkpoint, [GEN_0, GEN_1, REEVALUATION_2]),
+    )).toThrow(/bestQualifiedCandidate/i);
+  });
+
+  it('accepts a version-4 candidate file exactly matching bestQualifiedCandidate', () => {
+    expect(() => readCompatibleRunArtifacts(
+      writeRun(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2], CANDIDATE_FILE),
+    )).not.toThrow();
+  });
+
+  it('rejects a legacy candidate file', () => {
+    const legacy = { ...CANDIDATE_FILE, version: 3, objective: 'score-rate-v2' };
+    expect(() => readCompatibleRunArtifacts(
+      writeRun(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2], legacy),
+    )).toThrow(/candidate.*version 4/i);
+  });
+
+  it('rejects a candidate file that differs from bestQualifiedCandidate', () => {
+    const candidate = { ...CANDIDATE_FILE, meanScore: 30_001 };
+    expect(() => readCompatibleRunArtifacts(
+      writeRun(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2], candidate),
+    )).toThrow(/candidate.*bestQualifiedCandidate/i);
+  });
+
+  it('forbids a candidate file before any candidate qualifies', () => {
+    const checkpoint = {
+      ...copy(CHECKPOINT),
+      gen: 1,
+      maxPieces: 600,
+      publishedBaseline: null,
+      bestQualifiedCandidate: null,
+    };
+    expect(() => readCompatibleRunArtifacts(
+      writeRun(checkpoint, [GEN_0], CANDIDATE_FILE),
+    )).toThrow(/candidate.*forbidden|qualified candidate/i);
+  });
+
+  it('rejects a truncated training log before replay', () => {
+    expect(() => readCompatibleRunArtifacts(
+      writeRun(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2], null, false),
+    )).toThrow(/truncated/i);
   });
 
   it('rejects a training log reached through a symbolic link', () => {
-    const { checkpoint, records } = validPublishedRun();
-    const paths = writeRun(checkpoint, records);
-    const target = join(paths.outputDir, 'training-log-target.jsonl');
+    const paths = writeRun(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2]);
+    const target = join(paths.outputDir, 'target.jsonl');
     renameSync(paths.log, target);
     symlinkSync(target, paths.log, 'file');
-
-    expect(() => readCompatibleRunArtifacts(paths)).toThrow(/symbolic|reparse|regular.*log/i);
-  });
-
-  it.each([
-    ['a missing log', (checkpoint: ReturnType<typeof validCheckpoint>) => {
-      const outputDir = temp();
-      const paths = resolveRunPaths(outputDir, '.');
-      writeFileSync(paths.checkpoint, JSON.stringify(checkpoint));
-      return paths;
-    }],
-    ['malformed JSON', (checkpoint: ReturnType<typeof validCheckpoint>) => {
-      const paths = writeRun(checkpoint, [validGeneration(0), validGeneration(1)]);
-      writeFileSync(paths.log, `${JSON.stringify(validGeneration(0))}\n{bad json}\n`);
-      return paths;
-    }],
-    ['a truncated final line', (checkpoint: ReturnType<typeof validCheckpoint>) =>
-      writeRun(checkpoint, [validGeneration(0), validGeneration(1)], false)],
-    ['a v1 objective', (checkpoint: ReturnType<typeof validCheckpoint>) =>
-      writeRun(checkpoint, [
-        { ...validGeneration(0), objective: 'score-rate-v1' },
-        { ...validGeneration(1), objective: 'score-rate-v1' },
-      ])],
-    ['mixed objectives', (checkpoint: ReturnType<typeof validCheckpoint>) =>
-      writeRun(checkpoint, [
-        validGeneration(0),
-        { ...validGeneration(1), objective: 'score-rate-v1' },
-      ])],
-    ['missing generation history', (checkpoint: ReturnType<typeof validCheckpoint>) =>
-      writeRun(checkpoint, [validGeneration(1)])],
-    ['duplicate generation history', (checkpoint: ReturnType<typeof validCheckpoint>) =>
-      writeRun(checkpoint, [validGeneration(0), validGeneration(0)])],
-    ['out-of-order generation history', (checkpoint: ReturnType<typeof validCheckpoint>) =>
-      writeRun(checkpoint, [validGeneration(1), validGeneration(0)])],
-    ['a generation schema violation', (checkpoint: ReturnType<typeof validCheckpoint>) =>
-      writeRun(checkpoint, [
-        validGeneration(0),
-        { ...validGeneration(1), bestWeights: Array(FEATURE_COUNT - 1).fill(0) },
-      ])],
-  ])('rejects %s', (_label, arrange) => {
-    expect(() => readCompatibleRunArtifacts(arrange(validCheckpoint())))
-      .toThrow(/training log|training-log|generation|objective|JSON|truncated/i);
-  });
-
-  it('rejects extra generations beyond checkpoint.gen', () => {
-    const checkpoint = validCheckpoint();
-    const paths = writeRun(checkpoint, [
-      validGeneration(0), validGeneration(1), validGeneration(2),
-    ]);
-
-    expect(() => readCompatibleRunArtifacts(paths)).toThrow(/checkpoint.*gen|generation/i);
-  });
-
-  it('accepts the complete reevaluation schema at every configured interval', () => {
-    const { checkpoint, records } = validPublishedRun();
-    const paths = writeRun(checkpoint, records);
-
-    expect(readCompatibleRunArtifacts(paths).gen).toBe(2);
-  });
-
-  it('accepts the published baseline generation sentinel on the first reevaluation', () => {
-    const { checkpoint, records } = validPublishedRun();
-    const paths = writeRun(checkpoint, records);
-
-    expect(readCompatibleRunArtifacts(paths).gen).toBe(2);
-  });
-
-  it('accepts a negative integer base seed consistently recorded in reevaluation', () => {
-    const { checkpoint, records, reevaluation } = validPublishedRun();
-    checkpoint.baseSeed = -7;
-    checkpoint.config.baseSeed = -7;
-    reevaluation.schedule.baseSeed = -7;
-    const paths = writeRun(checkpoint, records);
-
-    expect(readCompatibleRunArtifacts(paths).baseSeed).toBe(-7);
-  });
-
-  it('rejects missing reevaluation history', () => {
-    const checkpoint = validCheckpoint();
-    checkpoint.config.reevalEvery = 2;
-    const paths = writeRun(checkpoint, [validGeneration(0), validGeneration(1)]);
-
-    expect(() => readCompatibleRunArtifacts(paths)).toThrow(/reevaluation.*2/i);
-  });
-
-  it.each([
-    ['schedule', (entry: ReturnType<typeof validReevaluation>) => {
-      entry.schedule.games--;
-    }],
-    ['mean lines', (entry: ReturnType<typeof validReevaluation>) => {
-      entry.candidate.meanLines--;
-    }],
-    ['comparison', (entry: ReturnType<typeof validReevaluation>) => {
-      entry.comparison.scoreDelta++;
-    }],
-    ['decision', (entry: ReturnType<typeof validReevaluation>) => {
-      entry.comparison.decision = 'keep-current';
-    }],
-  ])('rejects a reevaluation with an inconsistent %s', (_label, mutate) => {
-    const { checkpoint, records, reevaluation } = validPublishedRun();
-    mutate(reevaluation);
-    const paths = writeRun(checkpoint, records);
-
-    expect(() => readCompatibleRunArtifacts(paths)).toThrow(/reevaluation/i);
-  });
-
-  it('rejects a first fixed reevaluation whose baseline generation is not -1', () => {
-    const { checkpoint, records, reevaluation } = validPublishedRun();
-    reevaluation.currentBest.gen = 1;
-
-    expect(() => readCompatibleRunArtifacts(writeRun(checkpoint, records)))
-      .toThrow(/baseline|currentBest|generation/i);
-  });
-
-  it('accepts a publish winner forwarded into a later keep-current reevaluation', () => {
-    const checkpoint = validCheckpoint();
-    checkpoint.gen = 4;
-    checkpoint.maxPieces = 2_000;
-    checkpoint.config.reevalEvery = 2;
-    const baseline = evaluated(-1, 25_000, 3.5);
-    const published = evaluated(2, 25_100, 3.4, axisVector(1));
-    const first = reevaluationRecord(2, baseline, published, 'publish', 'higher-score');
-    const laterCandidate = evaluated(4, 24_000, 3.3, axisVector(2));
-    const second = reevaluationRecord(
-      4, published, laterCandidate, 'keep-current', 'lower-score',
-    );
-    checkpoint.bestEver = checkpointBestEver(published, checkpoint);
-    const records = [
-      validGeneration(0, 300, 300),
-      validGeneration(1, 600, 600),
-      first,
-      validGeneration(2, 1_200, 1_200),
-      validGeneration(3, 2_000, 2_000),
-      second,
-    ];
-
-    expect(readCompatibleRunArtifacts(writeRun(checkpoint, records)).bestEver)
-      .toEqual(checkpoint.bestEver);
-  });
-
-  it('rejects a publish winner that is not forwarded to the next currentBest', () => {
-    const checkpoint = validCheckpoint();
-    checkpoint.gen = 4;
-    checkpoint.maxPieces = 2_000;
-    checkpoint.config.reevalEvery = 2;
-    const baseline = evaluated(-1, 25_000, 3.5);
-    const published = evaluated(2, 25_100, 3.4, axisVector(1));
-    const first = reevaluationRecord(2, baseline, published, 'publish', 'higher-score');
-    const laterCandidate = evaluated(4, 24_000, 3.3, axisVector(2));
-    const forgedSecond = reevaluationRecord(
-      4, baseline, laterCandidate, 'keep-current', 'lower-score',
-    );
-    checkpoint.bestEver = checkpointBestEver(published, checkpoint);
-    const records = [
-      validGeneration(0, 300, 300), validGeneration(1, 600, 600), first,
-      validGeneration(2, 1_200, 1_200), validGeneration(3, 2_000, 2_000), forgedSecond,
-    ];
-
-    expect(() => readCompatibleRunArtifacts(writeRun(checkpoint, records)))
-      .toThrow(/winner|currentBest|reevaluation/i);
-  });
-
-  it('rejects a keep-current loser forwarded as the next currentBest', () => {
-    const checkpoint = validCheckpoint();
-    checkpoint.gen = 4;
-    checkpoint.maxPieces = 2_000;
-    checkpoint.config.reevalEvery = 2;
-    const baseline = evaluated(-1, 25_000, 3.5);
-    const rejected = evaluated(2, 24_000, 3.4, axisVector(1));
-    const first = reevaluationRecord(2, baseline, rejected, 'keep-current', 'lower-score');
-    const laterCandidate = evaluated(4, 23_000, 3.3, axisVector(2));
-    const forgedSecond = reevaluationRecord(
-      4, rejected, laterCandidate, 'keep-current', 'lower-score',
-    );
-    checkpoint.bestEver = checkpointBestEver(baseline, checkpoint);
-    const records = [
-      validGeneration(0, 300, 300), validGeneration(1, 600, 600), first,
-      validGeneration(2, 1_200, 1_200), validGeneration(3, 2_000, 2_000), forgedSecond,
-    ];
-
-    expect(() => readCompatibleRunArtifacts(writeRun(checkpoint, records)))
-      .toThrow(/winner|currentBest|reevaluation/i);
-  });
-
-  it('rejects a checkpoint bestEver that differs from the replayed final winner', () => {
-    const { checkpoint, records } = validPublishedRun();
-    checkpoint.bestEver.weights = axisVector(2);
-
-    expect(() => readCompatibleRunArtifacts(writeRun(checkpoint, records)))
-      .toThrow(/bestEver|winner/i);
-  });
-
-  it('rejects null checkpoint bestEver after a fixed reevaluation', () => {
-    const { checkpoint, records } = validPublishedRun();
-    const staleCheckpoint = { ...checkpoint, bestEver: null };
-
-    expect(() => readCompatibleRunArtifacts(writeRun(staleCheckpoint, records)))
-      .toThrow(/bestEver|winner/i);
-  });
-
-  it('rejects non-null checkpoint bestEver when no fixed reevaluation was logged', () => {
-    const checkpoint = validCheckpoint();
-    const records = [validGeneration(0), validGeneration(1)];
-
-    expect(() => readCompatibleRunArtifacts(writeRun(checkpoint, records)))
-      .toThrow(/bestEver|reevaluation/i);
-  });
-
-  it('replays unchanged, doubled, and capped piece-cap transitions', () => {
-    const checkpoint = {
-      ...validCheckpoint(),
-      gen: 4,
-      maxPieces: 2_000,
-      bestEver: null,
-    };
-    const records = [
-      validGeneration(0, 300, 0),
-      validGeneration(1, 300, 300),
-      validGeneration(2, 600, 600),
-      validGeneration(3, 1_200, 1_200),
-    ];
-
-    expect(readCompatibleRunArtifacts(writeRun(checkpoint, records)).maxPieces).toBe(2_000);
-  });
-
-  it('rejects a generation cap that disagrees with replayed scheduling', () => {
-    const checkpoint = {
-      ...validCheckpoint(),
-      maxPieces: 600,
-      bestEver: null,
-    };
-    const records = [
-      validGeneration(0, 300, 0),
-      validGeneration(1, 301, 300),
-    ];
-
-    expect(() => readCompatibleRunArtifacts(writeRun(checkpoint, records)))
-      .toThrow(/maxPieces|piece cap|schedule/i);
-  });
-
-  it.each([
-    ['median score rate', (entry: ReturnType<typeof validGeneration>) => {
-      entry.medianScoreRate += 0.25;
-    }, /medianScoreRate|median score rate/i],
-    ['median pieces above the cap', (entry: ReturnType<typeof validGeneration>) => {
-      entry.medianPieces = entry.maxPieces + 1;
-    }, /medianPieces|piece cap|maxPieces/i],
-    ['elite pieces above the cap', (entry: ReturnType<typeof validGeneration>) => {
-      entry.elitePieces = entry.maxPieces + 1;
-    }, /elitePieces|piece cap|maxPieces/i],
-    ['best score rate below the mean', (entry: ReturnType<typeof validGeneration>) => {
-      entry.meanScoreRate = entry.bestScoreRate + 0.5;
-    }, /bestScoreRate|meanScoreRate|distribution/i],
-    ['best score rate below the median', (entry: ReturnType<typeof validGeneration>) => {
-      entry.medianScoreRate = entry.bestScoreRate + 0.5;
-      entry.medianScore = entry.medianScoreRate * entry.maxPieces;
-    }, /bestScoreRate|medianScoreRate|distribution/i],
-    ['mean score rate below the worst', (entry: ReturnType<typeof validGeneration>) => {
-      entry.meanScoreRate = entry.worstScoreRate - 0.5;
-    }, /meanScoreRate|worstScoreRate|distribution/i],
-    ['median score rate below the worst', (entry: ReturnType<typeof validGeneration>) => {
-      entry.medianScoreRate = entry.worstScoreRate - 0.5;
-      entry.medianScore = entry.medianScoreRate * entry.maxPieces;
-    }, /medianScoreRate|worstScoreRate|distribution/i],
-  ])('rejects impossible generation-derived data: %s', (_label, mutate, error) => {
-    const checkpoint = {
-      ...validCheckpoint(),
-      gen: 1,
-      maxPieces: 600,
-      bestEver: null,
-    };
-    const entry = validGeneration(0);
-    mutate(entry);
-
-    expect(() => readCompatibleRunArtifacts(writeRun(checkpoint, [entry])))
-      .toThrow(error);
-  });
-
-  it('rejects a checkpoint cap that disagrees with replayed scheduling', () => {
-    const checkpoint = {
-      ...validCheckpoint(),
-      gen: 1,
-      maxPieces: 301,
-      bestEver: null,
-    };
-    const records = [validGeneration(0, 300, 0)];
-
-    expect(() => readCompatibleRunArtifacts(writeRun(checkpoint, records)))
-      .toThrow(/checkpoint.*maxPieces|piece cap|schedule/i);
-  });
-
-  it('rejects a gen-0 checkpoint paired with an empty training log', () => {
-    const checkpoint = {
-      ...validCheckpoint(),
-      gen: 0,
-      maxPieces: DEFAULT_CONFIG.initialMaxPieces,
-      bestEver: null,
-    };
-    const outputDir = temp();
-    const paths = resolveRunPaths(outputDir, '.');
-    writeFileSync(paths.checkpoint, JSON.stringify(checkpoint));
-    writeFileSync(paths.log, '');
-
-    expect(() => readCompatibleRunArtifacts(paths)).toThrow(/empty|training log/i);
+    expect(() => readCompatibleRunArtifacts(paths)).toThrow(/symbolic|reparse|regular/i);
   });
 });
 
 describe('assertFreshRun', () => {
-  it('allows a non-existent output-directory tail', () => {
-    const paths = resolveRunPaths(temp(), 'nested/not-created');
-    expect(() => assertFreshRun(paths)).not.toThrow();
+  it('allows a missing or empty output directory', () => {
+    expect(() => assertFreshRun(resolveRunPaths(temp(), 'missing'))).not.toThrow();
+    expect(() => assertFreshRun(resolveRunPaths(temp(), '.'))).not.toThrow();
   });
 
-  it('allows an existing empty output directory', () => {
-    const paths = resolveRunPaths(temp(), '.');
-    expect(() => assertFreshRun(paths)).not.toThrow();
-  });
+  it.each(['checkpoint', 'log', 'candidate'] as const)(
+    'rejects an existing %s artifact',
+    (key) => {
+      const paths = resolveRunPaths(temp(), '.');
+      writeFileSync(paths[key], '');
+      expect(() => assertFreshRun(paths)).toThrow(/non-empty output directory|refusing/i);
+    },
+  );
 
-  it('rejects an existing checkpoint', () => {
+  it('does not alter rejected artifacts', () => {
     const paths = resolveRunPaths(temp(), '.');
-    writeFileSync(paths.checkpoint, '{}');
-    expect(() => assertFreshRun(paths)).toThrow(/checkpoint/);
-  });
-
-  it('rejects a non-empty existing log', () => {
-    const paths = resolveRunPaths(temp(), '.');
-    writeFileSync(paths.log, '{"gen":0}\n');
-    expect(() => assertFreshRun(paths)).toThrow(/training-log/);
-  });
-
-  it('rejects an empty existing log', () => {
-    const paths = resolveRunPaths(temp(), '.');
-    writeFileSync(paths.log, '');
-    expect(() => assertFreshRun(paths)).toThrow(/output directory|training-log/);
-  });
-
-  it('rejects any other leftover file', () => {
-    const paths = resolveRunPaths(temp(), '.');
-    writeFileSync(join(paths.outputDir, 'leftover.txt'), 'sentinel');
-    expect(() => assertFreshRun(paths)).toThrow(/output directory|leftover/);
+    writeFileSync(paths.candidate, 'sentinel');
+    expect(() => assertFreshRun(paths)).toThrow();
+    expect(readFileSync(paths.candidate, 'utf8')).toBe('sentinel');
   });
 });

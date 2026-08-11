@@ -9,6 +9,12 @@ const best: ReevaluationSummary = {
   meanHeight: 3,
   meanClearCounts: { singles: 2, doubles: 0, triples: 0, tetrises: 499 },
   tetrisLineShare: 1996 / 1998,
+  strategyDiagnostics: {
+    meanCleanWellDepth: 3,
+    meanTetrisSetupProgress: 2.5,
+    meanTetrisReadyRows: 1,
+  },
+  survivalDiagnostics: { pieceCapGames: 30, gameoverGames: 0 },
 };
 
 describe('planReevaluation', () => {
@@ -19,16 +25,14 @@ describe('planReevaluation', () => {
     expect(planReevaluation(null, published, candidate)).toEqual({
       weights: [published, candidate],
       baselineIndex: 0,
-      baselineGen: -1,
       candidateIndex: 1,
     });
   });
 
-  it('evaluates only the candidate after a compatible bestEver is restored', () => {
+  it('evaluates only the candidate after the published baseline is established', () => {
     expect(planReevaluation(best, published, candidate)).toEqual({
       weights: [candidate],
       baselineIndex: null,
-      baselineGen: null,
       candidateIndex: 0,
     });
   });

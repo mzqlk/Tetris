@@ -11,11 +11,13 @@ import {
 } from 'node:fs';
 import { resolve } from 'node:path';
 import { FEATURE_COUNT } from '../src/ai/features';
+import { parseWeightsFile, toVector } from '../src/ai/weights';
 import {
   totalLinesFromCounts,
   tetrisLineShare,
   type LineClearCounts,
 } from '../src/ai/lineClears';
+import type { StrategyDiagnostics, SurvivalDiagnostics } from '../src/ai/tetrisStrategy';
 import type { TrainConfig } from './config';
 import { nextMaxPieces } from './cem';
 import {
@@ -23,23 +25,21 @@ import {
   PUBLICATION_MAX_PIECES,
   SCORE_RATE_OBJECTIVE,
 } from './objective';
-import { evaluateScoreReevaluation, type ReevaluationSummary } from './publication';
+import {
+  evaluateTetrisCandidate,
+  type CandidateQualification,
+  type ReevaluationSummary,
+} from './publication';
 
-export interface ScoreRateBestEver {
+export interface ScoreRateEvaluation extends ReevaluationSummary {
   weights: number[];
-  meanScore: number;
-  scoreRate: number;
-  meanLines: number;
-  meanHeight: number;
-  meanClearCounts: LineClearCounts;
-  tetrisLineShare: number;
   gen: number;
   evalGames: number;
   evalMaxPieces: number;
 }
 
 export interface ScoreRateCheckpoint {
-  version: 3;
+  version: 4;
   objective: typeof SCORE_RATE_OBJECTIVE;
   gen: number;
   mu: number[];
@@ -47,21 +47,24 @@ export interface ScoreRateCheckpoint {
   baseSeed: number;
   maxPieces: number;
   config: TrainConfig;
-  bestEver: ScoreRateBestEver | null;
+  publishedBaseline: ScoreRateEvaluation | null;
+  bestQualifiedCandidate: ScoreRateEvaluation | null;
 }
 
 export interface RunPaths {
   outputDir: string;
   checkpoint: string;
   log: string;
+  candidate: string;
 }
 
 export function resolveRunPaths(root: string, requested: string | null): RunPaths {
-  const outputDir = resolve(root, requested ?? 'public/ai/score-rate-v2');
+  const outputDir = resolve(root, requested ?? 'public/ai/score-rate-v3');
   return {
     outputDir,
     checkpoint: resolve(outputDir, 'checkpoint.json'),
     log: resolve(outputDir, 'training-log.jsonl'),
+    candidate: resolve(outputDir, 'candidate-weights.json'),
   };
 }
 
@@ -189,19 +192,28 @@ function nonNegative(value: unknown, label: string): number {
   return number;
 }
 
+const CHECKPOINT_KEYS = [
+  'version', 'objective', 'gen', 'mu', 'sigma', 'baseSeed', 'maxPieces', 'config',
+  'publishedBaseline', 'bestQualifiedCandidate',
+] as const;
+const CONFIG_KEYS = [
+  'population', 'eliteFrac', 'gamesPerCandidate', 'depth', 'initialMaxPieces',
+  'maxPiecesCap', 'initialNoise', 'noiseDecay', 'noiseFloor', 'baseSeed', 'workers',
+  'reevalEvery', 'reevalGames', 'reevalMaxPieces',
+] as const;
 const LINE_CLEAR_COUNT_KEYS = ['singles', 'doubles', 'triples', 'tetrises'] as const;
+const STRATEGY_KEYS = [
+  'meanCleanWellDepth', 'meanTetrisSetupProgress', 'meanTetrisReadyRows',
+] as const;
+const SURVIVAL_KEYS = ['pieceCapGames', 'gameoverGames'] as const;
+const EVALUATION_KEYS = [
+  'gen', 'weights', 'meanScore', 'scoreRate', 'meanLines', 'meanHeight',
+  'meanClearCounts', 'tetrisLineShare', 'strategyDiagnostics', 'survivalDiagnostics',
+] as const;
 
 function lineClearCounts(value: unknown, label: string): LineClearCounts {
   const raw = record(value, label);
-  const keys = Object.keys(raw);
-  if (
-    keys.length !== LINE_CLEAR_COUNT_KEYS.length ||
-    LINE_CLEAR_COUNT_KEYS.some((key) => !Object.prototype.hasOwnProperty.call(raw, key))
-  ) {
-    throw new Error(
-      `checkpoint ${label} must contain exactly singles/doubles/triples/tetrises`,
-    );
-  }
+  exactKeys(raw, LINE_CLEAR_COUNT_KEYS, null, label);
   return {
     singles: nonNegative(raw.singles, `${label}.singles`),
     doubles: nonNegative(raw.doubles, `${label}.doubles`),
@@ -213,12 +225,13 @@ function lineClearCounts(value: unknown, label: string): LineClearCounts {
 function assertClose(actual: number, expected: number, label: string): void {
   const tolerance = 1e-12 * Math.max(1, Math.abs(expected));
   if (Math.abs(actual - expected) > tolerance) {
-    throw new Error(`checkpoint bestEver.${label} is inconsistent with its diagnostics`);
+    throw new Error(`checkpoint ${label} is inconsistent with its diagnostics`);
   }
 }
 
 function trainConfig(value: unknown): TrainConfig {
   const raw = record(value, 'config');
+  exactKeys(raw, CONFIG_KEYS, null, 'config');
   const depth = raw.depth;
   if (depth !== 1 && depth !== 2) {
     throw new Error('checkpoint config.depth must be 1 or 2');
@@ -257,38 +270,93 @@ function trainConfig(value: unknown): TrainConfig {
   return config;
 }
 
-function bestEver(value: unknown, config: TrainConfig): ScoreRateBestEver | null {
-  if (value === null) return null;
-  const raw = record(value, 'bestEver');
-  const weights = normalizedVector(raw.weights, 'bestEver.weights');
+function strategyDiagnostics(value: unknown, label: string): StrategyDiagnostics {
+  const raw = record(value, label);
+  exactKeys(raw, STRATEGY_KEYS, null, label);
+  const result = {
+    meanCleanWellDepth: nonNegative(raw.meanCleanWellDepth, `${label}.meanCleanWellDepth`),
+    meanTetrisSetupProgress: nonNegative(
+      raw.meanTetrisSetupProgress, `${label}.meanTetrisSetupProgress`,
+    ),
+    meanTetrisReadyRows: nonNegative(raw.meanTetrisReadyRows, `${label}.meanTetrisReadyRows`),
+  };
+  if (Object.values(result).some((entry) => entry > 4)) {
+    throw new Error(`checkpoint ${label} values must be at most 4`);
+  }
+  return result;
+}
 
-  const result: ScoreRateBestEver = {
+function survivalDiagnostics(
+  value: unknown,
+  label: string,
+  evalGames: number,
+): SurvivalDiagnostics {
+  const raw = record(value, label);
+  exactKeys(raw, SURVIVAL_KEYS, null, label);
+  const result = {
+    pieceCapGames: integer(raw.pieceCapGames, `${label}.pieceCapGames`, 0),
+    gameoverGames: integer(raw.gameoverGames, `${label}.gameoverGames`, 0),
+  };
+  if (
+    result.pieceCapGames > evalGames ||
+    result.gameoverGames > evalGames ||
+    result.pieceCapGames + result.gameoverGames > evalGames
+  ) {
+    throw new Error(`checkpoint ${label} exceeds evalGames`);
+  }
+  return result;
+}
+
+const CHECKPOINT_EVALUATION_KEYS = [
+  ...EVALUATION_KEYS, 'evalGames', 'evalMaxPieces',
+] as const;
+
+function scoreRateEvaluation(
+  value: unknown,
+  label: string,
+  config: TrainConfig,
+): ScoreRateEvaluation | null {
+  if (value === null) return null;
+  const raw = record(value, label);
+  exactKeys(raw, CHECKPOINT_EVALUATION_KEYS, null, label);
+  const weights = normalizedVector(raw.weights, `${label}.weights`);
+  const evalGames = positiveInteger(raw.evalGames, `${label}.evalGames`);
+  const evalMaxPieces = positiveInteger(raw.evalMaxPieces, `${label}.evalMaxPieces`);
+
+  const result: ScoreRateEvaluation = {
     weights,
-    meanScore: finite(raw.meanScore, 'bestEver.meanScore'),
-    scoreRate: finite(raw.scoreRate, 'bestEver.scoreRate'),
-    meanLines: finite(raw.meanLines, 'bestEver.meanLines'),
-    meanHeight: finite(raw.meanHeight, 'bestEver.meanHeight'),
-    meanClearCounts: lineClearCounts(raw.meanClearCounts, 'bestEver.meanClearCounts'),
-    tetrisLineShare: finite(raw.tetrisLineShare, 'bestEver.tetrisLineShare'),
-    gen: integer(raw.gen, 'bestEver.gen'),
-    evalGames: positiveInteger(raw.evalGames, 'bestEver.evalGames'),
-    evalMaxPieces: positiveInteger(raw.evalMaxPieces, 'bestEver.evalMaxPieces'),
+    meanScore: nonNegative(raw.meanScore, `${label}.meanScore`),
+    scoreRate: nonNegative(raw.scoreRate, `${label}.scoreRate`),
+    meanLines: nonNegative(raw.meanLines, `${label}.meanLines`),
+    meanHeight: nonNegative(raw.meanHeight, `${label}.meanHeight`),
+    meanClearCounts: lineClearCounts(raw.meanClearCounts, `${label}.meanClearCounts`),
+    tetrisLineShare: nonNegative(raw.tetrisLineShare, `${label}.tetrisLineShare`),
+    strategyDiagnostics: strategyDiagnostics(raw.strategyDiagnostics, `${label}.strategyDiagnostics`),
+    survivalDiagnostics: survivalDiagnostics(
+      raw.survivalDiagnostics, `${label}.survivalDiagnostics`, evalGames,
+    ),
+    gen: integer(raw.gen, `${label}.gen`, -1),
+    evalGames,
+    evalMaxPieces,
   };
 
   if (result.evalGames !== config.reevalGames || result.evalMaxPieces !== config.reevalMaxPieces) {
-    throw new Error('checkpoint bestEver uses an incompatible fixed publication schedule');
+    throw new Error(`checkpoint ${label} uses an incompatible fixed publication schedule`);
   }
-  assertClose(result.scoreRate, result.meanScore / result.evalMaxPieces, 'scoreRate');
+  assertClose(result.scoreRate, result.meanScore / result.evalMaxPieces, `${label}.scoreRate`);
   assertClose(
     result.meanLines,
     totalLinesFromCounts(result.meanClearCounts),
-    'meanLines',
+    `${label}.meanLines`,
   );
   assertClose(
     result.tetrisLineShare,
     tetrisLineShare(result.meanClearCounts),
-    'tetrisLineShare',
+    `${label}.tetrisLineShare`,
   );
+  if (result.tetrisLineShare > 1) {
+    throw new Error(`checkpoint ${label}.tetrisLineShare must be at most 1`);
+  }
   return result;
 }
 
@@ -304,9 +372,10 @@ export function readCompatibleCheckpoint(path: string): ScoreRateCheckpoint {
   if (objective !== SCORE_RATE_OBJECTIVE) {
     throw new Error(`checkpoint objective ${objective} is incompatible with ${SCORE_RATE_OBJECTIVE}`);
   }
-  if (checkpoint.version !== 3) {
-    throw new Error(`checkpoint schema ${String(checkpoint.version)} is incompatible with version 3`);
+  if (checkpoint.version !== 4) {
+    throw new Error(`checkpoint schema ${String(checkpoint.version)} is incompatible with version 4`);
   }
+  exactKeys(checkpoint, CHECKPOINT_KEYS, null, 'checkpoint');
 
   const config = trainConfig(checkpoint.config);
   const gen = integer(checkpoint.gen, 'gen', 0);
@@ -321,8 +390,24 @@ export function readCompatibleCheckpoint(path: string): ScoreRateCheckpoint {
     throw new Error('checkpoint maxPieces must not exceed config.maxPiecesCap');
   }
 
+  const publishedBaseline = scoreRateEvaluation(
+    checkpoint.publishedBaseline, 'publishedBaseline', config,
+  );
+  const bestQualifiedCandidate = scoreRateEvaluation(
+    checkpoint.bestQualifiedCandidate, 'bestQualifiedCandidate', config,
+  );
+  if (publishedBaseline !== null && publishedBaseline.gen !== -1) {
+    throw new Error('checkpoint publishedBaseline generation must be -1');
+  }
+  if (bestQualifiedCandidate !== null && bestQualifiedCandidate.gen < 1) {
+    throw new Error('checkpoint bestQualifiedCandidate generation must be >= 1');
+  }
+  if (bestQualifiedCandidate !== null && publishedBaseline === null) {
+    throw new Error('checkpoint bestQualifiedCandidate requires a publishedBaseline');
+  }
+
   return {
-    version: 3,
+    version: 4,
     objective: SCORE_RATE_OBJECTIVE,
     gen,
     mu,
@@ -330,7 +415,8 @@ export function readCompatibleCheckpoint(path: string): ScoreRateCheckpoint {
     baseSeed,
     maxPieces,
     config,
-    bestEver: bestEver(checkpoint.bestEver, config),
+    publishedBaseline,
+    bestQualifiedCandidate,
   };
 }
 
@@ -362,29 +448,16 @@ const GENERATION_KEYS = [
 ] as const;
 
 const REEVALUATION_KEYS = [
-  'objective', 'kind', 'gen', 'ts', 'schedule', 'currentBest', 'candidate', 'comparison',
+  'objective', 'kind', 'gen', 'ts', 'schedule', 'publishedBaseline',
+  'currentQualified', 'candidate', 'qualification',
 ] as const;
 const SCHEDULE_KEYS = [
   'games', 'maxPieces', 'depth', 'baseSeed', 'seedStrategy',
 ] as const;
-const EVALUATION_KEYS = [
-  'gen',
-  'weights',
-  'meanScore',
-  'scoreRate',
-  'meanLines',
-  'meanHeight',
-  'meanClearCounts',
-  'tetrisLineShare',
-] as const;
-const COMPARISON_KEYS = [
-  'scoreDelta',
-  'scoreRateDelta',
-  'relativeScoreDelta',
-  'scoreTolerance',
-  'heightDelta',
-  'decision',
-  'reason',
+const QUALIFICATION_KEYS = [
+  'shouldSave', 'reason', 'scoreTolerance', 'scoreQualified', 'tetrisQualified',
+  'survivalQualified', 'betterThanCurrent', 'scoreDelta', 'scoreRateDelta',
+  'tetrisLineShareDelta', 'pieceCapGamesDelta', 'decision',
 ] as const;
 
 function logError(line: number, message: string): Error {
@@ -401,7 +474,7 @@ function logRecord(value: unknown, line: number, label: string): Record<string, 
 function exactKeys(
   value: Record<string, unknown>,
   expected: readonly string[],
-  line: number,
+  line: number | null,
   label: string,
 ): void {
   const actual = Object.keys(value);
@@ -409,6 +482,9 @@ function exactKeys(
     actual.length !== expected.length ||
     expected.some((key) => !Object.prototype.hasOwnProperty.call(value, key))
   ) {
+    if (line === null) {
+      throw new Error(`checkpoint ${label} does not match the required schema`);
+    }
     throw logError(line, `${label} does not match the required schema`);
   }
 }
@@ -448,6 +524,11 @@ function logProportion(value: unknown, line: number, label: string): number {
   return result;
 }
 
+function logBoolean(value: unknown, line: number, label: string): boolean {
+  if (typeof value !== 'boolean') throw logError(line, `${label} must be a boolean`);
+  return value;
+}
+
 function logVector(value: unknown, line: number, label: string): number[] {
   if (!Array.isArray(value) || value.length !== FEATURE_COUNT) {
     throw logError(line, `${label} must contain exactly ${FEATURE_COUNT} numbers`);
@@ -480,6 +561,52 @@ function logLineClearCounts(value: unknown, line: number, label: string): LineCl
     triples: logNonNegative(raw.triples, line, `${label}.triples`),
     tetrises: logNonNegative(raw.tetrises, line, `${label}.tetrises`),
   };
+}
+
+function logStrategyDiagnostics(
+  value: unknown,
+  line: number,
+  label: string,
+): StrategyDiagnostics {
+  const raw = logRecord(value, line, label);
+  exactKeys(raw, STRATEGY_KEYS, line, label);
+  const result = {
+    meanCleanWellDepth: logNonNegative(
+      raw.meanCleanWellDepth, line, `${label}.meanCleanWellDepth`,
+    ),
+    meanTetrisSetupProgress: logNonNegative(
+      raw.meanTetrisSetupProgress, line, `${label}.meanTetrisSetupProgress`,
+    ),
+    meanTetrisReadyRows: logNonNegative(
+      raw.meanTetrisReadyRows, line, `${label}.meanTetrisReadyRows`,
+    ),
+  };
+  if (Object.values(result).some((entry) => entry > 4)) {
+    throw logError(line, `${label} values must be at most 4`);
+  }
+  return result;
+}
+
+function logSurvivalDiagnostics(
+  value: unknown,
+  line: number,
+  label: string,
+  evalGames: number,
+): SurvivalDiagnostics {
+  const raw = logRecord(value, line, label);
+  exactKeys(raw, SURVIVAL_KEYS, line, label);
+  const result = {
+    pieceCapGames: logInteger(raw.pieceCapGames, line, `${label}.pieceCapGames`),
+    gameoverGames: logInteger(raw.gameoverGames, line, `${label}.gameoverGames`),
+  };
+  if (
+    result.pieceCapGames > evalGames ||
+    result.gameoverGames > evalGames ||
+    result.pieceCapGames + result.gameoverGames > evalGames
+  ) {
+    throw logError(line, `${label} exceeds the reevaluation game count`);
+  }
+  return result;
 }
 
 function assertLogClose(
@@ -573,15 +700,13 @@ function validateGeneration(
   };
 }
 
-interface ValidatedLoggedEvaluation extends ReevaluationSummary {
-  gen: number;
-  weights: number[];
-}
+type ValidatedLoggedEvaluation = ScoreRateEvaluation;
 
 function validateLoggedEvaluation(
   value: unknown,
   line: number,
   label: string,
+  evalGames: number,
   maxPieces: number,
 ): ValidatedLoggedEvaluation {
   const raw = logRecord(value, line, label);
@@ -606,14 +731,23 @@ function validateLoggedEvaluation(
     meanHeight: logNonNegative(raw.meanHeight, line, `${label}.meanHeight`),
     meanClearCounts,
     tetrisLineShare: share,
+    strategyDiagnostics: logStrategyDiagnostics(
+      raw.strategyDiagnostics, line, `${label}.strategyDiagnostics`,
+    ),
+    survivalDiagnostics: logSurvivalDiagnostics(
+      raw.survivalDiagnostics, line, `${label}.survivalDiagnostics`, evalGames,
+    ),
+    evalGames,
+    evalMaxPieces: maxPieces,
   };
 }
 
 interface ValidatedReevaluation {
   gen: number;
-  currentBest: ValidatedLoggedEvaluation;
+  publishedBaseline: ValidatedLoggedEvaluation;
+  currentQualified: ValidatedLoggedEvaluation | null;
   candidate: ValidatedLoggedEvaluation;
-  shouldPublish: boolean;
+  qualification: CandidateQualification;
 }
 
 function validateReevaluation(
@@ -642,60 +776,116 @@ function validateReevaluation(
     throw logError(line, 'reevaluation schedule disagrees with the checkpoint');
   }
 
-  const currentBest = validateLoggedEvaluation(
-    raw.currentBest, line, 'reevaluation currentBest', maxPieces,
+  const publishedBaseline = validateLoggedEvaluation(
+    raw.publishedBaseline,
+    line,
+    'reevaluation publishedBaseline',
+    games,
+    maxPieces,
   );
+  const currentQualified = raw.currentQualified === null
+    ? null
+    : validateLoggedEvaluation(
+      raw.currentQualified,
+      line,
+      'reevaluation currentQualified',
+      games,
+      maxPieces,
+    );
   const candidate = validateLoggedEvaluation(
-    raw.candidate, line, 'reevaluation candidate', maxPieces,
+    raw.candidate, line, 'reevaluation candidate', games, maxPieces,
   );
-  if (candidate.gen !== gen || currentBest.gen > gen) {
+  if (
+    candidate.gen !== gen ||
+    publishedBaseline.gen !== -1 ||
+    (currentQualified !== null && (currentQualified.gen < 1 || currentQualified.gen > gen))
+  ) {
     throw logError(line, 'reevaluation generation metadata is inconsistent');
   }
 
-  const comparison = logRecord(raw.comparison, line, 'reevaluation comparison');
-  exactKeys(comparison, COMPARISON_KEYS, line, 'reevaluation comparison');
-  const decision = evaluateScoreReevaluation(candidate, currentBest);
-  const scoreDelta = candidate.meanScore - currentBest.meanScore;
-  const scale = Math.max(Math.abs(candidate.meanScore), Math.abs(currentBest.meanScore));
+  const qualification = logRecord(raw.qualification, line, 'reevaluation qualification');
+  exactKeys(qualification, QUALIFICATION_KEYS, line, 'reevaluation qualification');
+  const expected = evaluateTetrisCandidate(candidate, publishedBaseline, currentQualified);
+  const parsed: CandidateQualification = {
+    shouldSave: logBoolean(
+      qualification.shouldSave, line, 'reevaluation qualification.shouldSave',
+    ),
+    reason: qualification.reason as CandidateQualification['reason'],
+    scoreTolerance: logNonNegative(
+      qualification.scoreTolerance, line, 'reevaluation qualification.scoreTolerance',
+    ),
+    scoreQualified: logBoolean(
+      qualification.scoreQualified, line, 'reevaluation qualification.scoreQualified',
+    ),
+    tetrisQualified: logBoolean(
+      qualification.tetrisQualified, line, 'reevaluation qualification.tetrisQualified',
+    ),
+    survivalQualified: logBoolean(
+      qualification.survivalQualified, line, 'reevaluation qualification.survivalQualified',
+    ),
+    betterThanCurrent: logBoolean(
+      qualification.betterThanCurrent, line, 'reevaluation qualification.betterThanCurrent',
+    ),
+  };
+  for (const key of [
+    'shouldSave', 'reason', 'scoreQualified', 'tetrisQualified',
+    'survivalQualified', 'betterThanCurrent',
+  ] as const) {
+    if (parsed[key] !== expected[key]) {
+      throw logError(line, `reevaluation qualification.${key} is inconsistent`);
+    }
+  }
   assertLogClose(
-    logFinite(comparison.scoreDelta, line, 'reevaluation comparison.scoreDelta'),
-    scoreDelta,
+    parsed.scoreTolerance,
+    expected.scoreTolerance,
     line,
-    'reevaluation comparison.scoreDelta',
+    'reevaluation qualification.scoreTolerance',
   );
   assertLogClose(
-    logFinite(comparison.scoreRateDelta, line, 'reevaluation comparison.scoreRateDelta'),
-    candidate.scoreRate - currentBest.scoreRate,
+    logFinite(qualification.scoreDelta, line, 'reevaluation qualification.scoreDelta'),
+    candidate.meanScore - publishedBaseline.meanScore,
     line,
-    'reevaluation comparison.scoreRateDelta',
+    'reevaluation qualification.scoreDelta',
   );
   assertLogClose(
-    logFinite(comparison.relativeScoreDelta, line, 'reevaluation comparison.relativeScoreDelta'),
-    scale === 0 ? 0 : scoreDelta / scale,
+    logFinite(
+      qualification.scoreRateDelta, line, 'reevaluation qualification.scoreRateDelta',
+    ),
+    candidate.scoreRate - publishedBaseline.scoreRate,
     line,
-    'reevaluation comparison.relativeScoreDelta',
+    'reevaluation qualification.scoreRateDelta',
   );
   assertLogClose(
-    logNonNegative(comparison.scoreTolerance, line, 'reevaluation comparison.scoreTolerance'),
-    decision.scoreTolerance,
+    logFinite(
+      qualification.tetrisLineShareDelta,
+      line,
+      'reevaluation qualification.tetrisLineShareDelta',
+    ),
+    candidate.tetrisLineShare - publishedBaseline.tetrisLineShare,
     line,
-    'reevaluation comparison.scoreTolerance',
+    'reevaluation qualification.tetrisLineShareDelta',
   );
   assertLogClose(
-    logFinite(comparison.heightDelta, line, 'reevaluation comparison.heightDelta'),
-    candidate.meanHeight - currentBest.meanHeight,
+    logFinite(
+      qualification.pieceCapGamesDelta,
+      line,
+      'reevaluation qualification.pieceCapGamesDelta',
+    ),
+    candidate.survivalDiagnostics.pieceCapGames -
+      publishedBaseline.survivalDiagnostics.pieceCapGames,
     line,
-    'reevaluation comparison.heightDelta',
+    'reevaluation qualification.pieceCapGamesDelta',
   );
-  const expectedDecision = decision.shouldPublish ? 'publish' : 'keep-current';
-  if (comparison.decision !== expectedDecision || comparison.reason !== decision.reason) {
-    throw logError(line, 'reevaluation comparison decision is inconsistent');
+  const expectedDecision = expected.shouldSave ? 'save-candidate' : 'keep-current';
+  if (qualification.decision !== expectedDecision) {
+    throw logError(line, 'reevaluation qualification.decision is inconsistent');
   }
   return {
     gen,
-    currentBest,
+    publishedBaseline,
+    currentQualified,
     candidate,
-    shouldPublish: decision.shouldPublish,
+    qualification: parsed,
   };
 }
 
@@ -707,9 +897,23 @@ function sameClearCounts(left: LineClearCounts, right: LineClearCounts): boolean
   return LINE_CLEAR_COUNT_KEYS.every((key) => left[key] === right[key]);
 }
 
+function sameStrategyDiagnostics(
+  left: StrategyDiagnostics,
+  right: StrategyDiagnostics,
+): boolean {
+  return STRATEGY_KEYS.every((key) => left[key] === right[key]);
+}
+
+function sameSurvivalDiagnostics(
+  left: SurvivalDiagnostics,
+  right: SurvivalDiagnostics,
+): boolean {
+  return SURVIVAL_KEYS.every((key) => left[key] === right[key]);
+}
+
 function sameEvaluation(
-  left: ValidatedLoggedEvaluation,
-  right: ValidatedLoggedEvaluation | ScoreRateBestEver,
+  left: ScoreRateEvaluation,
+  right: ScoreRateEvaluation,
 ): boolean {
   return (
     left.gen === right.gen &&
@@ -719,29 +923,78 @@ function sameEvaluation(
     left.meanLines === right.meanLines &&
     left.meanHeight === right.meanHeight &&
     sameClearCounts(left.meanClearCounts, right.meanClearCounts) &&
-    left.tetrisLineShare === right.tetrisLineShare
+    left.tetrisLineShare === right.tetrisLineShare &&
+    sameStrategyDiagnostics(left.strategyDiagnostics, right.strategyDiagnostics) &&
+    sameSurvivalDiagnostics(left.survivalDiagnostics, right.survivalDiagnostics) &&
+    left.evalGames === right.evalGames &&
+    left.evalMaxPieces === right.evalMaxPieces
   );
 }
 
-function toBestEver(
-  evaluation: ValidatedLoggedEvaluation,
-  checkpoint: ScoreRateCheckpoint,
-): ScoreRateBestEver {
+function cloneEvaluation(evaluation: ScoreRateEvaluation): ScoreRateEvaluation {
   return {
     ...evaluation,
     weights: evaluation.weights.slice(),
     meanClearCounts: { ...evaluation.meanClearCounts },
-    evalGames: checkpoint.config.reevalGames,
-    evalMaxPieces: checkpoint.config.reevalMaxPieces,
+    strategyDiagnostics: { ...evaluation.strategyDiagnostics },
+    survivalDiagnostics: { ...evaluation.survivalDiagnostics },
   };
 }
 
-function sameBestEver(left: ScoreRateBestEver, right: ScoreRateBestEver): boolean {
-  return (
-    sameEvaluation(left, right) &&
-    left.evalGames === right.evalGames &&
-    left.evalMaxPieces === right.evalMaxPieces
-  );
+function pathEntryExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+function readCandidateEvaluation(
+  path: string,
+  checkpoint: ScoreRateCheckpoint,
+): ScoreRateEvaluation {
+  let value: unknown;
+  try {
+    value = JSON.parse(readRegularArtifact(path, 'candidate weights'));
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error(`candidate weights at ${path} contain invalid JSON`);
+    }
+    throw error;
+  }
+  const parsed = parseWeightsFile(value);
+  if (
+    parsed === null ||
+    parsed.version !== 4 ||
+    parsed.objective !== SCORE_RATE_OBJECTIVE ||
+    parsed.meanScore === null ||
+    parsed.evalMaxPieces === null ||
+    parsed.meanClearCounts === null ||
+    parsed.tetrisLineShare === null ||
+    parsed.strategyDiagnostics === null ||
+    parsed.survivalDiagnostics === null
+  ) {
+    throw new Error('candidate weights must be a valid score-rate-v3 version 4 file');
+  }
+  if (parsed.searchDepth !== checkpoint.config.depth) {
+    throw new Error('candidate weights searchDepth disagrees with checkpoint config');
+  }
+  return {
+    weights: toVector(parsed.weights),
+    meanScore: parsed.meanScore,
+    scoreRate: parsed.meanScore / parsed.evalMaxPieces,
+    meanLines: parsed.meanLines,
+    meanHeight: parsed.meanHeight,
+    meanClearCounts: { ...parsed.meanClearCounts },
+    tetrisLineShare: parsed.tetrisLineShare,
+    strategyDiagnostics: { ...parsed.strategyDiagnostics },
+    survivalDiagnostics: { ...parsed.survivalDiagnostics },
+    evalGames: parsed.evalGames,
+    evalMaxPieces: parsed.evalMaxPieces,
+    gen: parsed.gen,
+  };
 }
 
 export function readCompatibleRunArtifacts(paths: RunPaths): ScoreRateCheckpoint {
@@ -757,7 +1010,8 @@ export function readCompatibleRunArtifacts(paths: RunPaths): ScoreRateCheckpoint
   const generations: number[] = [];
   const reevaluations = new Set<number>();
   let expectedMaxPieces = checkpoint.config.initialMaxPieces;
-  let replayedWinner: ScoreRateBestEver | null = null;
+  let replayedBaseline: ScoreRateEvaluation | null = null;
+  let replayedQualified: ScoreRateEvaluation | null = null;
 
   lines.forEach((source, index) => {
     const line = index + 1;
@@ -783,27 +1037,36 @@ export function readCompatibleRunArtifacts(paths: RunPaths): ScoreRateCheckpoint
           `reevaluation generation ${reevaluation.gen} is missing history or duplicated`,
         );
       }
-      if (replayedWinner === null) {
-        if (reevaluation.currentBest.gen !== -1) {
-          throw logError(line, 'first reevaluation currentBest must be the generation -1 baseline');
-        }
-      } else if (!sameEvaluation(reevaluation.currentBest, replayedWinner)) {
-        throw logError(line, 'reevaluation currentBest does not match the prior winner');
+      if (replayedBaseline === null) {
+        replayedBaseline = cloneEvaluation(reevaluation.publishedBaseline);
+      } else if (!sameEvaluation(reevaluation.publishedBaseline, replayedBaseline)) {
+        throw logError(line, 'reevaluation publishedBaseline changed after it was established');
       }
-      const winner = reevaluation.shouldPublish
-        ? reevaluation.candidate
-        : reevaluation.currentBest;
-      replayedWinner = toBestEver(winner, checkpoint);
+      if (
+        (replayedQualified === null && reevaluation.currentQualified !== null) ||
+        (replayedQualified !== null && (
+          reevaluation.currentQualified === null ||
+          !sameEvaluation(reevaluation.currentQualified, replayedQualified)
+        ))
+      ) {
+        throw logError(
+          line,
+          'reevaluation currentQualified does not match the replayed qualified candidate',
+        );
+      }
+      if (reevaluation.qualification.shouldSave) {
+        replayedQualified = cloneEvaluation(reevaluation.candidate);
+      }
       reevaluations.add(reevaluation.gen);
       return;
     }
-    const generation = validateGeneration(raw, line, checkpoint, expectedMaxPieces);
-    if (generation.gen !== generations.length) {
+    if (raw.gen !== generations.length) {
       throw logError(
         line,
-        `generation history must be continuous from 0; expected ${generations.length}, got ${generation.gen}`,
+        `generation history must be continuous from 0; expected ${generations.length}, got ${String(raw.gen)}`,
       );
     }
+    const generation = validateGeneration(raw, line, checkpoint, expectedMaxPieces);
     generations.push(generation.gen);
     expectedMaxPieces = generation.nextMaxPieces;
   });
@@ -830,15 +1093,32 @@ export function readCompatibleRunArtifacts(paths: RunPaths): ScoreRateCheckpoint
       `checkpoint maxPieces ${checkpoint.maxPieces} disagrees with replayed schedule ${expectedMaxPieces}`,
     );
   }
-  if (replayedWinner === null) {
-    if (checkpoint.bestEver !== null) {
-      throw new Error('checkpoint bestEver must be null when no reevaluation history exists');
-    }
-  } else if (
-    checkpoint.bestEver === null ||
-    !sameBestEver(replayedWinner, checkpoint.bestEver)
+  if (
+    (replayedBaseline === null && checkpoint.publishedBaseline !== null) ||
+    (replayedBaseline !== null && (
+      checkpoint.publishedBaseline === null ||
+      !sameEvaluation(replayedBaseline, checkpoint.publishedBaseline)
+    ))
   ) {
-    throw new Error('checkpoint bestEver does not match the final reevaluation winner');
+    throw new Error('checkpoint publishedBaseline does not match reevaluation replay');
+  }
+  if (
+    (replayedQualified === null && checkpoint.bestQualifiedCandidate !== null) ||
+    (replayedQualified !== null && (
+      checkpoint.bestQualifiedCandidate === null ||
+      !sameEvaluation(replayedQualified, checkpoint.bestQualifiedCandidate)
+    ))
+  ) {
+    throw new Error('checkpoint bestQualifiedCandidate does not match reevaluation replay');
+  }
+  if (pathEntryExists(paths.candidate)) {
+    if (checkpoint.bestQualifiedCandidate === null) {
+      throw new Error('candidate weights file is forbidden without a qualified candidate');
+    }
+    const candidate = readCandidateEvaluation(paths.candidate, checkpoint);
+    if (!sameEvaluation(candidate, checkpoint.bestQualifiedCandidate)) {
+      throw new Error('candidate weights file does not match bestQualifiedCandidate');
+    }
   }
   return checkpoint;
 }

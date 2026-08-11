@@ -3,14 +3,12 @@ import type { ReevaluationSummary } from './publication';
 interface FreshBaselineReevaluationPlan {
   weights: number[][];
   baselineIndex: 0;
-  baselineGen: -1;
   candidateIndex: 1;
 }
 
 interface ExistingBaselineReevaluationPlan {
   weights: number[][];
   baselineIndex: null;
-  baselineGen: null;
   candidateIndex: 0;
 }
 
@@ -19,22 +17,11 @@ export type ReevaluationPlan =
   | ExistingBaselineReevaluationPlan;
 
 export function planReevaluation(
-  bestEver: ReevaluationSummary | null,
+  publishedBaseline: ReevaluationSummary | null,
   publishedWeights: number[],
   candidateWeights: number[],
 ): ReevaluationPlan {
-  if (bestEver === null) {
-    return {
-      weights: [publishedWeights, candidateWeights],
-      baselineIndex: 0,
-      baselineGen: -1,
-      candidateIndex: 1,
-    };
-  }
-  return {
-    weights: [candidateWeights],
-    baselineIndex: null,
-    baselineGen: null,
-    candidateIndex: 0,
-  };
+  return publishedBaseline === null
+    ? { weights: [publishedWeights, candidateWeights], baselineIndex: 0, candidateIndex: 1 }
+    : { weights: [candidateWeights], baselineIndex: null, candidateIndex: 0 };
 }
