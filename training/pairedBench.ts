@@ -24,24 +24,36 @@ export function parsePairedBenchArgs(argv: string[]): PairedBenchArgs {
   let candidate: string | undefined;
   let seed: number | undefined;
 
-  for (let index = 0; index < argv.length; index += 2) {
+  for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
-    const value = argv[index + 1];
-    if (value === undefined) throw new Error(`missing value for ${flag}`);
 
     switch (flag) {
-      case '--baseline':
+      case '--baseline': {
+        if (baseline !== undefined) throw new Error('duplicate --baseline');
+        const value = requireArgValue(argv, index, flag);
         baseline = value;
+        index += 1;
         break;
-      case '--candidate':
+      }
+      case '--candidate': {
+        if (candidate !== undefined) throw new Error('duplicate --candidate');
+        const value = requireArgValue(argv, index, flag);
         candidate = value;
+        index += 1;
         break;
+      }
       case '--seed': {
+        if (seed !== undefined) throw new Error('duplicate --seed');
+        const value = requireArgValue(argv, index, flag);
+        if (!/^[+-]?\d+$/.test(value)) {
+          throw new Error(`--seed expects integer text, got "${value}"`);
+        }
         const parsed = Number(value);
         if (!Number.isSafeInteger(parsed)) {
-          throw new Error(`--seed expects an integer, got "${value}"`);
+          throw new Error(`--seed expects a safe integer, got "${value}"`);
         }
         seed = parsed;
+        index += 1;
         break;
       }
       default:
@@ -53,6 +65,14 @@ export function parsePairedBenchArgs(argv: string[]): PairedBenchArgs {
   if (candidate === undefined) throw new Error('missing required --candidate');
   if (seed === undefined) throw new Error('missing required --seed');
   return { baseline, candidate, seed };
+}
+
+function requireArgValue(argv: string[], flagIndex: number, flag: string): string {
+  const value = argv[flagIndex + 1];
+  if (value === undefined || value.trim() === '' || value.startsWith('--')) {
+    throw new Error(`missing value for ${flag}`);
+  }
+  return value;
 }
 
 function readWeightsFile(filePath: string, label: string): WeightsFile {

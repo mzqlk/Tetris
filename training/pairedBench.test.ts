@@ -24,6 +24,38 @@ describe('parsePairedBenchArgs', () => {
       '--baseline', 'a.json', '--candidate', 'b.json', '--games', '5',
     ])).toThrow(/unknown flag/);
   });
+
+  it.each([
+    ['baseline', ['--baseline', 'a.json', '--baseline', 'b.json', '--candidate', 'c.json', '--seed', '1']],
+    ['candidate', ['--baseline', 'a.json', '--candidate', 'b.json', '--candidate', 'c.json', '--seed', '1']],
+    ['seed', ['--baseline', 'a.json', '--candidate', 'b.json', '--seed', '1', '--seed', '2']],
+  ])('rejects a duplicate %s flag', (_flag, argv) => {
+    expect(() => parsePairedBenchArgs(argv)).toThrow(/duplicate/);
+  });
+
+  it('rejects a flag token where a baseline path is required', () => {
+    expect(() => parsePairedBenchArgs([
+      '--baseline', '--candidate', 'candidate.json', '--seed', '1',
+    ])).toThrow(/missing value for --baseline/);
+  });
+
+  it.each(['', '   '])('rejects an empty seed value %j', (seed) => {
+    expect(() => parsePairedBenchArgs([
+      '--baseline', 'baseline.json', '--candidate', 'candidate.json', '--seed', seed,
+    ])).toThrow(/missing value for --seed/);
+  });
+
+  it('rejects a seed that is not integer text', () => {
+    expect(() => parsePairedBenchArgs([
+      '--baseline', 'baseline.json', '--candidate', 'candidate.json', '--seed', '1e3',
+    ])).toThrow(/integer/);
+  });
+
+  it('rejects an unsafe integer seed', () => {
+    expect(() => parsePairedBenchArgs([
+      '--baseline', 'baseline.json', '--candidate', 'candidate.json', '--seed', '9007199254740992',
+    ])).toThrow(/safe integer/);
+  });
 });
 
 describe('pairedBench module', () => {
