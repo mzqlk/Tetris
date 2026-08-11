@@ -17,7 +17,7 @@ const result = (overrides: Partial<{
   meanHeight: number;
   clearCounts: LineClearCounts;
   strategyDiagnostics: StrategyDiagnostics;
-  reason: 'gameover' | 'pieceCap';
+  reason: 'gameover' | 'pieceCap' | 'error';
 }> = {}) => {
   const lines = overrides.lines ?? 0;
   return {
@@ -304,6 +304,15 @@ describe('aggregateFitness', () => {
     }]);
     expect(stats.survivalDiagnostics).toEqual([{ pieceCapGames: 1, gameoverGames: 1 }]);
     expect(stats.fitness).toEqual([3]);
+  });
+
+  it('accepts error results without counting them as survival outcomes', () => {
+    const stats = aggregateFitness([
+      result({ reason: 'error' }),
+    ], 1, 1, 300);
+
+    expect(stats.survivalDiagnostics).toEqual([{ pieceCapGames: 0, gameoverGames: 0 }]);
+    expect(stats.fitness).toEqual([0]);
   });
 
   it('rejects a worker result whose line total disagrees with its histogram', () => {

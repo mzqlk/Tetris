@@ -8,7 +8,7 @@ import {
 } from '../src/ai/lineClears';
 import type { StrategyDiagnostics } from '../src/ai/tetrisStrategy';
 
-interface BenchResult {
+export interface BenchResult {
   score: number;
   lines: number;
   pieces: number;

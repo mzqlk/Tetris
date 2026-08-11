@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { formatLineClearCounts, summarizeBench } from './benchSummary';
+import { formatLineClearCounts, summarizeBench, type BenchResult } from './benchSummary';
 
 describe('summarizeBench', () => {
-  const games = [
+  const games: BenchResult[] = [
     {
       score: 900, lines: 20, pieces: 300, meanHeight: 4, reason: 'pieceCap',
       clearCounts: { singles: 0, doubles: 0, triples: 0, tetrises: 5 },

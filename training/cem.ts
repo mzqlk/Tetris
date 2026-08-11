@@ -139,7 +139,7 @@ export function aggregateFitness(
     meanHeight: number;
     clearCounts: LineClearCounts;
     strategyDiagnostics: StrategyDiagnostics;
-    reason: 'gameover' | 'pieceCap';
+    reason: 'gameover' | 'pieceCap' | 'error';
   }[],
   population: number,
   gamesPerCandidate: number,
