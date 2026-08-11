@@ -379,7 +379,7 @@ describe('readCompatibleCheckpoint', () => {
 describe('readCompatibleRunArtifacts', () => {
   it('replays continuous generations, the immutable baseline, and save-candidate', () => {
     const result = readCompatibleRunArtifacts(
-      writeRun(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2]),
+      writeRun(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2], CANDIDATE_FILE),
     );
     expect(result.publishedBaseline).toEqual(BASELINE);
     expect(result.bestQualifiedCandidate).toEqual(CANDIDATE_2);
@@ -392,7 +392,7 @@ describe('readCompatibleRunArtifacts', () => {
       maxPieces: 2_000,
     };
     const records = [GEN_0, GEN_1, REEVALUATION_2, GEN_2, GEN_3, REEVALUATION_4_KEEP];
-    expect(readCompatibleRunArtifacts(writeRun(checkpoint, records)).bestQualifiedCandidate)
+    expect(readCompatibleRunArtifacts(writeRun(checkpoint, records, CANDIDATE_FILE)).bestQualifiedCandidate)
       .toEqual(CANDIDATE_2);
   });
 
@@ -488,6 +488,12 @@ describe('readCompatibleRunArtifacts', () => {
     )).not.toThrow();
   });
 
+  it('requires a candidate file when bestQualifiedCandidate exists', () => {
+    expect(() => readCompatibleRunArtifacts(
+      writeRun(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2]),
+    )).toThrow(/candidate.*required|missing.*candidate|qualified candidate/i);
+  });
+
   it('rejects a legacy candidate file', () => {
     const legacy = { ...CANDIDATE_FILE, version: 3, objective: 'score-rate-v2' };
     expect(() => readCompatibleRunArtifacts(
@@ -500,6 +506,20 @@ describe('readCompatibleRunArtifacts', () => {
     expect(() => readCompatibleRunArtifacts(
       writeRun(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2], candidate),
     )).toThrow(/candidate.*bestQualifiedCandidate/i);
+  });
+
+  it('rejects an extra candidate top-level key', () => {
+    const candidate = { ...CANDIDATE_FILE, extra: true };
+    expect(() => readCompatibleRunArtifacts(
+      writeRun(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2], candidate),
+    )).toThrow(/candidate.*schema|extra/i);
+  });
+
+  it('rejects candidate searchDepth that differs from checkpoint depth', () => {
+    const candidate = { ...CANDIDATE_FILE, searchDepth: 1 };
+    expect(() => readCompatibleRunArtifacts(
+      writeRun(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2], candidate),
+    )).toThrow(/candidate.*searchDepth.*checkpoint/i);
   });
 
   it('forbids a candidate file before any candidate qualifies', () => {

@@ -93,4 +93,15 @@ describe('writeCandidateWeights', () => {
     expect(() => writeCandidateWeights(path, invalid)).toThrow(/version 4|candidate/i);
     expect(existsSync(path)).toBe(false);
   });
+
+  it('rejects an extra top-level key before creating a file', () => {
+    const path = join(temp(), 'candidate.json');
+    const invalid = {
+      ...buildCandidateWeights(evaluation, 2, '2026-08-11T00:00:00.000Z'),
+      extra: true,
+    };
+
+    expect(() => writeCandidateWeights(path, invalid)).toThrow(/candidate.*schema|extra/i);
+    expect(existsSync(path)).toBe(false);
+  });
 });

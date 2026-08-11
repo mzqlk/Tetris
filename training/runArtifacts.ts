@@ -11,7 +11,7 @@ import {
 } from 'node:fs';
 import { resolve } from 'node:path';
 import { FEATURE_COUNT } from '../src/ai/features';
-import { parseWeightsFile, toVector } from '../src/ai/weights';
+import { toVector } from '../src/ai/weights';
 import {
   totalLinesFromCounts,
   tetrisLineShare,
@@ -19,6 +19,7 @@ import {
 } from '../src/ai/lineClears';
 import type { StrategyDiagnostics, SurvivalDiagnostics } from '../src/ai/tetrisStrategy';
 import type { TrainConfig } from './config';
+import { parseCandidateWeights } from './candidateWeights';
 import { nextMaxPieces } from './cem';
 import {
   PUBLICATION_GAMES,
@@ -964,19 +965,9 @@ function readCandidateEvaluation(
     }
     throw error;
   }
-  const parsed = parseWeightsFile(value);
-  if (
-    parsed === null ||
-    parsed.version !== 4 ||
-    parsed.objective !== SCORE_RATE_OBJECTIVE ||
-    parsed.meanScore === null ||
-    parsed.evalMaxPieces === null ||
-    parsed.meanClearCounts === null ||
-    parsed.tetrisLineShare === null ||
-    parsed.strategyDiagnostics === null ||
-    parsed.survivalDiagnostics === null
-  ) {
-    throw new Error('candidate weights must be a valid score-rate-v3 version 4 file');
+  const parsed = parseCandidateWeights(value);
+  if (parsed === null) {
+    throw new Error('candidate weights must match the exact score-rate-v3 version 4 schema');
   }
   if (parsed.searchDepth !== checkpoint.config.depth) {
     throw new Error('candidate weights searchDepth disagrees with checkpoint config');
@@ -1111,10 +1102,15 @@ export function readCompatibleRunArtifacts(paths: RunPaths): ScoreRateCheckpoint
   ) {
     throw new Error('checkpoint bestQualifiedCandidate does not match reevaluation replay');
   }
-  if (pathEntryExists(paths.candidate)) {
-    if (checkpoint.bestQualifiedCandidate === null) {
+  const candidateExists = pathEntryExists(paths.candidate);
+  const candidateRequired = checkpoint.bestQualifiedCandidate !== null;
+  if (candidateExists !== candidateRequired) {
+    if (!candidateRequired) {
       throw new Error('candidate weights file is forbidden without a qualified candidate');
     }
+    throw new Error('candidate weights file is required for a qualified candidate');
+  }
+  if (candidateExists && checkpoint.bestQualifiedCandidate !== null) {
     const candidate = readCandidateEvaluation(paths.candidate, checkpoint);
     if (!sameEvaluation(candidate, checkpoint.bestQualifiedCandidate)) {
       throw new Error('candidate weights file does not match bestQualifiedCandidate');
