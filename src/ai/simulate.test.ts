@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createSimState, applyAction, simulateGame, type SimAction } from './simulate';
 import { mulberry32 } from './rng';
-import { toVector, DEFAULT_WEIGHTS, HANDCRAFTED_WEIGHTS } from './weights';
+import {
+  toVector, DEFAULT_WEIGHTS, DEFAULT_WEIGHTS_META, HANDCRAFTED_WEIGHTS,
+} from './weights';
 import { useGameStore } from '../store/gameStore';
 import { FEATURE_COUNT, columnHeights } from './features';
 import { totalLinesFromCounts } from './lineClears';
@@ -289,6 +291,10 @@ describe('simulateGame', () => {
     [11, { lines: 23, score: 5100, pieces: 60, meanHeight: 3.933333333333333 }],
     [20260806, { lines: 22, score: 4300, pieces: 60, meanHeight: 3.8333333333333335 }],
   ])('keeps the bundled default model deterministic for seed %i', (seed, expected) => {
+    expect(DEFAULT_WEIGHTS.cleanWellDepth).toBe(0);
+    expect(DEFAULT_WEIGHTS.tetrisSetupProgress).toBe(0);
+    expect(DEFAULT_WEIGHTS.tetrisReadyRows).toBe(0);
+    expect(DEFAULT_WEIGHTS_META).toMatchObject({ version: 3, objective: 'score-rate-v2', gen: 40 });
     const result = simulateGame({
       weights: toVector(DEFAULT_WEIGHTS), seed, maxPieces: 60, depth: 2,
     });

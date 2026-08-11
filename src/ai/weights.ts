@@ -1,12 +1,16 @@
 import {
-  LEGACY_FEATURE_NAMES, FEATURE_NAMES, FEATURE_COUNT, type FeatureName,
+  LEGACY_FEATURE_NAMES, SCORE_RATE_V2_FEATURE_NAMES, FEATURE_NAMES, FEATURE_COUNT,
+  type FeatureName,
 } from './features';
 import {
   totalLinesFromCounts,
   tetrisLineShare as calculateTetrisLineShare,
   type LineClearCounts,
 } from './lineClears';
-import { LEGACY_SCORE_RATE_OBJECTIVE, SCORE_RATE_OBJECTIVE } from './trainingObjective';
+import type { StrategyDiagnostics, SurvivalDiagnostics } from './tetrisStrategy';
+import {
+  LEGACY_SCORE_RATE_OBJECTIVE, SCORE_RATE_V2_OBJECTIVE, SCORE_RATE_OBJECTIVE,
+} from './trainingObjective';
 import trainedWeightsJson from './trained-weights.json';
 
 export type Weights = Record<FeatureName, number>;
@@ -26,6 +30,8 @@ export interface WeightsFile {
   gen: number;
   searchDepth: 1 | 2;
   trainedAt: string;
+  strategyDiagnostics: StrategyDiagnostics | null;
+  survivalDiagnostics: SurvivalDiagnostics | null;
 }
 
 export function toVector(w: Weights): number[] {
@@ -115,6 +121,106 @@ function isoTimestamp(value: unknown): string | null {
     : null;
 }
 
+interface ScoreMetadata {
+  meanScore: number;
+  evalMaxPieces: number;
+  meanLines: number;
+  meanHeight: number;
+  meanClearCounts: LineClearCounts;
+  tetrisLineShare: number;
+  evalGames: number;
+  gen: number;
+  searchDepth: 1 | 2;
+  trainedAt: string;
+}
+
+function parseScoreMetadata(d: Record<string, unknown>): ScoreMetadata | null {
+  const meanScore = nonNegativeFinite(d.meanScore);
+  const evalMaxPieces = integerAtLeast(d.evalMaxPieces, 1);
+  const meanLines = nonNegativeFinite(d.meanLines);
+  const meanHeight = nonNegativeFinite(d.meanHeight);
+  const meanClearCounts = parseLineClearCounts(d.meanClearCounts);
+  const tetrisLineShare = nonNegativeFinite(d.tetrisLineShare);
+  const evalGames = integerAtLeast(d.evalGames, 1);
+  const gen = integerAtLeast(d.gen, -1);
+  const searchDepth = d.searchDepth === 1 || d.searchDepth === 2 ? d.searchDepth : null;
+  const trainedAt = isoTimestamp(d.trainedAt);
+  if (
+    meanScore === null ||
+    evalMaxPieces === null ||
+    meanLines === null ||
+    meanHeight === null ||
+    meanClearCounts === null ||
+    tetrisLineShare === null ||
+    evalGames === null ||
+    gen === null ||
+    searchDepth === null ||
+    trainedAt === null
+  ) return null;
+
+  let expectedMeanLines: number;
+  let expectedTetrisLineShare: number;
+  try {
+    expectedMeanLines = totalLinesFromCounts(meanClearCounts);
+    expectedTetrisLineShare = calculateTetrisLineShare(meanClearCounts);
+  } catch {
+    return null;
+  }
+  if (!closeEnough(meanLines, expectedMeanLines)) return null;
+  if (!closeEnough(tetrisLineShare, expectedTetrisLineShare)) return null;
+  return {
+    meanScore,
+    evalMaxPieces,
+    meanLines,
+    meanHeight,
+    meanClearCounts,
+    tetrisLineShare,
+    evalGames,
+    gen,
+    searchDepth,
+    trainedAt,
+  };
+}
+
+function parseStrategyDiagnostics(value: unknown): StrategyDiagnostics | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const keys = [
+    'meanCleanWellDepth', 'meanTetrisSetupProgress', 'meanTetrisReadyRows',
+  ] as const;
+  if (
+    Object.keys(raw).length !== keys.length ||
+    keys.some((key) => !Object.prototype.hasOwnProperty.call(raw, key))
+  ) return null;
+  const values = keys.map((key) => raw[key]);
+  if (values.some((entry) => typeof entry !== 'number' || !Number.isFinite(entry) || entry < 0 || entry > 4)) {
+    return null;
+  }
+  return {
+    meanCleanWellDepth: values[0] as number,
+    meanTetrisSetupProgress: values[1] as number,
+    meanTetrisReadyRows: values[2] as number,
+  };
+}
+
+function parseSurvivalDiagnostics(value: unknown, evalGames: number): SurvivalDiagnostics | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const keys = ['pieceCapGames', 'gameoverGames'] as const;
+  if (
+    Object.keys(raw).length !== keys.length ||
+    keys.some((key) => !Object.prototype.hasOwnProperty.call(raw, key))
+  ) return null;
+  const pieceCapGames = integerAtLeast(raw.pieceCapGames, 0);
+  const gameoverGames = integerAtLeast(raw.gameoverGames, 0);
+  if (
+    pieceCapGames === null || gameoverGames === null ||
+    pieceCapGames > evalGames || gameoverGames > evalGames ||
+    pieceCapGames + gameoverGames > evalGames
+  ) return null;
+  return { pieceCapGames, gameoverGames };
+}
+
 /**
  * Validate an untrusted weights file. Returns null rather than throwing so the
  * browser and the dashboard can quietly fall back to the built-in weights.
@@ -132,77 +238,37 @@ export function parseWeightsFile(data: unknown): WeightsFile | null {
   const objective = typeof d.objective === 'string' ? d.objective : null;
 
   let weights: Weights;
-  let currentMetadata: {
-    meanScore: number;
-    evalMaxPieces: number;
-    meanLines: number;
-    meanHeight: number;
-    meanClearCounts: LineClearCounts;
-    tetrisLineShare: number;
-    evalGames: number;
-    gen: number;
-    searchDepth: 1 | 2;
-    trainedAt: string;
-  } | null = null;
+  let currentMetadata: ScoreMetadata | null = null;
+  let strategyDiagnostics: StrategyDiagnostics | null = null;
+  let survivalDiagnostics: SurvivalDiagnostics | null = null;
+  const zeroV3 = {
+    cleanWellDepth: 0,
+    tetrisSetupProgress: 0,
+    tetrisReadyRows: 0,
+  } as const;
   if (version === 1 && !objectiveDeclared) {
     const legacy = parseExactWeights(raw, LEGACY_FEATURE_NAMES);
     if (legacy === null) return null;
-    weights = { ...legacy, lineClearValue: 0 } as Weights;
+    weights = { ...legacy, lineClearValue: 0, ...zeroV3 } as Weights;
   } else if (version === 2 && objective === LEGACY_SCORE_RATE_OBJECTIVE) {
     const legacy = parseExactWeights(raw, LEGACY_FEATURE_NAMES);
     if (legacy === null) return null;
-    weights = { ...legacy, lineClearValue: 0 } as Weights;
-  } else if (version === 3 && objective === SCORE_RATE_OBJECTIVE) {
+    weights = { ...legacy, lineClearValue: 0, ...zeroV3 } as Weights;
+  } else if (version === 3 && objective === SCORE_RATE_V2_OBJECTIVE) {
+    const v2 = parseExactWeights(raw, SCORE_RATE_V2_FEATURE_NAMES);
+    if (v2 === null) return null;
+    weights = { ...v2, ...zeroV3 } as Weights;
+    currentMetadata = parseScoreMetadata(d);
+    if (currentMetadata === null) return null;
+  } else if (version === 4 && objective === SCORE_RATE_OBJECTIVE) {
     const current = parseExactWeights(raw, FEATURE_NAMES);
     if (current === null) return null;
     weights = current as Weights;
-
-    const meanScore = nonNegativeFinite(d.meanScore);
-    const evalMaxPieces = integerAtLeast(d.evalMaxPieces, 1);
-    const meanLines = nonNegativeFinite(d.meanLines);
-    const meanHeight = nonNegativeFinite(d.meanHeight);
-    const meanClearCounts = parseLineClearCounts(d.meanClearCounts);
-    const parsedTetrisLineShare = nonNegativeFinite(d.tetrisLineShare);
-    const evalGames = integerAtLeast(d.evalGames, 1);
-    const gen = integerAtLeast(d.gen, -1);
-    const searchDepth = d.searchDepth === 1 || d.searchDepth === 2
-      ? d.searchDepth
-      : null;
-    const trainedAt = isoTimestamp(d.trainedAt);
-    if (
-      meanScore === null ||
-      evalMaxPieces === null ||
-      meanLines === null ||
-      meanHeight === null ||
-      meanClearCounts === null ||
-      parsedTetrisLineShare === null ||
-      evalGames === null ||
-      gen === null ||
-      searchDepth === null ||
-      trainedAt === null
-    ) return null;
-    let expectedMeanLines: number;
-    let expectedTetrisLineShare: number;
-    try {
-      expectedMeanLines = totalLinesFromCounts(meanClearCounts);
-      expectedTetrisLineShare = calculateTetrisLineShare(meanClearCounts);
-    } catch {
-      return null;
-    }
-    if (!closeEnough(meanLines, expectedMeanLines)) return null;
-    if (!closeEnough(parsedTetrisLineShare, expectedTetrisLineShare)) return null;
-    currentMetadata = {
-      meanScore,
-      evalMaxPieces,
-      meanLines,
-      meanHeight,
-      meanClearCounts,
-      tetrisLineShare: parsedTetrisLineShare,
-      evalGames,
-      gen,
-      searchDepth,
-      trainedAt,
-    };
+    currentMetadata = parseScoreMetadata(d);
+    if (currentMetadata === null) return null;
+    strategyDiagnostics = parseStrategyDiagnostics(d.strategyDiagnostics);
+    survivalDiagnostics = parseSurvivalDiagnostics(d.survivalDiagnostics, currentMetadata.evalGames);
+    if (strategyDiagnostics === null || survivalDiagnostics === null) return null;
   } else {
     return null;
   }
@@ -226,12 +292,14 @@ export function parseWeightsFile(data: unknown): WeightsFile | null {
     gen: currentMetadata?.gen ?? num(d.gen, 0),
     searchDepth: currentMetadata?.searchDepth ?? (d.searchDepth === 1 ? 1 : 2),
     trainedAt: currentMetadata?.trainedAt ?? (typeof d.trainedAt === 'string' ? d.trainedAt : ''),
+    strategyDiagnostics,
+    survivalDiagnostics,
   };
 }
 
 /** Dellacherie-style priors. Used until training produces something better. */
 export const HANDCRAFTED_WEIGHTS: Weights = fromVector(
-  normalize([-0.3, -0.6, -0.2, -0.1, 0.25, -0.35, -0.3, -0.4, -0.2, 0]),
+  normalize([-0.3, -0.6, -0.2, -0.1, 0.25, -0.35, -0.3, -0.4, -0.2, 0, 0, 0, 0]),
 );
 
 const trained = parseWeightsFile(trainedWeightsJson);

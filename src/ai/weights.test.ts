@@ -3,11 +3,14 @@ import {
   toVector, fromVector, normalize, parseWeightsFile,
   HANDCRAFTED_WEIGHTS, DEFAULT_WEIGHTS, type Weights,
 } from './weights';
-import { LEGACY_FEATURE_NAMES, FEATURE_NAMES, FEATURE_COUNT } from './features';
+import {
+  LEGACY_FEATURE_NAMES, SCORE_RATE_V2_FEATURE_NAMES, FEATURE_NAMES, FEATURE_COUNT,
+} from './features';
 
 const sample: Weights = {
   aggregateHeight: -1, holes: -2, bumpiness: -3, maxHeight: -4, linesCleared: 5,
   landingHeight: -6, rowTransitions: -7, colTransitions: -8, wellDepth: -9, lineClearValue: -10,
+  cleanWellDepth: 0, tetrisSetupProgress: 0, tetrisReadyRows: 0,
 };
 
 const l2 = (v: number[]) => Math.sqrt(v.reduce((s, x) => s + x * x, 0));
@@ -18,7 +21,7 @@ describe('toVector / fromVector', () => {
   });
 
   it('orders the vector by FEATURE_NAMES', () => {
-    expect(toVector(sample)).toEqual([-1, -2, -3, -4, 5, -6, -7, -8, -9, -10]);
+    expect(toVector(sample)).toEqual([-1, -2, -3, -4, 5, -6, -7, -8, -9, -10, 0, 0, 0]);
   });
 
   it('rejects a vector of the wrong length', () => {
@@ -71,7 +74,7 @@ describe('parseWeightsFile', () => {
   const v2File = {
     version: 3,
     objective: 'score-rate-v2',
-    weights: Object.fromEntries(FEATURE_NAMES.map((name, index) => [name, index])),
+    weights: Object.fromEntries(SCORE_RATE_V2_FEATURE_NAMES.map((name, index) => [name, index])),
     meanScore: 123456,
     evalMaxPieces: 5000,
     meanLines: 16,
@@ -82,6 +85,35 @@ describe('parseWeightsFile', () => {
     gen: 1,
     searchDepth: 2,
     trainedAt: '2026-08-06T00:00:00.000Z',
+  };
+
+  const v3File = {
+    version: 3,
+    objective: 'score-rate-v2',
+    weights: Object.fromEntries(SCORE_RATE_V2_FEATURE_NAMES.map((name, index) => [name, index])),
+    meanScore: 3_289_243.3333333335,
+    evalMaxPieces: 5000,
+    meanLines: 1998,
+    meanHeight: 4,
+    meanClearCounts: { singles: 1456, doubles: 265, triples: 4, tetrises: 0 },
+    tetrisLineShare: 0,
+    evalGames: 30,
+    gen: 40,
+    searchDepth: 2,
+    trainedAt: '2026-08-10T12:21:46.191Z',
+  };
+
+  const v4File = {
+    ...v3File,
+    version: 4,
+    objective: 'score-rate-v3',
+    weights: Object.fromEntries(FEATURE_NAMES.map((name, index) => [name, index / 13])),
+    strategyDiagnostics: {
+      meanCleanWellDepth: 3,
+      meanTetrisSetupProgress: 2.5,
+      meanTetrisReadyRows: 1,
+    },
+    survivalDiagnostics: { pieceCapGames: 30, gameoverGames: 0 },
   };
 
   it('accepts a complete file', () => {
@@ -129,6 +161,29 @@ describe('parseWeightsFile', () => {
       searchDepth: 2,
       trainedAt: '2026-08-06T00:00:00.000Z',
     });
+  });
+
+  it('zero-extends score-rate-v2 weights without rewriting metadata', () => {
+    const parsed = parseWeightsFile(v3File)!;
+    expect(parsed.objective).toBe('score-rate-v2');
+    expect(parsed.weights.cleanWellDepth).toBe(0);
+    expect(parsed.weights.tetrisSetupProgress).toBe(0);
+    expect(parsed.weights.tetrisReadyRows).toBe(0);
+    expect(Object.keys(parsed.weights)).toEqual([...FEATURE_NAMES]);
+  });
+
+  it('requires exact version-4 strategy and survival metadata', () => {
+    expect(parseWeightsFile(v4File)).toMatchObject({
+      version: 4,
+      objective: 'score-rate-v3',
+      strategyDiagnostics: v4File.strategyDiagnostics,
+      survivalDiagnostics: v4File.survivalDiagnostics,
+    });
+    expect(parseWeightsFile({ ...v4File, strategyDiagnostics: null })).toBeNull();
+    expect(parseWeightsFile({
+      ...v4File,
+      survivalDiagnostics: { pieceCapGames: 31, gameoverGames: 0 },
+    })).toBeNull();
   });
 
   it.each([
