@@ -38,6 +38,7 @@ const W = toVector(HANDCRAFTED_WEIGHTS);
 const ZERO_MOVE_WEIGHTS = fromVector([
   0, 0, 0, -1, 0,
   0, 0, 0, 0, 0,
+  0, 0, 0,
 ]);
 const ORIGINAL_ACTIONS = (() => {
   const store = useGameStore.getState();
