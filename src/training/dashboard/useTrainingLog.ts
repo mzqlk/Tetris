@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { SCORE_RATE_OBJECTIVE } from '../../ai/trainingObjective';
+import type { StrategyDiagnostics } from '../../ai/tetrisStrategy';
 import type { LogEntry } from './types';
 
-export const LOG_URL = '/ai/score-rate-v2/training-log.jsonl';
+export const LOG_URL = '/ai/score-rate-v3/training-log.jsonl';
 
 /** Without these a line is meaningless, so it is dropped. */
 const NUMBER_FIELDS = [
@@ -16,6 +17,17 @@ const ARRAY_FIELDS = ['mu', 'sigma', 'bestWeights'] as const;
 
 const num = (value: unknown, fallback: number): number =>
   typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+
+const strategy = (value: unknown): StrategyDiagnostics => {
+  const raw = typeof value === 'object' && value !== null
+    ? value as Record<string, unknown>
+    : {};
+  return {
+    meanCleanWellDepth: num(raw.meanCleanWellDepth, 0),
+    meanTetrisSetupProgress: num(raw.meanTetrisSetupProgress, 0),
+    meanTetrisReadyRows: num(raw.meanTetrisReadyRows, 0),
+  };
+};
 
 /**
  * The trainer appends to this file while we read it, so a truncated final line
@@ -65,6 +77,9 @@ export function parseLog(text: string): LogEntry[] {
       bestTetrisLineShare: num(e.bestTetrisLineShare, 0),
       medianTetrisLineShare: num(e.medianTetrisLineShare, 0),
       eliteTetrisLineShare: num(e.eliteTetrisLineShare, 0),
+      bestStrategyDiagnostics: strategy(e.bestStrategyDiagnostics),
+      medianStrategyDiagnostics: strategy(e.medianStrategyDiagnostics),
+      eliteStrategyDiagnostics: strategy(e.eliteStrategyDiagnostics),
       gamesPerCandidate: num(e.gamesPerCandidate, 0),
       elapsedMs: num(e.elapsedMs, 0),
     });

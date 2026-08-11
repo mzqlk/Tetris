@@ -8,6 +8,10 @@ describe('SERIES_COLORS', () => {
     expect(new Set(SERIES_COLORS).size).toBe(FEATURE_NAMES.length);
   });
 
+  it('appends the v3 strategy feature colours', () => {
+    expect(SERIES_COLORS.slice(-3)).toEqual(['#24a0a8', '#b36ae2', '#8f9d2a']);
+  });
+
   it('are all valid hex colours', () => {
     for (const c of SERIES_COLORS) expect(c).toMatch(/^#[0-9a-f]{6}$/i);
   });

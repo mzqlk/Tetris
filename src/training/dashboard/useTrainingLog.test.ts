@@ -3,7 +3,7 @@ import { FEATURE_COUNT } from '../../ai/features';
 import { LOG_URL, parseLog } from './useTrainingLog';
 
 const line = (gen: number) => JSON.stringify({
-  objective: 'score-rate-v2',
+  objective: 'score-rate-v3',
   gen,
   ts: 1785000000000 + gen,
   bestScoreRate: 125.5 + gen,
@@ -25,13 +25,28 @@ const line = (gen: number) => JSON.stringify({
   bestTetrisLineShare: 0.25,
   medianTetrisLineShare: 0.1,
   eliteTetrisLineShare: 0.2,
+  bestStrategyDiagnostics: {
+    meanCleanWellDepth: 4,
+    meanTetrisSetupProgress: 3,
+    meanTetrisReadyRows: 2,
+  },
+  medianStrategyDiagnostics: {
+    meanCleanWellDepth: 3,
+    meanTetrisSetupProgress: 2,
+    meanTetrisReadyRows: 1,
+  },
+  eliteStrategyDiagnostics: {
+    meanCleanWellDepth: 5,
+    meanTetrisSetupProgress: 4,
+    meanTetrisReadyRows: 3,
+  },
   gamesPerCandidate: 5,
   elapsedMs: 1000,
 });
 
 describe('parseLog', () => {
-  it('uses the score-rate-v2 log URL', () => {
-    expect(LOG_URL).toBe('/ai/score-rate-v2/training-log.jsonl');
+  it('uses the score-rate-v3 log URL', () => {
+    expect(LOG_URL).toBe('/ai/score-rate-v3/training-log.jsonl');
   });
 
   it('parses one entry per line', () => {
@@ -44,7 +59,7 @@ describe('parseLog', () => {
   it('parses score-rate fields used by the dashboard', () => {
     const [entry] = parseLog(line(0));
     expect(entry).toMatchObject({
-      objective: 'score-rate-v2',
+      objective: 'score-rate-v3',
       bestScoreRate: 125.5,
       medianScoreRate: 75,
       medianScore: 22500,
@@ -53,12 +68,27 @@ describe('parseLog', () => {
       bestTetrisLineShare: 0.25,
       medianTetrisLineShare: 0.1,
       eliteTetrisLineShare: 0.2,
+      bestStrategyDiagnostics: {
+        meanCleanWellDepth: 4,
+        meanTetrisSetupProgress: 3,
+        meanTetrisReadyRows: 2,
+      },
+      medianStrategyDiagnostics: {
+        meanCleanWellDepth: 3,
+        meanTetrisSetupProgress: 2,
+        meanTetrisReadyRows: 1,
+      },
+      eliteStrategyDiagnostics: {
+        meanCleanWellDepth: 5,
+        meanTetrisSetupProgress: 4,
+        meanTetrisReadyRows: 3,
+      },
     });
   });
 
-  it('ignores a score-rate-v1 generation line', () => {
+  it('ignores a score-rate-v2 generation line', () => {
     const legacy = JSON.parse(line(0));
-    legacy.objective = 'score-rate-v1';
+    legacy.objective = 'score-rate-v2';
     expect(parseLog(`${JSON.stringify(legacy)}\n${line(1)}`)).toHaveLength(1);
     expect(parseLog(`${JSON.stringify(legacy)}\n${line(1)}`)[0].gen).toBe(1);
   });
@@ -80,7 +110,7 @@ describe('parseLog', () => {
 
   it('ignores reevaluation events between generation records', () => {
     const reevaluation = JSON.stringify({
-      objective: 'score-rate-v2',
+      objective: 'score-rate-v3',
       kind: 'reevaluation',
       gen: 10,
       ts: 1785000000010,
@@ -110,6 +140,9 @@ describe('parseLog', () => {
     delete parsed.bestTetrisLineShare;
     delete parsed.medianTetrisLineShare;
     delete parsed.eliteTetrisLineShare;
+    delete parsed.bestStrategyDiagnostics;
+    delete parsed.medianStrategyDiagnostics;
+    delete parsed.eliteStrategyDiagnostics;
 
     const entries = parseLog(JSON.stringify(parsed));
     expect(entries).toHaveLength(1);
@@ -123,6 +156,21 @@ describe('parseLog', () => {
     expect(entries[0].bestTetrisLineShare).toBe(0);
     expect(entries[0].medianTetrisLineShare).toBe(0);
     expect(entries[0].eliteTetrisLineShare).toBe(0);
+    expect(entries[0].bestStrategyDiagnostics).toEqual({
+      meanCleanWellDepth: 0,
+      meanTetrisSetupProgress: 0,
+      meanTetrisReadyRows: 0,
+    });
+    expect(entries[0].medianStrategyDiagnostics).toEqual({
+      meanCleanWellDepth: 0,
+      meanTetrisSetupProgress: 0,
+      meanTetrisReadyRows: 0,
+    });
+    expect(entries[0].eliteStrategyDiagnostics).toEqual({
+      meanCleanWellDepth: 0,
+      meanTetrisSetupProgress: 0,
+      meanTetrisReadyRows: 0,
+    });
     expect(() => entries[0].maxPieces.toLocaleString()).not.toThrow();
   });
 
