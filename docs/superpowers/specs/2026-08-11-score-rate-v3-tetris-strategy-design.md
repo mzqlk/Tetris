@@ -1,13 +1,15 @@
 # score-rate-v3 稳定四消策略设计
 
 **日期：** 2026-08-11
-**状态：** 已批准设计，尚未实施
+**状态：** 已批准设计，代码契约已实施；训练、验收与发布尚未发生
 **当前发布基线：** gen-40 `score-rate-v2`、10 维特征、depth 2
-**新训练契约：** `score-rate-v3`、13 维特征、权重/checkpoint schema version 4
+**当前代码/训练器契约：** `score-rate-v3`、13 维特征、权重/checkpoint schema version 4
+
+本次状态更新只关闭代码实现与代码门，不构成模型接受：没有运行训练、benchmark 或 paired benchmark，没有产出 `candidate-weights.json`，没有完成候选验收或发布，也没有进行浏览器/runtime 验收。当前已发布模型仍是 gen-40 score-rate-v2；加载时只在内存中为三个 v3 尾维补 `0`，不改写发布文件。
 
 ## 1. 背景与现场证据
 
-截至 2026-08-11，Git HEAD 为 `99a796a feat(ai): publish gen-40 score-rate-v2 weights`。tracked bundled 权重 `src/ai/trained-weights.json` 与 runtime 权重 `public/ai/best-weights.json` 的 SHA-256 同为 `062552496E7E1101502E62B8570DFDAF2A60B54EF4FEF1EA539723B910550D90`。
+设计冻结时，Git HEAD 为 `99a796a feat(ai): publish gen-40 score-rate-v2 weights`。当时 tracked bundled 权重 `src/ai/trained-weights.json` 与 runtime 权重 `public/ai/best-weights.json` 的 SHA-256 同为 `062552496E7E1101502E62B8570DFDAF2A60B54EF4FEF1EA539723B910550D90`；该历史快照不替代每次交付或运行前的现场哈希核验。
 
 gen-40 在固定 30 局 × 5000 pieces、depth 2 复评中，相对 gen-20 基线：
 
@@ -166,7 +168,7 @@ interface SurvivalDiagnostics {
 
 ### 8.1 代码门
 
-先完成纯函数、特征、搜索兼容、schema、checkpoint、日志和 dashboard 回归。只有完整代码门通过后，才能单独申请运行授权。
+纯函数、特征、搜索兼容、schema、checkpoint、日志、candidate 边界、paired CLI 和 dashboard 回归已经实现。Task 10 的 fresh focused/full gate 结果记录在独立执行报告中；即使完整代码门通过，也只能单独申请运行授权，不能据此宣称训练信号、候选质量或模型接受。
 
 ### 8.2 两代隔离信号短跑
 
@@ -196,6 +198,8 @@ interface SurvivalDiagnostics {
 ### 8.4 独立 paired 验收与发布
 
 qualified candidate 使用与 gen-40 相同的独立 seeds、depth 2 和 5000-piece cap 逐局配对。验收必须同时通过第 2.1 节四项门槛。固定复评只负责筛出候选，不能替代独立 paired 置信区间。
+
+`npm run bench:paired -- --baseline <published> --candidate <qualified>` CLI 已实现；本次 code-only 交付没有运行它。命令存在只证明验收工具入口存在，不证明任何候选通过 paired 门。
 
 通过验收后仍需单独获得发布授权，才能把经过验收的同一份候选同步到 runtime 与 bundled 权重；提交、push 和运行时/browser 验收继续是独立边界。
 
@@ -243,7 +247,7 @@ qualified candidate 使用与 gen-40 相同的独立 seeds、depth 2 和 5000-pi
 - qualified candidate 与 published baseline 分离；
 - 损坏产物在任何写入和 worker 创建之前失败。
 
-实现后的验证顺序为：最短相关单测、完整 `npm test`、`npm run build`、`npm run typecheck:train`。训练和 benchmark 不属于代码验证命令，不随实现自动运行。
+实现后的验证顺序为：最短相关单测、完整 `npm test`、`npm run lint`、`npm run build`、`npm run typecheck:train`，每项单独运行并读取退出码。训练、benchmark 和 paired benchmark 不属于代码验证命令，不随实现自动运行。
 
 ## 11. 文档与交付边界
 
@@ -253,6 +257,9 @@ qualified candidate 使用与 gen-40 相同的独立 seeds、depth 2 和 5000-pi
 - gen-40 固定复评得到更高 score rate；
 - gen-40 尚未形成稳定四消；
 - 当前未找到 gen-40 独立 paired benchmark；
-- `score-rate-v3` 只是已批准设计，实施、训练、验收和发布均未发生。
+- `score-rate-v3` 代码/训练器契约已实施为 13 维、schema 4，默认新轮次路径为 `public/ai/score-rate-v3/`；
+- 训练器只在固定复评资格门通过后写 run-local `candidate-weights.json`，不会自动发布；
+- 两代信号门、20% 最终四消门与独立 paired 门仍彼此独立；
+- paired CLI 已实现但未运行；训练、benchmark、candidate 产出、验收、发布和浏览器/runtime 验收均未发生。
 
-本设计范围足以形成一个实现计划；beam/expectimax 明确不在同一计划内，只有特征信号门失败后才进入下一轮设计。
+本设计已经形成并完成代码实现；beam/expectimax 明确不在同一计划内，只有特征信号门失败后才进入下一轮设计。仍开放的授权门依次是：两代隔离信号 smoke、正式训练、固定复评 candidate 创建、独立 paired 验收、发布、push 与浏览器/runtime 验收。
