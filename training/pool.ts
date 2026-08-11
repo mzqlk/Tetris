@@ -2,6 +2,7 @@ import { Worker } from 'node:worker_threads';
 
 import { TOTAL_ROWS } from '../src/constants';
 import { emptyLineClearCounts, type LineClearCounts } from '../src/ai/lineClears';
+import { emptyStrategyDiagnostics, type StrategyDiagnostics } from '../src/ai/tetrisStrategy';
 
 /**
  * A game that never ran earns zero score, so fixed-schedule score rate ranks it
@@ -9,7 +10,13 @@ import { emptyLineClearCounts, type LineClearCounts } from '../src/ai/lineClears
  * a failed result; height does not enter primary fitness.
  */
 export const FAILED_RESULT = {
-  lines: 0, clearCounts: emptyLineClearCounts(), score: 0, pieces: 0, meanHeight: TOTAL_ROWS, reason: 'error',
+  lines: 0,
+  clearCounts: emptyLineClearCounts(),
+  score: 0,
+  pieces: 0,
+  meanHeight: TOTAL_ROWS,
+  strategyDiagnostics: emptyStrategyDiagnostics(),
+  reason: 'error',
 } as const;
 
 export interface SimTask {
@@ -27,7 +34,8 @@ export interface SimTaskResult {
   score: number;
   pieces: number;
   meanHeight: number;
-  reason: string;
+  strategyDiagnostics: StrategyDiagnostics;
+  reason: 'gameover' | 'pieceCap' | 'error';
   failed: boolean;
   error?: string;
 }
@@ -130,6 +138,7 @@ export class WorkerPool {
           taskId: item.task.taskId,
           ...FAILED_RESULT,
           clearCounts: emptyLineClearCounts(),
+          strategyDiagnostics: emptyStrategyDiagnostics(),
           failed: true, error: reason,
         });
       };

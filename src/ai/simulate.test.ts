@@ -13,6 +13,7 @@ import { getPieceCells } from '../engine/board';
 import { createPiece } from '../engine/piece';
 import { BOARD_WIDTH, TOTAL_ROWS } from '../constants';
 import type { Board, PieceType } from '../types';
+import { emptyStrategyDiagnostics } from './tetrisStrategy';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -364,11 +365,43 @@ describe('board tidiness', () => {
     expect(sim.heightSum).toBe(0);
   });
 
+  it('samples strategy diagnostics after the clear', () => {
+    // The vertical I clears this four-row shaft completely. Sampling before
+    // clearLines would observe a non-empty setup instead of the literal empty
+    // well that remains after the move.
+    const { sim } = seedBoth(boardFrom(Array(4).fill('.#########')));
+    const placement = enumeratePlacements(sim.board, sim.currentPiece!).find((p) =>
+      getPieceCells(p.piece).every((cell) => cell.x === 0),
+    )!;
+    for (const move of placement.moves) {
+      applyAction(sim, (move === 'down' ? 'softDrop' : move) as SimAction);
+    }
+    applyAction(sim, 'hardDrop');
+
+    expect(sim.lines).toBe(4);
+    expect(sim.strategyDiagnosticSum).toEqual(emptyStrategyDiagnostics());
+  });
+
   it('reports the mean height a game was played at', () => {
     const r = simulateGame({ weights, seed: 5, maxPieces: 60, depth: 1 });
     expect(r.meanHeight).toBeGreaterThan(0);
     expect(r.meanHeight).toBeLessThan(TOTAL_ROWS);
   });
+
+  it('reports finite per-piece strategy means', () => {
+    const result = simulateGame({
+      weights: toVector(DEFAULT_WEIGHTS), seed: 7, maxPieces: 60, depth: 2,
+    });
+
+    expect(result.strategyDiagnostics).toEqual(expect.objectContaining({
+      meanCleanWellDepth: expect.any(Number),
+      meanTetrisSetupProgress: expect.any(Number),
+      meanTetrisReadyRows: expect.any(Number),
+    }));
+    Object.values(result.strategyDiagnostics).forEach((value) => {
+      expect(Number.isFinite(value)).toBe(true);
+    });
+  }, 45_000);
 
   it('reports zero rather than NaN when no piece was ever locked', () => {
     const r = simulateGame({ weights, seed: 1, maxPieces: 0, depth: 1 });

@@ -3,6 +3,7 @@ import { Worker } from 'node:worker_threads';
 import { FAILED_RESULT, WorkerPool, type SimTask, type WorkerFactory } from './pool';
 import { toVector, HANDCRAFTED_WEIGHTS } from '../src/ai/weights';
 import { TOTAL_ROWS } from '../src/constants';
+import { emptyStrategyDiagnostics } from '../src/ai/tetrisStrategy';
 
 const W = toVector(HANDCRAFTED_WEIGHTS);
 const pool = await WorkerPool.create(3);
@@ -96,6 +97,8 @@ describe('WorkerPool', () => {
     expect(viaWorker.pieces).toBe(direct.pieces);
     expect(viaWorker.meanHeight).toBe(direct.meanHeight);
     expect(viaWorker.clearCounts).toEqual(direct.clearCounts);
+    expect(viaWorker.strategyDiagnostics).toEqual(direct.strategyDiagnostics);
+    expect(viaWorker.reason).toBe(direct.reason);
   }, 60000);
 
   it('records a failed task as zero score instead of hanging or throwing', async () => {
@@ -112,6 +115,8 @@ describe('WorkerPool', () => {
     // Score is the primary target; height remains a diagnostic. The worst legal
     // height is the honest stand-in when no diagnostic result exists.
     expect(results[1].meanHeight).toBe(TOTAL_ROWS);
+    expect(results[1].strategyDiagnostics).toEqual(emptyStrategyDiagnostics());
+    expect(results[1].reason).toBe('error');
     expect(results[0].failed).toBe(false);
     expect(results[2].failed).toBe(false);
   }, 60000);
@@ -120,6 +125,8 @@ describe('WorkerPool', () => {
     expect(FAILED_RESULT.clearCounts).toEqual({
       singles: 0, doubles: 0, triples: 0, tetrises: 0,
     });
+    expect(FAILED_RESULT.strategyDiagnostics).toEqual(emptyStrategyDiagnostics());
+    expect(FAILED_RESULT.reason).toBe('error');
   });
 
   it('gives each failed result its own clear-count object', async () => {
@@ -128,6 +135,7 @@ describe('WorkerPool', () => {
     expect(results[0].failed).toBe(true);
     expect(results[1].failed).toBe(true);
     expect(results[0].clearCounts).not.toBe(results[1].clearCounts);
+    expect(results[0].strategyDiagnostics).not.toBe(results[1].strategyDiagnostics);
   }, 60000);
 
   it('handles more tasks than workers without dropping any', async () => {

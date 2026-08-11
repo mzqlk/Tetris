@@ -12,6 +12,14 @@ import {
 } from './lineClears';
 import { mulberry32 } from './rng';
 import { bestPlacement } from './search';
+import {
+  addStrategyDiagnostics,
+  diagnosticsFromWell,
+  divideStrategyDiagnostics,
+  emptyStrategyDiagnostics,
+  summarizeTetrisWell,
+  type StrategyDiagnostics,
+} from './tetrisStrategy';
 
 export type SimAction = 'left' | 'right' | 'rotate' | 'softDrop' | 'hardDrop';
 
@@ -28,6 +36,8 @@ export interface SimState {
   pieces: number;
   /** Sum of the stack height sampled after every lock; see `meanHeight`. */
   heightSum: number;
+  /** Sum of the strategy diagnostics sampled after every post-clear board. */
+  strategyDiagnosticSum: StrategyDiagnostics;
   rng: () => number;
 }
 
@@ -50,6 +60,8 @@ export interface SimResult {
    * still separates two players who both survive forever.
    */
   meanHeight: number;
+  /** Per-piece strategy diagnostics sampled from the post-clear board. */
+  strategyDiagnostics: StrategyDiagnostics;
   reason: 'gameover' | 'pieceCap';
 }
 
@@ -79,6 +91,7 @@ export function createSimState(seed: number): SimState {
     status: 'playing',
     pieces: 0,
     heightSum: 0,
+    strategyDiagnosticSum: emptyStrategyDiagnostics(),
     rng,
   };
 
@@ -107,6 +120,10 @@ function lockAndSpawn(state: SimState, piece: Piece): void {
   // Sampled AFTER the clear, so a move that fills four rows is credited with
   // the low board it leaves behind rather than the tall one it briefly made.
   state.heightSum += stackHeight(newBoard);
+  state.strategyDiagnosticSum = addStrategyDiagnostics(
+    state.strategyDiagnosticSum,
+    diagnosticsFromWell(summarizeTetrisWell(newBoard)),
+  );
 
   const preview = state.nextPiece;
   const current = createPiece(preview ? preview.type : drawFromBag(state));
@@ -197,6 +214,9 @@ export function simulateGame(opts: {
     score: state.score,
     pieces: state.pieces,
     meanHeight: state.pieces === 0 ? 0 : state.heightSum / state.pieces,
+    strategyDiagnostics: state.pieces === 0
+      ? emptyStrategyDiagnostics()
+      : divideStrategyDiagnostics(state.strategyDiagnosticSum, state.pieces),
     reason: state.status === 'gameover' ? 'gameover' : 'pieceCap',
   };
 }
