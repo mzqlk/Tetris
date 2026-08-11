@@ -1,7 +1,6 @@
 import { SCORE_RATE_OBJECTIVE } from './objective';
 import type {
-  ReevaluationDecision,
-  ReevaluationDecisionReason,
+  CandidateQualification,
   ReevaluationSummary,
 } from './publication';
 
@@ -22,16 +21,15 @@ export interface ReevaluationLogEntry {
     baseSeed: number;
     seedStrategy: 'fixed-reevaluation-v1';
   };
-  currentBest: LoggedReevaluation;
+  publishedBaseline: LoggedReevaluation;
+  currentQualified: LoggedReevaluation | null;
   candidate: LoggedReevaluation;
-  comparison: {
+  qualification: CandidateQualification & {
     scoreDelta: number;
     scoreRateDelta: number;
-    relativeScoreDelta: number;
-    scoreTolerance: number;
-    heightDelta: number;
-    decision: 'publish' | 'keep-current';
-    reason: ReevaluationDecisionReason;
+    tetrisLineShareDelta: number;
+    pieceCapGamesDelta: number;
+    decision: 'save-candidate' | 'keep-current';
   };
 }
 
@@ -39,26 +37,23 @@ interface BuildReevaluationLogEntryArgs {
   gen: number;
   ts: number;
   schedule: Omit<ReevaluationLogEntry['schedule'], 'seedStrategy'>;
-  currentBest: LoggedReevaluation;
+  publishedBaseline: LoggedReevaluation;
+  currentQualified: LoggedReevaluation | null;
   candidate: LoggedReevaluation;
-  decision: ReevaluationDecision;
+  qualification: CandidateQualification;
 }
 
 const snapshot = (evaluation: LoggedReevaluation): LoggedReevaluation => ({
   ...evaluation,
   weights: evaluation.weights.slice(),
   meanClearCounts: { ...evaluation.meanClearCounts },
+  strategyDiagnostics: { ...evaluation.strategyDiagnostics },
+  survivalDiagnostics: { ...evaluation.survivalDiagnostics },
 });
 
 export function buildReevaluationLogEntry(
   args: BuildReevaluationLogEntryArgs,
 ): ReevaluationLogEntry {
-  const scoreDelta = args.candidate.meanScore - args.currentBest.meanScore;
-  const scale = Math.max(
-    Math.abs(args.candidate.meanScore),
-    Math.abs(args.currentBest.meanScore),
-  );
-
   return {
     objective: SCORE_RATE_OBJECTIVE,
     kind: 'reevaluation',
@@ -68,16 +63,21 @@ export function buildReevaluationLogEntry(
       ...args.schedule,
       seedStrategy: 'fixed-reevaluation-v1',
     },
-    currentBest: snapshot(args.currentBest),
+    publishedBaseline: snapshot(args.publishedBaseline),
+    currentQualified: args.currentQualified === null
+      ? null
+      : snapshot(args.currentQualified),
     candidate: snapshot(args.candidate),
-    comparison: {
-      scoreDelta,
-      scoreRateDelta: args.candidate.scoreRate - args.currentBest.scoreRate,
-      relativeScoreDelta: scale === 0 ? 0 : scoreDelta / scale,
-      scoreTolerance: args.decision.scoreTolerance,
-      heightDelta: args.candidate.meanHeight - args.currentBest.meanHeight,
-      decision: args.decision.shouldPublish ? 'publish' : 'keep-current',
-      reason: args.decision.reason,
+    qualification: {
+      ...args.qualification,
+      scoreDelta: args.candidate.meanScore - args.publishedBaseline.meanScore,
+      scoreRateDelta: args.candidate.scoreRate - args.publishedBaseline.scoreRate,
+      tetrisLineShareDelta:
+        args.candidate.tetrisLineShare - args.publishedBaseline.tetrisLineShare,
+      pieceCapGamesDelta:
+        args.candidate.survivalDiagnostics.pieceCapGames -
+        args.publishedBaseline.survivalDiagnostics.pieceCapGames,
+      decision: args.qualification.shouldSave ? 'save-candidate' : 'keep-current',
     },
   };
 }

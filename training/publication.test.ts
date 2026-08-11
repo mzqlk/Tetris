@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  evaluateTetrisCandidate,
   evaluateScoreReevaluation,
   fixedReevaluationSeeds,
   shouldPublishScoreReevaluation,
@@ -26,6 +27,76 @@ const summary = (
   meanLines: 1998,
   meanHeight,
   ...diagnostics,
+  strategyDiagnostics: {
+    meanCleanWellDepth: 3,
+    meanTetrisSetupProgress: 2,
+    meanTetrisReadyRows: 1,
+  },
+  survivalDiagnostics: { pieceCapGames: 30, gameoverGames: 0 },
+});
+
+const candidateEvaluation = (
+  overrides: Partial<ReevaluationSummary> = {},
+): ReevaluationSummary => ({
+  meanScore: 3_300_000,
+  scoreRate: 660,
+  meanLines: 1998,
+  meanHeight: 4,
+  meanClearCounts: { singles: 1000, doubles: 100, triples: 0, tetrises: 199.5 },
+  tetrisLineShare: 798 / 1998,
+  strategyDiagnostics: {
+    meanCleanWellDepth: 3,
+    meanTetrisSetupProgress: 2,
+    meanTetrisReadyRows: 1,
+  },
+  survivalDiagnostics: { pieceCapGames: 30, gameoverGames: 0 },
+  ...overrides,
+});
+
+describe('evaluateTetrisCandidate', () => {
+  const baseline = candidateEvaluation({
+    meanScore: 3_289_243.33,
+    scoreRate: 657.8487,
+    meanClearCounts: { singles: 1998, doubles: 0, triples: 0, tetrises: 0 },
+    tetrisLineShare: 0,
+  });
+
+  it('qualifies only a material score improvement with stable Tetris and survival', () => {
+    expect(evaluateTetrisCandidate(candidateEvaluation(), baseline, null)).toMatchObject({
+      shouldSave: true,
+      reason: 'qualified',
+      scoreQualified: true,
+      tetrisQualified: true,
+      survivalQualified: true,
+    });
+  });
+
+  it.each([
+    ['score-not-higher', { meanScore: 3_290_000 }],
+    ['tetris-share-too-low', { tetrisLineShare: 0.199999 }],
+    ['survival-lower', { survivalDiagnostics: { pieceCapGames: 29, gameoverGames: 1 } }],
+  ] as const)('rejects %s', (reason, overrides) => {
+    expect(evaluateTetrisCandidate(candidateEvaluation(overrides), baseline, null).reason)
+      .toBe(reason);
+  });
+
+  it('uses the exact precedence when several gates fail', () => {
+    expect(evaluateTetrisCandidate(
+      candidateEvaluation({
+        meanScore: 3_290_000,
+        tetrisLineShare: 0,
+        survivalDiagnostics: { pieceCapGames: 0, gameoverGames: 30 },
+      }),
+      baseline,
+      candidateEvaluation({ meanScore: 3_350_000 }),
+    ).reason).toBe('score-not-higher');
+  });
+
+  it('keeps a higher-scoring qualified candidate from the same fixed schedule', () => {
+    const currentQualified = candidateEvaluation({ meanScore: 3_350_000, scoreRate: 670 });
+    expect(evaluateTetrisCandidate(candidateEvaluation(), baseline, currentQualified).reason)
+      .toBe('not-better-qualified-candidate');
+  });
 });
 
 describe('shouldPublishScoreReevaluation', () => {
