@@ -1,31 +1,31 @@
 import type { Board, Position } from '../types';
 import { BOARD_WIDTH, TOTAL_ROWS } from '../constants';
 import { lineClearValue } from './lineClears';
+import {
+  columnHeights,
+  diagnosticsFromWell,
+  summarizeTetrisWell,
+} from './tetrisStrategy';
+
+export { columnHeights } from './tetrisStrategy';
 
 export const LEGACY_FEATURE_NAMES = [
   'aggregateHeight', 'holes', 'bumpiness', 'maxHeight', 'linesCleared',
   'landingHeight', 'rowTransitions', 'colTransitions', 'wellDepth',
 ] as const;
 
-export const FEATURE_NAMES = [...LEGACY_FEATURE_NAMES, 'lineClearValue'] as const;
+export const SCORE_RATE_V2_FEATURE_NAMES = [
+  ...LEGACY_FEATURE_NAMES, 'lineClearValue',
+] as const;
+
+export const FEATURE_NAMES = [
+  ...SCORE_RATE_V2_FEATURE_NAMES,
+  'cleanWellDepth', 'tetrisSetupProgress', 'tetrisReadyRows',
+] as const;
 
 export type FeatureName = (typeof FEATURE_NAMES)[number];
 export type FeatureVector = number[];
 export const FEATURE_COUNT = FEATURE_NAMES.length;
-
-/** Height of each column: TOTAL_ROWS minus the row index of its topmost filled cell. */
-export function columnHeights(board: Board): number[] {
-  const heights = new Array<number>(BOARD_WIDTH).fill(0);
-  for (let c = 0; c < BOARD_WIDTH; c++) {
-    for (let r = 0; r < TOTAL_ROWS; r++) {
-      if (board[r][c] !== 0) {
-        heights[c] = TOTAL_ROWS - r;
-        break;
-      }
-    }
-  }
-  return heights;
-}
 
 /** Empty cells with at least one filled cell somewhere above them in the same column. */
 export function countHoles(board: Board): number {
@@ -114,6 +114,7 @@ export function extractFeatures(
     if (cell.y > maxRow) maxRow = cell.y;
   }
   const landingHeight = TOTAL_ROWS - (minRow + maxRow) / 2;
+  const strategy = diagnosticsFromWell(summarizeTetrisWell(boardAfter));
 
   return [
     aggregateHeight,
@@ -126,5 +127,8 @@ export function extractFeatures(
     colTransitions(boardAfter),
     wellDepth(boardAfter, heights),
     lineClearValue(linesCleared),
+    strategy.meanCleanWellDepth,
+    strategy.meanTetrisSetupProgress,
+    strategy.meanTetrisReadyRows,
   ];
 }

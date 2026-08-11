@@ -48,6 +48,17 @@ describe('evalMove', () => {
 });
 
 describe('bestPlacement', () => {
+  it('selects the legal placement with the greatest Tetris setup progress', () => {
+    const board = boardFrom(['#########.', '#########.']);
+    const piece = createPiece(2);
+    const weights = only('tetrisSetupProgress');
+    const optionScores = enumeratePlacements(board, piece)
+      .map((placement) => evalMove(board, placement, weights).score);
+    const decision = bestPlacement(board, piece, null, weights, 1)!;
+    expect(decision.score).toBe(Math.max(...optionScores));
+    expect(decision.score).toBeGreaterThan(0);
+  });
+
   it('returns null when there is nowhere to put the piece', () => {
     const full = boardFrom(Array(22).fill('##########'));
     expect(bestPlacement(full, createPiece(1), null, zeros(), 1)).toBeNull();

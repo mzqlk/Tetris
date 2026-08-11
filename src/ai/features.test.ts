@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  LEGACY_FEATURE_NAMES, FEATURE_NAMES, FEATURE_COUNT, extractFeatures, columnHeights,
+  LEGACY_FEATURE_NAMES, SCORE_RATE_V2_FEATURE_NAMES, FEATURE_NAMES, FEATURE_COUNT,
+  extractFeatures, columnHeights,
   countHoles, rowTransitions, colTransitions, wellDepth,
 } from './features';
 import { boardFrom } from './testUtils';
@@ -9,14 +10,20 @@ import { createEmptyBoard } from '../engine/board';
 const idx = (name: (typeof FEATURE_NAMES)[number]) => FEATURE_NAMES.indexOf(name);
 
 describe('FEATURE_NAMES', () => {
-  it('keeps the legacy order and appends the nonlinear clear value', () => {
+  it('keeps the legacy order and appends stable Tetris setup features', () => {
     expect(LEGACY_FEATURE_NAMES).toEqual([
       'aggregateHeight', 'holes', 'bumpiness', 'maxHeight', 'linesCleared',
       'landingHeight', 'rowTransitions', 'colTransitions', 'wellDepth',
     ]);
-    expect(FEATURE_NAMES).toEqual([...LEGACY_FEATURE_NAMES, 'lineClearValue']);
-    expect(FEATURE_COUNT).toBe(10);
-    expect(new Set(FEATURE_NAMES).size).toBe(10);
+    expect(SCORE_RATE_V2_FEATURE_NAMES).toEqual([
+      ...LEGACY_FEATURE_NAMES, 'lineClearValue',
+    ]);
+    expect(FEATURE_NAMES).toEqual([
+      ...SCORE_RATE_V2_FEATURE_NAMES,
+      'cleanWellDepth', 'tetrisSetupProgress', 'tetrisReadyRows',
+    ]);
+    expect(FEATURE_COUNT).toBe(13);
+    expect(new Set(FEATURE_NAMES).size).toBe(13);
   });
 });
 
@@ -28,6 +35,17 @@ it('appends nonlinear clear value after the established nine features', () => {
   const features = extractFeatures(board, 4, placedCells);
   expect(features[FEATURE_NAMES.indexOf('linesCleared')]).toBe(4);
   expect(features[FEATURE_NAMES.indexOf('lineClearValue')]).toBe(8);
+});
+
+it('extracts complete Tetris setup features after line clearing', () => {
+  const features = extractFeatures(
+    boardFrom(['#########.', '#########.', '#########.', '#########.']),
+    0,
+    [{ x: 0, y: 0 }],
+  );
+  expect(features[FEATURE_NAMES.indexOf('cleanWellDepth')]).toBe(4);
+  expect(features[FEATURE_NAMES.indexOf('tetrisSetupProgress')]).toBe(4);
+  expect(features[FEATURE_NAMES.indexOf('tetrisReadyRows')]).toBe(4);
 });
 
 it.each([
@@ -90,7 +108,7 @@ describe('overhang board', () => {
 
   it('reports the full feature vector', () => {
     const f = extractFeatures(board, 0, [{ x: 2, y: 18 }, { x: 2, y: 19 }]);
-    expect(f).toHaveLength(10);
+    expect(f).toHaveLength(13);
     expect(f[idx('aggregateHeight')]).toBe(12);
     expect(f[idx('holes')]).toBe(2);
     expect(f[idx('bumpiness')]).toBe(4);
@@ -101,6 +119,9 @@ describe('overhang board', () => {
     expect(f[idx('colTransitions')]).toBe(12);
     expect(f[idx('wellDepth')]).toBe(0);
     expect(f[idx('lineClearValue')]).toBe(0);
+    expect(f[idx('cleanWellDepth')]).toBe(0);
+    expect(f[idx('tetrisSetupProgress')]).toBe(1 / 9);
+    expect(f[idx('tetrisReadyRows')]).toBe(0);
   });
 });
 
