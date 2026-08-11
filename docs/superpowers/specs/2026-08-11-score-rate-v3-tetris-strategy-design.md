@@ -199,7 +199,7 @@ interface SurvivalDiagnostics {
 
 qualified candidate 使用与 gen-40 相同的独立 seeds、depth 2 和 5000-piece cap 逐局配对。验收必须同时通过第 2.1 节四项门槛。固定复评只负责筛出候选，不能替代独立 paired 置信区间。
 
-`npm run bench:paired -- --baseline <published> --candidate <qualified>` CLI 已实现；本次 code-only 交付没有运行它。命令存在只证明验收工具入口存在，不证明任何候选通过 paired 门。
+`npm run bench:paired -- --baseline <published> --candidate <qualified> --seed <independent-integer>` CLI 已实现；`--seed` 必须是独立整数，不得复用训练或固定复评 seed，并在本次基线/候选配对中固定使用。本次 code-only 交付没有运行它。命令存在只证明验收工具入口存在，不证明任何候选通过 paired 门。
 
 通过验收后仍需单独获得发布授权，才能把经过验收的同一份候选同步到 runtime 与 bundled 权重；提交、push 和运行时/browser 验收继续是独立边界。
 

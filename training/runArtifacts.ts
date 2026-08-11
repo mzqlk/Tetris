@@ -630,7 +630,7 @@ function validateGeneration(
   line: number,
   checkpoint: ScoreRateCheckpoint,
   expectedMaxPieces: number,
-): { gen: number; nextMaxPieces: number } {
+): { gen: number; mu: number[]; sigma: number[]; nextMaxPieces: number } {
   exactKeys(raw, GENERATION_KEYS, line, 'generation record');
   const gen = logInteger(raw.gen, line, 'generation gen');
   logInteger(raw.ts, line, 'generation ts');
@@ -647,8 +647,8 @@ function validateGeneration(
     raw.worstScoreRate, line, 'generation worstScoreRate',
   );
   logNonNegative(raw.scoreRateStd, line, 'generation scoreRateStd');
-  logVector(raw.mu, line, 'generation mu');
-  logPositiveVector(raw.sigma, line, 'generation sigma');
+  const mu = logVector(raw.mu, line, 'generation mu');
+  const sigma = logPositiveVector(raw.sigma, line, 'generation sigma');
   logNormalizedVector(raw.bestWeights, line, 'generation bestWeights');
   const maxPieces = logInteger(raw.maxPieces, line, 'generation maxPieces', 1);
   if (maxPieces > checkpoint.config.maxPiecesCap) {
@@ -709,6 +709,8 @@ function validateGeneration(
   }
   return {
     gen,
+    mu,
+    sigma,
     nextMaxPieces: nextMaxPieces(maxPieces, elitePieces, checkpoint.config.maxPiecesCap),
   };
 }
@@ -1015,6 +1017,7 @@ export function readCompatibleRunArtifacts(paths: RunPaths): ScoreRateCheckpoint
   let expectedMaxPieces = checkpoint.config.initialMaxPieces;
   let replayedBaseline: ScoreRateEvaluation | null = null;
   let replayedQualified: ScoreRateEvaluation | null = null;
+  const optimizerStates: { mu: number[]; sigma: number[] }[] = [];
 
   lines.forEach((source, index) => {
     const line = index + 1;
@@ -1072,12 +1075,22 @@ export function readCompatibleRunArtifacts(paths: RunPaths): ScoreRateCheckpoint
     const generation = validateGeneration(raw, line, checkpoint, expectedMaxPieces);
     generations.push(generation.gen);
     expectedMaxPieces = generation.nextMaxPieces;
+    optimizerStates.push({ mu: generation.mu, sigma: generation.sigma });
   });
 
   if (generations.length !== checkpoint.gen) {
     throw new Error(
       `training log generation count ${generations.length} is inconsistent with checkpoint.gen ${checkpoint.gen}`,
     );
+  }
+  const finalOptimizerState = optimizerStates.at(-1);
+  if (finalOptimizerState !== undefined) {
+    if (!sameVector(finalOptimizerState.mu, checkpoint.mu)) {
+      throw new Error('checkpoint mu does not match the final logged optimizer state');
+    }
+    if (!sameVector(finalOptimizerState.sigma, checkpoint.sigma)) {
+      throw new Error('checkpoint sigma does not match the final logged optimizer state');
+    }
   }
   for (
     let gen = checkpoint.config.reevalEvery;

@@ -278,6 +278,10 @@ async function runGeneration(): Promise<void> {
   const eliteHeight = median(elites.map((elite) => elite.height));
   const bestTetrisLineShare = tetrisLineShares[bestIndex];
   const eliteTetrisLineShare = median(elites.map((elite) => elite.tetrisLineShare));
+  const nextState = updateCem(state, candidates, scoreRates, {
+    eliteFrac: cfg.eliteFrac,
+    noise: noiseAt(gen, cfg),
+  });
 
   appendFileSync(paths.log, JSON.stringify({
     objective: SCORE_RATE_OBJECTIVE,
@@ -288,8 +292,8 @@ async function runGeneration(): Promise<void> {
     medianScoreRate: median(scoreRates),
     worstScoreRate,
     scoreRateStd,
-    mu: state.mu,
-    sigma: state.sigma,
+    mu: nextState.mu,
+    sigma: nextState.sigma,
     bestWeights,
     maxPieces,
     medianPieces: median(meanPieces),
@@ -340,10 +344,7 @@ async function runGeneration(): Promise<void> {
     `  cap ${maxPieces}  ${(elapsedMs / 1000).toFixed(1)}s`,
   );
 
-  state = updateCem(state, candidates, scoreRates, {
-    eliteFrac: cfg.eliteFrac,
-    noise: noiseAt(gen, cfg),
-  });
+  state = nextState;
 
   const raised = nextMaxPieces(maxPieces, elitePieces, cfg.maxPiecesCap);
   if (raised !== maxPieces) {

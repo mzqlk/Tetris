@@ -108,7 +108,8 @@ npm run bench -- --games 30 --depth 2 --max-pieces 2000  # 内置手调基线
 npm run train -- --generations 20 --output-dir public/ai/<new-v3-run-id>  # 仅限已授权的空目录
 npm run train -- --generations 20 --workers 8 --output-dir public/ai/<new-v3-run-id>
 npm run train -- --resume   # 默认 score-rate-v3；必须先完整核验并获得授权，且仅接受 schema 4 v3 产物
-npm run bench:paired -- --baseline <published> --candidate <qualified>  # CLI 已实现；本次未运行
+# --seed 必须是独立整数，不得复用训练或固定复评 seed，并在本次基线/候选配对中固定使用
+npm run bench:paired -- --baseline <published> --candidate <qualified> --seed <independent-integer>  # CLI 已实现；本次未运行
 ```
 
 训练命令会修改 run-local checkpoint/log，并可能在资格门通过后写入同一 run dir 的 `candidate-weights.json`；它不会自动改写两份发布权重。不能把上面的示例当成顺序执行清单。默认输出目录包含任何条目时（包括空日志或其他遗留文件），新跑都会拒绝；不要通过删除文件绕过保护。运行前先读第 5 节的 checkpoint 决策门。
@@ -221,7 +222,7 @@ fitness = meanLines - heightPenalty * meanHeight
 任何训练前都按以下顺序判断：
 
 1. 检查 Node 命令行、CPU 和内存，确认没有训练进程正在写目标目录或发布权重。
-2. 明确实际 output dir；读取其中 checkpoint 的 schema version、`objective`、`gen`、`maxPieces`、完整 `config` 与 `bestEver`，并检查日志全部记录的 objective、generation/reevaluation schema、连续 generation、固定复评历史和最终换行。
+2. 明确实际 output dir；读取其中 checkpoint 的 schema version、`objective`、`gen`、`maxPieces`、完整 `config`、`publishedBaseline` 与 `bestQualifiedCandidate`，并检查 candidate 文件是否与 `bestQualifiedCandidate` 一致（无 qualified candidate 时不得存在 candidate 文件），同时检查日志全部记录的 objective、generation/reevaluation schema、连续 generation、固定复评历史和最终换行。
 3. 如果恢复 v3 本轮，只能在 score-rate-v3 schema version 4、精确 13 维权重、配置/日志连续和完整诊断元数据全部校验后显式使用 `--resume`；旧 objective/schema checkpoint/log 一律拒绝恢复或追加。
 4. 如果新跑，先取得用户授权并选择空的独立 output dir；归档、移动或删除任何已有产物都需要单独授权。
 5. 训练只可改写 run-local checkpoint/log，并在资格门通过后写 run-local candidate；两份发布权重不在训练器写入边界内。启动前仍必须记录二者状态和哈希，以便证明边界未漂移。

@@ -153,6 +153,19 @@ export function aggregateFitness(
     throw new Error(`expected ${expected} results, got ${results.length}`);
   }
   for (const result of results) {
+    for (const field of [
+      'meanCleanWellDepth',
+      'meanTetrisSetupProgress',
+      'meanTetrisReadyRows',
+    ] as const) {
+      const value = result.strategyDiagnostics[field];
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        throw new Error(`strategyDiagnostics.${field} must be finite`);
+      }
+      if (value < 0 || value > 4) {
+        throw new Error(`strategyDiagnostics.${field} must be within 0..4`);
+      }
+    }
     assertLineClearCounts(result.clearCounts, true);
     if (totalLinesFromCounts(result.clearCounts) !== result.lines) {
       throw new Error('clearCounts must reconstruct lines for every worker result');

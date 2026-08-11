@@ -315,6 +315,54 @@ describe('aggregateFitness', () => {
     expect(stats.fitness).toEqual([0]);
   });
 
+  it('rejects a NaN meanCleanWellDepth strategy diagnostic', () => {
+    expect(() => aggregateFitness([
+      result({
+        strategyDiagnostics: {
+          meanCleanWellDepth: Number.NaN,
+          meanTetrisSetupProgress: 2,
+          meanTetrisReadyRows: 1,
+        },
+      }),
+    ], 1, 1, 300)).toThrow(/meanCleanWellDepth.*finite/i);
+  });
+
+  it('rejects an infinite meanTetrisSetupProgress strategy diagnostic', () => {
+    expect(() => aggregateFitness([
+      result({
+        strategyDiagnostics: {
+          meanCleanWellDepth: 3,
+          meanTetrisSetupProgress: Number.POSITIVE_INFINITY,
+          meanTetrisReadyRows: 1,
+        },
+      }),
+    ], 1, 1, 300)).toThrow(/meanTetrisSetupProgress.*finite/i);
+  });
+
+  it('rejects a negative meanTetrisReadyRows strategy diagnostic', () => {
+    expect(() => aggregateFitness([
+      result({
+        strategyDiagnostics: {
+          meanCleanWellDepth: 3,
+          meanTetrisSetupProgress: 2,
+          meanTetrisReadyRows: -0.01,
+        },
+      }),
+    ], 1, 1, 300)).toThrow(/meanTetrisReadyRows.*0\.\.4/i);
+  });
+
+  it('rejects a meanCleanWellDepth strategy diagnostic above 4', () => {
+    expect(() => aggregateFitness([
+      result({
+        strategyDiagnostics: {
+          meanCleanWellDepth: 4.01,
+          meanTetrisSetupProgress: 2,
+          meanTetrisReadyRows: 1,
+        },
+      }),
+    ], 1, 1, 300)).toThrow(/meanCleanWellDepth.*0\.\.4/i);
+  });
+
   it('rejects a worker result whose line total disagrees with its histogram', () => {
     expect(() => aggregateFitness([
       result({

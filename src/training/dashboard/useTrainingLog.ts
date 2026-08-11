@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { FEATURE_COUNT } from '../../ai/features';
 import { SCORE_RATE_OBJECTIVE } from '../../ai/trainingObjective';
 import type { StrategyDiagnostics } from '../../ai/tetrisStrategy';
 import type { LogEntry } from './types';
@@ -17,6 +18,11 @@ const ARRAY_FIELDS = ['mu', 'sigma', 'bestWeights'] as const;
 
 const num = (value: unknown, fallback: number): number =>
   typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+
+const weightVector = (value: unknown): value is number[] =>
+  Array.isArray(value) &&
+  value.length === FEATURE_COUNT &&
+  value.every((entry) => typeof entry === 'number' && Number.isFinite(entry));
 
 const strategy = (value: unknown): StrategyDiagnostics => {
   const raw = typeof value === 'object' && value !== null
@@ -58,7 +64,7 @@ export function parseLog(text: string): LogEntry[] {
 
     const e = value as Record<string, unknown>;
     if (NUMBER_FIELDS.some((f) => typeof e[f] !== 'number' || !Number.isFinite(e[f]))) continue;
-    if (ARRAY_FIELDS.some((f) => !Array.isArray(e[f]))) continue;
+    if (ARRAY_FIELDS.some((f) => !weightVector(e[f]))) continue;
     if (e.objective !== SCORE_RATE_OBJECTIVE) continue;
 
     entries.push({

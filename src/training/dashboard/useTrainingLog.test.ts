@@ -192,6 +192,34 @@ describe('parseLog', () => {
     expect(parseLog(JSON.stringify(parsed))).toHaveLength(0);
   });
 
+  it.each(['mu', 'sigma', 'bestWeights'] as const)(
+    'rejects a %s vector with the wrong feature count',
+    (field) => {
+      const parsed = JSON.parse(line(0));
+      parsed[field] = parsed[field].slice(1);
+      expect(parseLog(JSON.stringify(parsed))).toHaveLength(0);
+    },
+  );
+
+  it.each(['mu', 'sigma', 'bestWeights'] as const)(
+    'rejects a %s vector containing a non-number',
+    (field) => {
+      const parsed = JSON.parse(line(0));
+      parsed[field][0] = 'not-a-number';
+      expect(parseLog(JSON.stringify(parsed))).toHaveLength(0);
+    },
+  );
+
+  it.each(['mu', 'sigma', 'bestWeights'] as const)(
+    'rejects a %s vector containing a non-finite number',
+    (field) => {
+      const parsed = JSON.parse(line(0));
+      parsed[field][0] = '__NON_FINITE__';
+      const encoded = JSON.stringify(parsed).replace('"__NON_FINITE__"', '1e400');
+      expect(parseLog(encoded)).toHaveLength(0);
+    },
+  );
+
   it('sorts by generation', () => {
     const entries = parseLog(`${line(3)}\n${line(1)}\n${line(2)}`);
     expect(entries.map((e) => e.gen)).toEqual([1, 2, 3]);

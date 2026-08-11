@@ -119,7 +119,8 @@ npm run train -- --generations 200 --workers 8 --output-dir public/ai/<new-run-i
 npm run train -- --resume
 
 # 对已产出的 qualified candidate 与发布基线做独立逐局配对（命令已实现；仍须单独授权）
-npm run bench:paired -- --baseline <baseline-weights> --candidate <candidate-weights>
+# seed 必须是独立整数，不得复用训练或固定复评 seed，并在本次基线/候选配对中固定使用
+npm run bench:paired -- --baseline <baseline-weights> --candidate <candidate-weights> --seed <independent-integer>
 
 # 只对训练脚本做类型检查（与主应用的 tsconfig 分开）
 npm run typecheck:train

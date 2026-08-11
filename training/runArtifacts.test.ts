@@ -515,6 +515,22 @@ describe('readCompatibleRunArtifacts', () => {
     )).toThrow(/bestQualifiedCandidate/i);
   });
 
+  it('rejects checkpoint mu that differs from the final logged optimizer state', () => {
+    const checkpoint = copy(CHECKPOINT);
+    checkpoint.mu = AXIS_1;
+    expect(() => readCompatibleRunArtifacts(
+      writeRun(checkpoint, [GEN_0, GEN_1, REEVALUATION_2], CANDIDATE_FILE),
+    )).toThrow(/checkpoint mu.*final logged optimizer state/i);
+  });
+
+  it('rejects checkpoint sigma that differs from the final logged optimizer state', () => {
+    const checkpoint = copy(CHECKPOINT);
+    checkpoint.sigma = SIGMA.map((value, index) => index === 0 ? value / 2 : value);
+    expect(() => readCompatibleRunArtifacts(
+      writeRun(checkpoint, [GEN_0, GEN_1, REEVALUATION_2], CANDIDATE_FILE),
+    )).toThrow(/checkpoint sigma.*final logged optimizer state/i);
+  });
+
   it('accepts a version-4 candidate file exactly matching bestQualifiedCandidate', () => {
     expect(() => readCompatibleRunArtifacts(
       writeRun(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2], CANDIDATE_FILE),
