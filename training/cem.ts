@@ -9,6 +9,13 @@ import {
   totalLinesFromCounts,
   type LineClearCounts,
 } from '../src/ai/lineClears';
+import {
+  addStrategyDiagnostics,
+  divideStrategyDiagnostics,
+  emptyStrategyDiagnostics,
+  type StrategyDiagnostics,
+  type SurvivalDiagnostics,
+} from '../src/ai/tetrisStrategy';
 
 export interface CemState {
   mu: number[];
@@ -103,6 +110,8 @@ export interface CandidateStats {
   meanHeight: number[];
   meanClearCounts: LineClearCounts[];
   tetrisLineShares: number[];
+  meanStrategyDiagnostics: StrategyDiagnostics[];
+  survivalDiagnostics: SurvivalDiagnostics[];
 }
 
 /**
@@ -129,6 +138,8 @@ export function aggregateFitness(
     pieces: number;
     meanHeight: number;
     clearCounts: LineClearCounts;
+    strategyDiagnostics: StrategyDiagnostics;
+    reason: 'gameover' | 'pieceCap';
   }[],
   population: number,
   gamesPerCandidate: number,
@@ -155,6 +166,8 @@ export function aggregateFitness(
   const meanHeight: number[] = [];
   const meanClearCounts: LineClearCounts[] = [];
   const tetrisLineShares: number[] = [];
+  const meanStrategyDiagnostics: StrategyDiagnostics[] = [];
+  const survivalDiagnostics: SurvivalDiagnostics[] = [];
 
   for (let i = 0; i < population; i++) {
     let score = 0;
@@ -162,6 +175,9 @@ export function aggregateFitness(
     let pieces = 0;
     let height = 0;
     let clearCounts = emptyLineClearCounts();
+    let strategyDiagnostics = emptyStrategyDiagnostics();
+    let pieceCapGames = 0;
+    let gameoverGames = 0;
     for (let j = 0; j < gamesPerCandidate; j++) {
       const r = results[i * gamesPerCandidate + j];
       score += r.score;
@@ -169,6 +185,9 @@ export function aggregateFitness(
       pieces += r.pieces;
       height += r.meanHeight;
       clearCounts = addLineClearCounts(clearCounts, r.clearCounts);
+      strategyDiagnostics = addStrategyDiagnostics(strategyDiagnostics, r.strategyDiagnostics);
+      if (r.reason === 'pieceCap') pieceCapGames++;
+      if (r.reason === 'gameover') gameoverGames++;
     }
     // Height is averaged over GAMES, not over pieces: each game already reports
     // its own per-piece mean. Pooling by pieces instead would silently weight
@@ -182,6 +201,8 @@ export function aggregateFitness(
     const candidateMeanClearCounts = divideLineClearCounts(clearCounts, gamesPerCandidate);
     meanClearCounts.push(candidateMeanClearCounts);
     tetrisLineShares.push(tetrisLineShare(candidateMeanClearCounts));
+    meanStrategyDiagnostics.push(divideStrategyDiagnostics(strategyDiagnostics, gamesPerCandidate));
+    survivalDiagnostics.push({ pieceCapGames, gameoverGames });
     fitness.push(candidateMeanScore / maxPieces);
   }
 
@@ -193,6 +214,8 @@ export function aggregateFitness(
     meanHeight,
     meanClearCounts,
     tetrisLineShares,
+    meanStrategyDiagnostics,
+    survivalDiagnostics,
   };
 }
 

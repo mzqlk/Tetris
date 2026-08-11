@@ -6,6 +6,7 @@ import {
 import { mulberry32 } from '../src/ai/rng';
 import { FEATURE_COUNT } from '../src/ai/features';
 import type { LineClearCounts } from '../src/ai/lineClears';
+import type { StrategyDiagnostics } from '../src/ai/tetrisStrategy';
 
 const l2 = (v: number[]) => Math.sqrt(v.reduce((s, x) => s + x * x, 0));
 
@@ -15,6 +16,8 @@ const result = (overrides: Partial<{
   pieces: number;
   meanHeight: number;
   clearCounts: LineClearCounts;
+  strategyDiagnostics: StrategyDiagnostics;
+  reason: 'gameover' | 'pieceCap';
 }> = {}) => {
   const lines = overrides.lines ?? 0;
   return {
@@ -25,6 +28,12 @@ const result = (overrides: Partial<{
     clearCounts: overrides.clearCounts ?? {
       singles: lines, doubles: 0, triples: 0, tetrises: 0,
     },
+    strategyDiagnostics: overrides.strategyDiagnostics ?? {
+      meanCleanWellDepth: 0,
+      meanTetrisSetupProgress: 0,
+      meanTetrisReadyRows: 0,
+    },
+    reason: 'pieceCap' as const,
     ...overrides,
   };
 };
@@ -264,6 +273,37 @@ describe('aggregateFitness', () => {
       { singles: 2, doubles: 0, triples: 0, tetrises: 0.5 },
     ]);
     expect(stats.tetrisLineShares).toEqual([0.5]);
+  });
+
+  it('averages strategy diagnostics per game and counts exact end reasons', () => {
+    const stats = aggregateFitness([
+      result({
+        score: 1000,
+        reason: 'pieceCap',
+        strategyDiagnostics: {
+          meanCleanWellDepth: 4,
+          meanTetrisSetupProgress: 3,
+          meanTetrisReadyRows: 2,
+        },
+      }),
+      result({
+        score: 800,
+        reason: 'gameover',
+        strategyDiagnostics: {
+          meanCleanWellDepth: 2,
+          meanTetrisSetupProgress: 1,
+          meanTetrisReadyRows: 0,
+        },
+      }),
+    ], 1, 2, 300);
+
+    expect(stats.meanStrategyDiagnostics).toEqual([{
+      meanCleanWellDepth: 3,
+      meanTetrisSetupProgress: 2,
+      meanTetrisReadyRows: 1,
+    }]);
+    expect(stats.survivalDiagnostics).toEqual([{ pieceCapGames: 1, gameoverGames: 1 }]);
+    expect(stats.fitness).toEqual([3]);
   });
 
   it('rejects a worker result whose line total disagrees with its histogram', () => {

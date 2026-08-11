@@ -6,14 +6,16 @@ import {
   totalLinesFromCounts,
   type LineClearCounts,
 } from '../src/ai/lineClears';
+import type { StrategyDiagnostics } from '../src/ai/tetrisStrategy';
 
 interface BenchResult {
   score: number;
   lines: number;
   pieces: number;
   meanHeight: number;
-  reason: string;
+  reason: 'gameover' | 'pieceCap';
   clearCounts: LineClearCounts;
+  strategyDiagnostics: StrategyDiagnostics;
 }
 
 export interface Distribution {
@@ -30,9 +32,15 @@ export interface BenchSummary {
   height: Distribution;
   totalPieces: number;
   cappedGames: number;
+  gameoverGames: number;
   clearCounts: LineClearCounts;
   tetrisLineShare: number;
   tetrisesPer100ScheduledPieces: number;
+  strategy: {
+    cleanWellDepth: Distribution;
+    tetrisSetupProgress: Distribution;
+    tetrisReadyRows: Distribution;
+  };
 }
 
 function distribution(values: number[]): Distribution {
@@ -75,10 +83,22 @@ export function summarizeBench(
     height: distribution(results.map((result) => result.meanHeight)),
     totalPieces: results.reduce((sum, result) => sum + result.pieces, 0),
     cappedGames: results.filter((result) => result.reason === 'pieceCap').length,
+    gameoverGames: results.filter((result) => result.reason === 'gameover').length,
     clearCounts,
     tetrisLineShare: tetrisLineShare(clearCounts),
     tetrisesPer100ScheduledPieces:
       (100 * clearCounts.tetrises) / (results.length * maxPieces),
+    strategy: {
+      cleanWellDepth: distribution(
+        results.map((result) => result.strategyDiagnostics.meanCleanWellDepth),
+      ),
+      tetrisSetupProgress: distribution(
+        results.map((result) => result.strategyDiagnostics.meanTetrisSetupProgress),
+      ),
+      tetrisReadyRows: distribution(
+        results.map((result) => result.strategyDiagnostics.meanTetrisReadyRows),
+      ),
+    },
   };
 }
 

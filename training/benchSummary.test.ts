@@ -6,10 +6,20 @@ describe('summarizeBench', () => {
     {
       score: 900, lines: 20, pieces: 300, meanHeight: 4, reason: 'pieceCap',
       clearCounts: { singles: 0, doubles: 0, triples: 0, tetrises: 5 },
+      strategyDiagnostics: {
+        meanCleanWellDepth: 4,
+        meanTetrisSetupProgress: 3,
+        meanTetrisReadyRows: 2,
+      },
     },
     {
-      score: 600, lines: 10, pieces: 20, meanHeight: 8, reason: 'topOut',
+      score: 600, lines: 10, pieces: 20, meanHeight: 8, reason: 'gameover',
       clearCounts: { singles: 0, doubles: 1, triples: 0, tetrises: 2 },
+      strategyDiagnostics: {
+        meanCleanWellDepth: 2,
+        meanTetrisSetupProgress: 1,
+        meanTetrisReadyRows: 0,
+      },
     },
   ];
 
@@ -19,6 +29,7 @@ describe('summarizeBench', () => {
     expect(summary.lines.mean).toBe(15);
     expect(summary.height.mean).toBe(6);
     expect(summary.cappedGames).toBe(1);
+    expect(summary.gameoverGames).toBe(1);
     expect(summary.totalPieces).toBe(320);
   });
 
@@ -40,12 +51,20 @@ describe('summarizeBench', () => {
     expect(summary.tetrisLineShare).toBeCloseTo(28 / 30, 12);
     expect(summary.tetrisesPer100ScheduledPieces).toBeCloseTo(100 * 7 / 600, 12);
     expect(formatLineClearCounts(summary.clearCounts)).toBe('1/2/3/4 clears 0/1/0/7');
+    expect(summary.strategy.cleanWellDepth).toEqual({ mean: 3, median: 3, min: 2, max: 4 });
+    expect(summary.strategy.tetrisSetupProgress.mean).toBe(2);
+    expect(summary.strategy.tetrisReadyRows.mean).toBe(1);
   });
 
   it('reports no tetris line share when no lines were cleared', () => {
     const summary = summarizeBench([{
-      score: 0, lines: 0, pieces: 10, meanHeight: 20, reason: 'topOut',
+      score: 0, lines: 0, pieces: 10, meanHeight: 20, reason: 'gameover',
       clearCounts: { singles: 0, doubles: 0, triples: 0, tetrises: 0 },
+      strategyDiagnostics: {
+        meanCleanWellDepth: 0,
+        meanTetrisSetupProgress: 0,
+        meanTetrisReadyRows: 0,
+      },
     }], 300);
     expect(summary.tetrisLineShare).toBe(0);
   });
@@ -67,8 +86,13 @@ describe('summarizeBench', () => {
       lines,
       pieces: 0,
       meanHeight: 0,
-      reason: 'topOut',
+      reason: 'gameover',
       clearCounts: { singles, doubles: 0, triples: 0, tetrises: 0 },
+      strategyDiagnostics: {
+        meanCleanWellDepth: 0,
+        meanTetrisSetupProgress: 0,
+        meanTetrisReadyRows: 0,
+      },
     }], 300)).toThrow(/clearCounts|integer|finite|non-negative/);
   });
 

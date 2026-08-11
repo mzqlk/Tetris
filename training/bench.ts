@@ -114,8 +114,11 @@ ${row('mean stack height (diagnostic)', summary.height, 2)}
 
 ${formatLineClearCounts(summary.clearCounts)}
 tetris line share  ${(100 * summary.tetrisLineShare).toFixed(2)}%
+mean clean well depth  ${summary.strategy.cleanWellDepth.mean.toFixed(2)}
+mean tetris setup progress  ${summary.strategy.tetrisSetupProgress.mean.toFixed(2)}
+mean tetris-ready rows  ${summary.strategy.tetrisReadyRows.mean.toFixed(2)}
 tetrises/100 scheduled pieces  ${summary.tetrisesPer100ScheduledPieces.toFixed(3)}
 
-survival  ${summary.cappedGames}/${args.games} games hit the piece cap
+survival capped/gameover/total  ${summary.cappedGames}/${summary.gameoverGames}/${results.length}
 throughput  ${Math.round(summary.totalPieces / (elapsedMs / 1000))} pieces/sec (single core)
 elapsed     ${(elapsedMs / 1000).toFixed(1)}s`);
