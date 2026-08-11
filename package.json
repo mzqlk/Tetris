@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "typecheck:train": "tsc -p tsconfig.train.json",
     "bench": "tsx training/bench.ts",
+    "bench:paired": "tsx training/pairedBench.ts",
     "train": "tsx training/train.ts"
   },
   "dependencies": {
