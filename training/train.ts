@@ -26,27 +26,28 @@ import {
 } from '../src/ai/weights';
 import { SCORE_RATE_OBJECTIVE } from './objective';
 import {
-  evaluateScoreReevaluation,
+  evaluateTetrisCandidate,
   fixedReevaluationSeeds,
   type ReevaluationSummary,
 } from './publication';
 import { planReevaluation } from './reevaluation';
-import { buildReevaluationLogEntry } from './reevaluationLog';
+import {
+  buildReevaluationLogEntry,
+  type LoggedReevaluation,
+} from './reevaluationLog';
+import { writeCandidateWeights } from './candidateWeights';
 import {
   assertFreshRun,
   readCompatibleRunArtifacts,
   resolveRunPaths,
-  type ScoreRateBestEver,
   type ScoreRateCheckpoint,
+  type ScoreRateEvaluation,
 } from './runArtifacts';
 import { acquireRunLock } from './runLock';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 /** Salt keeping the candidate-sampling stream disjoint from the game seeds. */
 const SAMPLE_STREAM = 0xce41;
-const PUBLIC_AI = resolve(ROOT, 'public/ai');
-const BEST_PUBLIC = resolve(PUBLIC_AI, 'best-weights.json');
-const BEST_SRC = resolve(ROOT, 'src/ai/trained-weights.json');
 
 /**
  * A mistyped or omitted value has to fail loudly. Bare `Number(value)` yields
@@ -95,30 +96,6 @@ function parseArgs(argv: string[]): {
   return out;
 }
 
-function writeWeightsFiles(best: ScoreRateBestEver, depth: 1 | 2) {
-  const payload = JSON.stringify({
-    version: 3,
-    weights: fromVector(best.weights),
-    objective: SCORE_RATE_OBJECTIVE,
-    meanScore: best.meanScore,
-    evalMaxPieces: best.evalMaxPieces,
-    meanLines: best.meanLines,
-    meanHeight: best.meanHeight,
-    meanClearCounts: best.meanClearCounts,
-    tetrisLineShare: best.tetrisLineShare,
-    evalGames: best.evalGames,
-    gen: best.gen,
-    searchDepth: depth,
-    trainedAt: new Date().toISOString(),
-  }, null, 2);
-
-  // Two copies on purpose: files under public/ are copied verbatim by Vite and
-  // must not be imported, while the bundled copy is what makes `dist` run
-  // standalone. Same bytes, different jobs.
-  writeFileSync(BEST_PUBLIC, payload);
-  writeFileSync(BEST_SRC, payload);
-}
-
 function reevaluationSummary(
   stats: CandidateStats,
   index: number,
@@ -130,6 +107,25 @@ function reevaluationSummary(
     meanHeight: stats.meanHeight[index],
     meanClearCounts: stats.meanClearCounts[index],
     tetrisLineShare: stats.tetrisLineShares[index],
+    strategyDiagnostics: stats.meanStrategyDiagnostics[index],
+    survivalDiagnostics: stats.survivalDiagnostics[index],
+  };
+}
+
+function loggedReevaluation(
+  evaluation: ScoreRateEvaluation,
+): LoggedReevaluation {
+  return {
+    weights: evaluation.weights,
+    meanScore: evaluation.meanScore,
+    scoreRate: evaluation.scoreRate,
+    meanLines: evaluation.meanLines,
+    meanHeight: evaluation.meanHeight,
+    meanClearCounts: evaluation.meanClearCounts,
+    tetrisLineShare: evaluation.tetrisLineShare,
+    strategyDiagnostics: evaluation.strategyDiagnostics,
+    survivalDiagnostics: evaluation.survivalDiagnostics,
+    gen: evaluation.gen,
   };
 }
 
@@ -169,17 +165,19 @@ mkdirSync(paths.outputDir, { recursive: true });
 let state: CemState = initCem();
 let maxPieces = cfg.initialMaxPieces;
 let baseSeed = cfg.baseSeed;
-let bestEver: ScoreRateBestEver | null = null;
+let publishedBaseline: ScoreRateEvaluation | null = null;
+let bestQualifiedCandidate: ScoreRateEvaluation | null = null;
 
 if (checkpoint !== null) {
   state = { mu: checkpoint.mu, sigma: checkpoint.sigma, gen: checkpoint.gen };
   maxPieces = checkpoint.maxPieces;
   baseSeed = checkpoint.baseSeed;
-  bestEver = checkpoint.bestEver;
+  publishedBaseline = checkpoint.publishedBaseline;
+  bestQualifiedCandidate = checkpoint.bestQualifiedCandidate;
   console.log(
     `resumed ${checkpoint.objective} from gen ${checkpoint.gen}, ` +
-    `maxPieces ${maxPieces}, best mean score ` +
-    `${bestEver === null ? 'none' : bestEver.meanScore.toFixed(1)}`,
+    `maxPieces ${maxPieces}, qualified candidate ` +
+    `${bestQualifiedCandidate === null ? 'none' : bestQualifiedCandidate.meanScore.toFixed(1)}`,
   );
 }
 
@@ -193,7 +191,7 @@ console.log(
 
 function saveCheckpoint() {
   const cp: ScoreRateCheckpoint = {
-    version: 3,
+    version: 4,
     objective: SCORE_RATE_OBJECTIVE,
     gen: state.gen,
     mu: state.mu,
@@ -201,7 +199,8 @@ function saveCheckpoint() {
     baseSeed,
     maxPieces,
     config: cfg,
-    bestEver,
+    publishedBaseline,
+    bestQualifiedCandidate,
   };
   writeFileSync(paths.checkpoint, JSON.stringify(cp, null, 2));
 }
@@ -247,6 +246,8 @@ async function runGeneration(): Promise<void> {
     meanPieces,
     meanHeight,
     tetrisLineShares,
+    meanStrategyDiagnostics,
+    survivalDiagnostics,
   } = aggregateFitness(results, candidates.length, cfg.gamesPerCandidate, maxPieces);
 
   const bestScoreRate = Math.max(...scoreRates);
@@ -267,6 +268,8 @@ async function runGeneration(): Promise<void> {
       score: meanScore[index],
       height: meanHeight[index],
       tetrisLineShare: tetrisLineShares[index],
+      strategy: meanStrategyDiagnostics[index],
+      survival: survivalDiagnostics[index],
     }))
     .sort((a, b) => b.fit - a.fit)
     .slice(0, eliteCount(cfg.eliteFrac, candidates.length));
@@ -299,6 +302,29 @@ async function runGeneration(): Promise<void> {
     bestTetrisLineShare,
     medianTetrisLineShare: median(tetrisLineShares),
     eliteTetrisLineShare,
+    bestStrategyDiagnostics: meanStrategyDiagnostics[bestIndex],
+    medianStrategyDiagnostics: {
+      meanCleanWellDepth: median(
+        meanStrategyDiagnostics.map((diagnostics) => diagnostics.meanCleanWellDepth),
+      ),
+      meanTetrisSetupProgress: median(
+        meanStrategyDiagnostics.map((diagnostics) => diagnostics.meanTetrisSetupProgress),
+      ),
+      meanTetrisReadyRows: median(
+        meanStrategyDiagnostics.map((diagnostics) => diagnostics.meanTetrisReadyRows),
+      ),
+    },
+    eliteStrategyDiagnostics: {
+      meanCleanWellDepth: median(
+        elites.map((elite) => elite.strategy.meanCleanWellDepth),
+      ),
+      meanTetrisSetupProgress: median(
+        elites.map((elite) => elite.strategy.meanTetrisSetupProgress),
+      ),
+      meanTetrisReadyRows: median(
+        elites.map((elite) => elite.strategy.meanTetrisReadyRows),
+      ),
+    },
     gamesPerCandidate: cfg.gamesPerCandidate,
     elapsedMs,
   }) + '\n');
@@ -328,7 +354,7 @@ async function runGeneration(): Promise<void> {
   if (state.gen % cfg.reevalEvery === 0) {
     const mu = normalize(state.mu);
     const reevaluation = planReevaluation(
-      bestEver,
+      publishedBaseline,
       toVector(DEFAULT_WEIGHTS),
       mu,
     );
@@ -357,35 +383,59 @@ async function runGeneration(): Promise<void> {
 
     if (reevaluation.baselineIndex !== null) {
       const baseline = reevaluationSummary(evalStats, reevaluation.baselineIndex);
-      bestEver = {
+      publishedBaseline = {
         weights: evaluationWeights[reevaluation.baselineIndex],
         ...baseline,
-        gen: reevaluation.baselineGen,
+        gen: -1,
         evalGames: cfg.reevalGames,
         evalMaxPieces: cfg.reevalMaxPieces,
       };
       console.log(
-        `  established published baseline: mean score ${baseline.meanScore.toFixed(1)}, ` +
+        `  established immutable baseline: mean score ${baseline.meanScore.toFixed(1)}, ` +
         `score rate ${baseline.scoreRate.toFixed(3)}, mean height ${baseline.meanHeight.toFixed(2)}`,
       );
     }
 
-    const candidate = reevaluationSummary(evalStats, reevaluation.candidateIndex);
-    if (bestEver === null) {
+    const candidateSummary = reevaluationSummary(evalStats, reevaluation.candidateIndex);
+    if (publishedBaseline === null) {
       throw new Error('fixed reevaluation did not establish a published score baseline');
     }
-    const currentBest = bestEver;
-    const decision = evaluateScoreReevaluation(candidate, currentBest);
-    if (decision.shouldPublish) {
-      bestEver = {
-        weights: mu,
-        ...candidate,
-        gen: state.gen,
-        evalGames: cfg.reevalGames,
-        evalMaxPieces: cfg.reevalMaxPieces,
-      };
-      writeWeightsFiles(bestEver, cfg.depth);
-      console.log(`  new best — wrote best-weights.json and trained-weights.json`);
+    const candidate: ScoreRateEvaluation = {
+      weights: mu,
+      ...candidateSummary,
+      gen: state.gen,
+      evalGames: cfg.reevalGames,
+      evalMaxPieces: cfg.reevalMaxPieces,
+    };
+    const currentQualified = bestQualifiedCandidate;
+    const qualification = evaluateTetrisCandidate(
+      candidate,
+      publishedBaseline,
+      currentQualified,
+    );
+    if (qualification.shouldSave) {
+      bestQualifiedCandidate = candidate;
+      writeCandidateWeights(paths.candidate, {
+        version: 4,
+        weights: fromVector(candidate.weights),
+        objective: SCORE_RATE_OBJECTIVE,
+        meanScore: candidate.meanScore,
+        evalMaxPieces: candidate.evalMaxPieces,
+        meanLines: candidate.meanLines,
+        meanHeight: candidate.meanHeight,
+        meanClearCounts: candidate.meanClearCounts,
+        tetrisLineShare: candidate.tetrisLineShare,
+        strategyDiagnostics: candidate.strategyDiagnostics,
+        survivalDiagnostics: candidate.survivalDiagnostics,
+        evalGames: candidate.evalGames,
+        gen: candidate.gen,
+        searchDepth: cfg.depth,
+        trainedAt: new Date().toISOString(),
+      });
+      console.log(
+        `  saved qualified candidate at gen ${candidate.gen}: ` +
+        `score rate ${candidate.scoreRate.toFixed(3)}`,
+      );
     }
 
     const reevaluationEvent = buildReevaluationLogEntry({
@@ -397,22 +447,12 @@ async function runGeneration(): Promise<void> {
         depth: cfg.depth,
         baseSeed,
       },
-      currentBest: {
-        weights: currentBest.weights,
-        meanScore: currentBest.meanScore,
-        scoreRate: currentBest.scoreRate,
-        meanLines: currentBest.meanLines,
-        meanHeight: currentBest.meanHeight,
-        meanClearCounts: currentBest.meanClearCounts,
-        tetrisLineShare: currentBest.tetrisLineShare,
-        gen: currentBest.gen,
-      },
-      candidate: {
-        weights: mu,
-        ...candidate,
-        gen: state.gen,
-      },
-      decision,
+      publishedBaseline: loggedReevaluation(publishedBaseline),
+      currentQualified: currentQualified === null
+        ? null
+        : loggedReevaluation(currentQualified),
+      candidate: loggedReevaluation(candidate),
+      qualification,
     });
     appendFileSync(paths.log, `${JSON.stringify(reevaluationEvent)}\n`);
   }
@@ -427,11 +467,10 @@ while (!stopping) {
 
 saveCheckpoint();
 console.log(
-  bestEver === null
-    ? `stopped at gen ${state.gen}; no fixed-schedule reevaluation yet`
-    : `stopped at gen ${state.gen}; bestEver mean score ${bestEver.meanScore.toFixed(1)}, ` +
-      `score rate ${bestEver.scoreRate.toFixed(3)}, mean height ` +
-      `${bestEver.meanHeight.toFixed(2)} (gen ${bestEver.gen})`,
+  bestQualifiedCandidate === null
+    ? `stopped at gen ${state.gen}; qualified candidate none`
+    : `stopped at gen ${state.gen}; qualified candidate score rate ` +
+      `${bestQualifiedCandidate.scoreRate.toFixed(3)} (gen ${bestQualifiedCandidate.gen})`,
 );
 } finally {
   await pool.destroy();

@@ -141,6 +141,9 @@ const GEN_0 = {
   bestTetrisLineShare: 0.25,
   medianTetrisLineShare: 0.1,
   eliteTetrisLineShare: 0.2,
+  bestStrategyDiagnostics: { ...STRATEGY },
+  medianStrategyDiagnostics: { ...STRATEGY },
+  eliteStrategyDiagnostics: { ...STRATEGY },
   gamesPerCandidate: 5,
   elapsedMs: 100,
 };
@@ -417,6 +420,36 @@ describe('readCompatibleRunArtifacts', () => {
     expect(() => readCompatibleRunArtifacts(
       writeRun(CHECKPOINT, [bad, GEN_1, REEVALUATION_2]),
     )).toThrow(/generation.*schema/i);
+  });
+
+  describe.each([
+    ['bestStrategyDiagnostics', 'best strategy diagnostics'],
+    ['medianStrategyDiagnostics', 'median strategy diagnostics'],
+    ['eliteStrategyDiagnostics', 'elite strategy diagnostics'],
+  ] as const)('%s generation contract', (field, label) => {
+    it('rejects a missing object', () => {
+      const bad = copy(GEN_0) as Record<string, unknown>;
+      delete bad[field];
+      expect(() => readCompatibleRunArtifacts(
+        writeRun(CHECKPOINT, [bad, GEN_1, REEVALUATION_2]),
+      )).toThrow(/generation.*schema/i);
+    });
+
+    it('rejects a malformed object', () => {
+      const bad = copy(GEN_0) as Record<string, unknown>;
+      bad[field] = 'malformed';
+      expect(() => readCompatibleRunArtifacts(
+        writeRun(CHECKPOINT, [bad, GEN_1, REEVALUATION_2]),
+      )).toThrow(new RegExp(label, 'i'));
+    });
+
+    it('rejects an extra nested key', () => {
+      const bad = copy(GEN_0) as Record<string, unknown>;
+      (bad[field] as Record<string, unknown>).extra = true;
+      expect(() => readCompatibleRunArtifacts(
+        writeRun(CHECKPOINT, [bad, GEN_1, REEVALUATION_2]),
+      )).toThrow(new RegExp(label, 'i'));
+    });
   });
 
   it('rejects a changed published baseline in a later event', () => {

@@ -444,6 +444,9 @@ const GENERATION_KEYS = [
   'bestTetrisLineShare',
   'medianTetrisLineShare',
   'eliteTetrisLineShare',
+  'bestStrategyDiagnostics',
+  'medianStrategyDiagnostics',
+  'eliteStrategyDiagnostics',
   'gamesPerCandidate',
   'elapsedMs',
 ] as const;
@@ -673,6 +676,15 @@ function validateGeneration(
   logProportion(raw.bestTetrisLineShare, line, 'generation bestTetrisLineShare');
   logProportion(raw.medianTetrisLineShare, line, 'generation medianTetrisLineShare');
   logProportion(raw.eliteTetrisLineShare, line, 'generation eliteTetrisLineShare');
+  logStrategyDiagnostics(
+    raw.bestStrategyDiagnostics, line, 'generation best strategy diagnostics',
+  );
+  logStrategyDiagnostics(
+    raw.medianStrategyDiagnostics, line, 'generation median strategy diagnostics',
+  );
+  logStrategyDiagnostics(
+    raw.eliteStrategyDiagnostics, line, 'generation elite strategy diagnostics',
+  );
   const games = logInteger(raw.gamesPerCandidate, line, 'generation gamesPerCandidate', 1);
   if (games !== checkpoint.config.gamesPerCandidate) {
     throw logError(line, 'generation gamesPerCandidate disagrees with checkpoint config');
