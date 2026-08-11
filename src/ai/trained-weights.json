@@ -1,23 +1,31 @@
 {
-  "version": 2,
+  "version": 3,
   "weights": {
-    "aggregateHeight": -0.4182726361859328,
-    "holes": -0.3011562228071223,
-    "bumpiness": 0.19599120300657186,
-    "maxHeight": -0.12559229558840815,
-    "linesCleared": 0.23323287009034133,
-    "landingHeight": -0.3909024145714191,
-    "rowTransitions": -0.4166945006500625,
-    "colTransitions": -0.5039849359039587,
-    "wellDepth": -0.2129074047961274
+    "aggregateHeight": -0.03136702939998303,
+    "holes": -0.49514382541551616,
+    "bumpiness": 0.07930716210288993,
+    "maxHeight": -0.06480046456829196,
+    "linesCleared": 0.14840680564236144,
+    "landingHeight": -0.300289317086154,
+    "rowTransitions": -0.5541884383921293,
+    "colTransitions": -0.4223801328449683,
+    "wellDepth": -0.27054182855840314,
+    "lineClearValue": 0.2691450141912839
   },
-  "objective": "score-rate-v1",
-  "meanScore": 3104830,
+  "objective": "score-rate-v2",
+  "meanScore": 3289243.3333333335,
   "evalMaxPieces": 5000,
-  "meanLines": 1998.3333333333333,
-  "meanHeight": 3.3564599999999993,
+  "meanLines": 1998.0666666666666,
+  "meanHeight": 4.07848,
+  "meanClearCounts": {
+    "singles": 1454.6,
+    "doubles": 264.76666666666665,
+    "triples": 4.6,
+    "tetrises": 0.03333333333333333
+  },
+  "tetrisLineShare": 0.00006673117346768543,
   "evalGames": 30,
-  "gen": 20,
+  "gen": 40,
   "searchDepth": 2,
-  "trainedAt": "2026-08-02T09:41:15.052Z"
+  "trainedAt": "2026-08-10T12:21:46.191Z"
 }

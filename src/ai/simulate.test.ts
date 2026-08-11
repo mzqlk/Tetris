@@ -285,10 +285,10 @@ describe('simulateGame', () => {
   }, SLOW);
 
   it.each([
-    [7, { lines: 22, score: 3800, pieces: 60, meanHeight: 3.1166666666666667 }],
-    [11, { lines: 22, score: 3600, pieces: 60, meanHeight: 3.7 }],
-    [20260806, { lines: 23, score: 4100, pieces: 60, meanHeight: 3.4833333333333334 }],
-  ])('keeps the zero-extended v1 model deterministic for seed %i', (seed, expected) => {
+    [7, { lines: 22, score: 4200, pieces: 60, meanHeight: 4.166666666666667 }],
+    [11, { lines: 23, score: 5100, pieces: 60, meanHeight: 3.933333333333333 }],
+    [20260806, { lines: 22, score: 4300, pieces: 60, meanHeight: 3.8333333333333335 }],
+  ])('keeps the bundled default model deterministic for seed %i', (seed, expected) => {
     const result = simulateGame({
       weights: toVector(DEFAULT_WEIGHTS), seed, maxPieces: 60, depth: 2,
     });
