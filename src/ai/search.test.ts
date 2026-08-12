@@ -7,6 +7,7 @@ import { cellKey } from './placements';
 import type { PublicSearchState } from './publicState';
 import {
   compareSearchValues,
+  selectPlacementBeam,
   searchFixed,
   type SearchBudget,
   type SearchDecision,
@@ -68,6 +69,71 @@ describe('search value contract', () => {
 });
 
 describe('fixed expectimax search', () => {
+  it('returns a complete one-ply fallback when aborting during placements', () => {
+    let calls = 0;
+    const result = searchFixed(state(), zeros(), {
+      ...fixedBudget(3),
+      maxRootPlacements: 2,
+      maxChildPlacements: 1,
+      shouldAbort: () => ++calls > 3,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.diagnostics.aborted).toBe(true);
+    expect(result!.diagnostics.completedDepth).toBe(1);
+  });
+
+  it('discards a partial chance result on abort', () => {
+    let calls = 0;
+    const result = searchFixed(state({ unseenBagMask: 0 }), zeros(), {
+      ...fixedBudget(2),
+      maxRootPlacements: 1,
+      maxChildPlacements: 1,
+      shouldAbort: () => ++calls > 4,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.diagnostics.aborted).toBe(true);
+    expect(result!.diagnostics.completedDepth).toBe(1);
+  });
+
+  it('discards a partial Hold result when aborting before Hold', () => {
+    let calls = 0;
+    const result = searchFixed(state({ holdAvailable: true, hold: 1 }), zeros(), {
+      ...fixedBudget(2),
+      maxRootPlacements: 1,
+      maxChildPlacements: 1,
+      shouldAbort: () => ++calls > 5,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.diagnostics.aborted).toBe(true);
+    expect(result!.diagnostics.completedDepth).toBe(1);
+  });
+
+  it('retains abort diagnostics even when aborting before the first candidate', () => {
+    const result = searchFixed(state(), zeros(), {
+      ...fixedBudget(4),
+      maxRootPlacements: 1,
+      maxChildPlacements: 1,
+      shouldAbort: () => true,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.diagnostics).toMatchObject({
+      aborted: true,
+      completedDepth: 1,
+    });
+  });
+
+  it('retains exactly the requested root and child beam prefixes with stable ties', () => {
+    const entries = Array.from({ length: 65 }, (_, enumerationIndex) => ({
+      enumerationIndex,
+      immediateHeuristic: 0,
+      value: enumerationIndex,
+    }));
+    expect(selectPlacementBeam(entries, true, fixedBudget(1))).toHaveLength(64);
+    expect(selectPlacementBeam(entries, true, fixedBudget(1)).map((x) => x.enumerationIndex))
+      .toEqual(Array.from({ length: 64 }, (_, i) => i));
+    expect(selectPlacementBeam(entries, false, fixedBudget(1)).map((x) => x.enumerationIndex))
+      .toEqual(Array.from({ length: 32 }, (_, i) => i));
+  });
   it('keeps Hold outside the placement beam', () => {
     const result = searchFixed(
       state({

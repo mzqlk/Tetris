@@ -51,7 +51,38 @@ const budget = (): SearchBudget => ({
   cacheEnabled: true,
 });
 
+const survivingCorpusState = (): PublicSearchState => ({
+  board: boardFrom(Array(20).fill('..........')),
+  current: createPiece(2),
+  next: 2,
+  hold: null,
+  holdAvailable: false,
+  unseenBagMask: 0b0000010,
+});
+
 describe('depth-four constrained corpus', () => {
+  it('proves a real four-lock surviving path with exact deterministic counts', () => {
+    const first = searchFixed(survivingCorpusState(), Array(FEATURE_COUNT).fill(0), budget());
+    const second = searchFixed(survivingCorpusState(), Array(FEATURE_COUNT).fill(0), budget());
+    expect(first).not.toBeNull();
+    expect(first!.diagnostics.completedDepth).toBe(4);
+    expect(first!.value.survivalProbability).toBeGreaterThan(0);
+    expect(Number.isFinite(first!.value.expectedHeuristicValue)).toBe(true);
+    expect(first!.action.kind).toBe('place');
+    expect(second!.action.kind).toBe('place');
+    if (first!.action.kind === 'place' && second!.action.kind === 'place') {
+      expect(cellKey(first!.action.placement.piece)).toBe(cellKey(second!.action.placement.piece));
+    }
+    expect(first!.diagnostics).toEqual({
+      completedDepth: 4,
+      expandedDecisionNodes: 1000,
+      expandedChanceNodes: 102,
+      cacheHits: 48,
+      aborted: false,
+    });
+    expect(second).toEqual(first);
+  });
+
   it('has stable action, finite value, and exact node counts', () => {
     const first = searchFixed(corpusState(), corpusWeights(), budget());
     const second = searchFixed(corpusState(), corpusWeights(), budget());

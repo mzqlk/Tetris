@@ -77,6 +77,23 @@ interface RankedPlacement {
   enumerationIndex: number;
 }
 
+export interface PlacementBeamEntry {
+  immediateHeuristic: number;
+  enumerationIndex: number;
+}
+
+export function selectPlacementBeam<T extends PlacementBeamEntry>(
+  entries: T[],
+  root: boolean,
+  budget: SearchBudget,
+): T[] {
+  const limit = root ? budget.maxRootPlacements : budget.maxChildPlacements;
+  return [...entries]
+    .sort((a, b) => b.immediateHeuristic - a.immediateHeuristic
+      || a.enumerationIndex - b.enumerationIndex)
+    .slice(0, limit);
+}
+
 export function compareSearchValues(a: SearchValue, b: SearchValue): number {
   if (a.survivalProbability !== b.survivalProbability) {
     return a.survivalProbability - b.survivalProbability;
@@ -142,10 +159,11 @@ function cacheComplete(context: SearchContext, key: string, result: NodeResult):
 }
 
 function abortResult(context: SearchContext, best: NodeResult | null = null): NodeResult {
+  void best;
   context.diagnostics.aborted = true;
   return {
-    value: best?.value ?? TERMINAL_VALUE,
-    action: best?.action ?? null,
+    value: TERMINAL_VALUE,
+    action: null,
     completed: false,
   };
 }
@@ -155,10 +173,7 @@ function rankPlacements(
   context: SearchContext,
   root: boolean,
 ): RankedPlacement[] {
-  const limit = root
-    ? context.budget.maxRootPlacements
-    : context.budget.maxChildPlacements;
-  return enumeratePlacements(state.board, state.current)
+  const entries = enumeratePlacements(state.board, state.current)
     .map((placement, enumerationIndex) => {
       const evaluated = evaluatePlacement(state, placement, context.weights);
       return {
@@ -167,11 +182,8 @@ function rankPlacements(
         pending: evaluated.pending,
         enumerationIndex,
       };
-    })
-    .sort((a, b) =>
-      b.immediateHeuristic - a.immediateHeuristic
-      || a.enumerationIndex - b.enumerationIndex)
-    .slice(0, limit);
+    });
+  return selectPlacementBeam(entries, root, context.budget);
 }
 
 function addImmediate(immediateHeuristic: number, future: SearchValue): SearchValue {
@@ -345,8 +357,33 @@ export function searchFixed(
   };
   const result = searchDecision(state, budget.maxLockedDepth, true, context);
   if (result.completed) diagnostics.completedDepth = budget.maxLockedDepth;
-  if (result.action === null) return null;
-  return { action: result.action, value: result.value, diagnostics };
+  if (result.completed && result.action !== null) {
+    return { action: result.action, value: result.value, diagnostics };
+  }
+  if (!result.completed) {
+    const fallbackDiagnostics: SearchDiagnostics = {
+      completedDepth: 0,
+      expandedDecisionNodes: 0,
+      expandedChanceNodes: 0,
+      cacheHits: 0,
+      aborted: false,
+    };
+    const fallbackContext: SearchContext = {
+      weights,
+      budget: { ...budget, maxLockedDepth: 1, shouldAbort: () => false },
+      diagnostics: fallbackDiagnostics,
+      cache: new Map(),
+    };
+    const fallback = searchDecision(state, 1, true, fallbackContext);
+    diagnostics.expandedDecisionNodes += fallbackDiagnostics.expandedDecisionNodes;
+    diagnostics.expandedChanceNodes += fallbackDiagnostics.expandedChanceNodes;
+    diagnostics.cacheHits += fallbackDiagnostics.cacheHits;
+    diagnostics.completedDepth = fallback.completed ? 1 : 0;
+    if (fallback.action !== null) {
+      return { action: fallback.action, value: fallback.value, diagnostics };
+    }
+  }
+  return null;
 }
 
 export interface EvalResult {
