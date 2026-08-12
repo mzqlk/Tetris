@@ -1,8 +1,8 @@
 import type { Board, Piece } from '../types';
-import { getPieceCells, lockPiece, clearLines, isValidPosition } from '../engine/board';
+import { isValidPosition } from '../engine/board';
 import { createPiece } from '../engine/piece';
-import { extractFeatures } from './features';
 import { enumeratePlacements, type Placement } from './placements';
+import { evaluatePlacement } from './stateTransitions';
 
 export interface EvalResult {
   score: number;
@@ -17,15 +17,19 @@ export interface Decision {
 
 /** lock -> clear -> extract features -> dot with the weight vector. */
 export function evalMove(board: Board, placement: Placement, w: number[]): EvalResult {
-  const placedCells = getPieceCells(placement.piece);
-  const locked = lockPiece(board, placement.piece);
-  const { clearedRows, newBoard } = clearLines(locked);
-  const features = extractFeatures(newBoard, clearedRows.length, placedCells);
-
-  let score = 0;
-  for (let i = 0; i < features.length; i++) score += features[i] * w[i];
-
-  return { score, boardAfter: newBoard, linesCleared: clearedRows.length };
+  const transition = evaluatePlacement({
+    board,
+    current: placement.piece,
+    next: placement.piece.type,
+    hold: null,
+    holdAvailable: true,
+    unseenBagMask: 0,
+  }, placement, w);
+  return {
+    score: transition.heuristic,
+    boardAfter: transition.boardAfter,
+    linesCleared: transition.linesCleared,
+  };
 }
 
 /**
