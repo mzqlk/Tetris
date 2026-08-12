@@ -3,7 +3,7 @@ import { createPiece } from '../engine/piece';
 import { FEATURE_COUNT, FEATURE_NAMES } from './features';
 import { cellKey } from './placements';
 import type { PublicSearchState } from './publicState';
-import { searchFixed, type SearchBudget } from './search';
+import { searchFixed, searchIterative, type SearchBudget } from './search';
 import { boardFrom } from './testUtils';
 
 const corpusState = (): PublicSearchState => ({
@@ -61,6 +61,35 @@ const survivingCorpusState = (): PublicSearchState => ({
 });
 
 describe('depth-four constrained corpus', () => {
+  it('returns the last complete depth and discards a partial next depth', () => {
+    let depth1Checks = 0;
+    searchFixed(corpusState(), corpusWeights(), {
+      ...budget(), maxLockedDepth: 1, shouldAbort: () => { depth1Checks++; return false; },
+    });
+    let depth2Checks = 0;
+    searchFixed(corpusState(), corpusWeights(), {
+      ...budget(), maxLockedDepth: 2, shouldAbort: () => { depth2Checks++; return false; },
+    });
+    const baseline = searchFixed(corpusState(), corpusWeights(), { ...budget(), maxLockedDepth: 2 });
+    let calls = 0;
+    const abortAfter = depth1Checks + depth2Checks + 1;
+    const result = searchIterative(corpusState(), corpusWeights(), {
+      ...budget(), maxLockedDepth: 4, shouldAbort: () => ++calls > abortAfter,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.diagnostics).toMatchObject({ completedDepth: 2, aborted: true });
+    expect(result!.action).toEqual(baseline!.action);
+  });
+
+  it('uses a complete one-ply placement fallback when depth one aborts', () => {
+    const result = searchIterative(corpusState(), corpusWeights(), {
+      ...budget(), maxLockedDepth: 4, shouldAbort: () => true,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.diagnostics).toMatchObject({ completedDepth: 0, aborted: true });
+    expect(result!.action.kind).toBe('place');
+  });
+
   it('proves a real four-lock surviving path with exact deterministic counts', () => {
     const first = searchFixed(survivingCorpusState(), Array(FEATURE_COUNT).fill(0), budget());
     const second = searchFixed(survivingCorpusState(), Array(FEATURE_COUNT).fill(0), budget());

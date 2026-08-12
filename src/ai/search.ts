@@ -386,6 +386,75 @@ export function searchFixed(
   return null;
 }
 
+function completePlacementFallback(
+  state: PublicSearchState,
+  weights: number[],
+): { action: SearchAction; value: SearchValue } | null {
+  const placements = enumeratePlacements(state.board, state.current);
+  let best: { action: SearchAction; value: SearchValue; index: number } | null = null;
+  placements.forEach((placement, index) => {
+    const evaluated = evaluatePlacement(state, placement, weights);
+    const candidate = {
+      action: { kind: 'place' as const, placement },
+      value: { survivalProbability: 1, expectedHeuristicValue: evaluated.heuristic },
+      index,
+    };
+    if (best === null
+      || compareSearchValues(candidate.value, best.value) > 0
+      || (compareSearchValues(candidate.value, best.value) === 0 && index < best.index)) {
+      best = candidate;
+    }
+  });
+  if (best === null) return null;
+  const selected = best as { action: SearchAction; value: SearchValue; index: number };
+  return { action: selected.action, value: selected.value };
+}
+
+/** Browser entry point: progressively deepen and publish only complete depths. */
+export function searchIterative(
+  state: PublicSearchState,
+  weights: number[],
+  budget: SearchBudget,
+): SearchDecision | null {
+  assertPublicSearchState(state);
+  validateBudget(budget);
+  if (weights.length !== FEATURE_COUNT || weights.some((weight) => !Number.isFinite(weight))) {
+    throw new Error(`search weights must contain exactly ${FEATURE_COUNT} finite values`);
+  }
+
+  const diagnostics: SearchDiagnostics = {
+    completedDepth: 0,
+    expandedDecisionNodes: 0,
+    expandedChanceNodes: 0,
+    cacheHits: 0,
+    aborted: false,
+  };
+  const context: SearchContext = {
+    weights,
+    budget,
+    diagnostics,
+    cache: new Map(),
+  };
+  let committed: SearchDecision | null = null;
+  for (let depth = 1; depth <= budget.maxLockedDepth; depth++) {
+    const result = searchDecision(state, depth, true, context);
+    if (!result.completed) {
+      diagnostics.aborted = true;
+      break;
+    }
+    if (result.action !== null) {
+      diagnostics.completedDepth = depth;
+      committed = { action: result.action, value: result.value, diagnostics };
+    }
+  }
+  if (committed !== null) return committed;
+
+  diagnostics.aborted = true;
+  const fallback = completePlacementFallback(state, weights);
+  if (fallback === null) return null;
+  return { ...fallback, diagnostics };
+}
+
 export interface EvalResult {
   score: number;
   boardAfter: Board;
