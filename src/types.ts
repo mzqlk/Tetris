@@ -35,6 +35,9 @@ export interface GameState {
   board: Board;
   currentPiece: Piece | null;
   nextPiece: Piece | null;
+  holdPiece: PieceType | null;
+  holdAvailable: boolean;
+  unseenBagMask: number;
   bag: PieceType[];
   score: number;
   level: number;
