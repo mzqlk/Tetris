@@ -52,6 +52,10 @@ export function lockPlacement(
   state: PublicSearchState,
   placement: Placement,
 ): PlacementTransition {
+  if (placement.piece.type !== state.current.type) {
+    throw new Error('cannot lock a placement for a piece other than the current piece');
+  }
+
   if (!isValidPosition(state.board, placement.piece)) {
     throw new Error('cannot lock an invalid placement');
   }

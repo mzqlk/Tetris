@@ -66,6 +66,13 @@ describe('lock and preview transitions', () => {
     expect(transition.boardAfter[21]).not.toBe(row);
   });
 
+  it('rejects a placement for a piece other than the current piece', () => {
+    const state = publicState({ current: createPiece(1) });
+    const wrongPiecePlacement = enumeratePlacements(state.board, createPiece(2))[0];
+
+    expect(() => lockPlacement(state, wrongPiecePlacement)).toThrow(/current piece/i);
+  });
+
   it('reveals the required preview and rejects a contradictory public reveal', () => {
     const pending = lockPlacement(
       publicState({ next: 4, unseenBagMask: 0b0001000 }),
@@ -74,5 +81,16 @@ describe('lock and preview transitions', () => {
 
     expect(revealPreview(pending, 4 as PieceType)).toMatchObject({ next: 4, unseenBagMask: 0 });
     expect(() => revealPreview(pending, 3 as PieceType)).toThrow(/public bag/i);
+  });
+
+  it('returns null when the promoted current cannot spawn after revealing a preview', () => {
+    const pending = lockPlacement(
+      publicState({ next: 4 }),
+      enumeratePlacements(createEmptyBoard(), createPiece(1))[0],
+    ).pending;
+    const blockedBoard = pending.board.map((row) => [...row]);
+    blockedBoard[0][4] = 7;
+
+    expect(revealPreview({ ...pending, board: blockedBoard }, 5)).toBeNull();
   });
 });
