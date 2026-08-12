@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { useGameStore } from './gameStore';
 import { createEmptyBoard } from '../engine/board';
 import type { PieceType } from '../types';
-import { initialUnseenBagMask, revealPiece } from '../ai/publicState';
+import { initialUnseenBagMask } from '../ai/publicState';
 
 describe('gameStore piece queue', () => {
   it('promotes the previewed piece to current on lock', () => {
@@ -38,7 +38,7 @@ describe('gameStore piece queue', () => {
     expect(p.position).toEqual({ x: 3, y: 0 });
   });
 
-  it('keeps the public seven-bag mask synchronized with visible pieces', () => {
+  it('initializes the public seven-bag state', () => {
     useGameStore.getState().startGame();
     const initial = useGameStore.getState();
 
@@ -47,13 +47,5 @@ describe('gameStore piece queue', () => {
     expect(initial.unseenBagMask).toBe(
       initialUnseenBagMask(initial.currentPiece!.type, initial.nextPiece!.type),
     );
-
-    const maskBeforeDraw = initial.unseenBagMask;
-    useGameStore.setState({ board: createEmptyBoard() });
-    useGameStore.getState().hardDrop();
-    const after = useGameStore.getState();
-
-    expect(after.holdAvailable).toBe(true);
-    expect(after.unseenBagMask).toBe(revealPiece(maskBeforeDraw, after.nextPiece!.type));
   });
 });

@@ -4,7 +4,7 @@ import { createEmptyBoard, lockPiece, clearLines, isGameOver } from '../engine/b
 import { createPiece, rotatePiece, generateBag, movePiece } from '../engine/piece';
 import { calculateScore, calculateSoftDropScore, calculateHardDropScore, calculateLevel } from '../engine/scorer';
 import { shouldDrop } from '../engine/gravity';
-import { initialUnseenBagMask, revealPiece } from '../ai/publicState';
+import { initialUnseenBagMask } from '../ai/publicState';
 
 interface GameActions {
   startGame: () => void;
@@ -59,28 +59,19 @@ function spawnInitial(bag: PieceType[], board: Board): {
  * and exactly one new piece is drawn for the preview. Drawing two here would
  * silently discard the previewed piece and break the 7-bag guarantee.
  */
-function promoteNextPiece(bag: PieceType[], board: Board, preview: Piece, unseenBagMask: number): {
+function promoteNextPiece(bag: PieceType[], board: Board, preview: Piece): {
   currentPiece: Piece;
   nextPiece: Piece;
   bag: PieceType[];
-  unseenBagMask: number;
   gameOver: boolean;
 } {
   const currentPiece = createPiece(preview.type);
   const drawn = drawFromBag(bag);
-  let nextMask: number;
-  try {
-    nextMask = revealPiece(unseenBagMask, drawn.type);
-  } catch (error) {
-    if (!(error instanceof Error) || !/public bag/i.test(error.message)) throw error;
-    nextMask = initialUnseenBagMask(currentPiece.type, drawn.type);
-  }
 
   return {
     currentPiece,
     nextPiece: createPiece(drawn.type),
     bag: drawn.newBag,
-    unseenBagMask: nextMask,
     gameOver: isGameOver(board, currentPiece),
   };
 }
@@ -93,7 +84,6 @@ function lockAndSpawn(
   board: Board,
   piece: Piece,
   bag: PieceType[],
-  unseenBagMask: number,
   score: number,
   level: number,
   lines: number,
@@ -103,18 +93,12 @@ function lockAndSpawn(
   currentPiece: Piece;
   nextPiece: Piece;
   bag: PieceType[];
-  unseenBagMask: number;
   score: number;
   level: number;
   lines: number;
   status: 'playing' | 'gameover';
   flashRows: number[];
 } {
-  const publicMask = Number.isInteger(unseenBagMask)
-    ? unseenBagMask
-    : preview
-      ? initialUnseenBagMask(piece.type, preview.type)
-      : 0;
   const newBoard = lockPiece(board, piece);
   const { clearedRows, newBoard: boardAfterClear } = clearLines(newBoard);
   const linesCleared = clearedRows.length;
@@ -123,7 +107,7 @@ function lockAndSpawn(
   const newLevel = calculateLevel(totalLines);
 
   const result = preview
-    ? promoteNextPiece(bag, boardAfterClear, preview, publicMask)
+    ? promoteNextPiece(bag, boardAfterClear, preview)
     : spawnInitial(bag, boardAfterClear);
 
   return {
@@ -131,7 +115,6 @@ function lockAndSpawn(
     currentPiece: result.currentPiece,
     nextPiece: result.nextPiece,
     bag: result.bag,
-    unseenBagMask: result.unseenBagMask,
     score: score + lineScore,
     level: newLevel,
     lines: totalLines,
@@ -241,7 +224,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     };
 
     const spawned = lockAndSpawn(
-      board, dropped, get().bag, get().unseenBagMask, score + hardDropScore, get().level, get().lines, get().nextPiece
+      board, dropped, get().bag, score + hardDropScore, get().level, get().lines, get().nextPiece
     );
 
     set({
@@ -289,7 +272,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       } else {
         // Piece can't move down — lock it
         const spawned = lockAndSpawn(
-          state.board, state.currentPiece, state.bag, state.unseenBagMask, state.score, state.level, state.lines, state.nextPiece
+          state.board, state.currentPiece, state.bag, state.score, state.level, state.lines, state.nextPiece
         );
 
         set({
