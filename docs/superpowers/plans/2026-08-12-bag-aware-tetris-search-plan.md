@@ -54,6 +54,8 @@
 - Create: `src/ai/publicState.ts`
 - Create: `src/ai/publicState.test.ts`
 - Modify: `src/types.ts`
+- Modify: `src/store/gameStore.ts`
+- Modify: `src/store/gameStore.test.ts`
 
 **Interfaces:**
 - Consumes: `Board`, `Piece`, and `PieceType` from `src/types.ts`; `createPiece` remains the only spawn constructor.
@@ -93,6 +95,7 @@ export function assertPublicSearchState(state: PublicSearchState): void;
 ```
 
 - Add `holdPiece: PieceType | null`, `holdAvailable: boolean`, and `unseenBagMask: number` to `GameState`; environment `bag: PieceType[]` remains internal state and is never part of `PublicSearchState`.
+- Keep the repository buildable at this task boundary by initializing store state to `holdPiece: null`, `holdAvailable: true`, and `unseenBagMask: 0`, and by setting `unseenBagMask = initialUnseenBagMask(current.type, next.type)` in `startGame`. Do not add a Hold action or change lock/spawn behavior yet; those remain Task 6.
 
 - [ ] **Step 1: Write failing public-bag tests**
 
@@ -151,7 +154,7 @@ Run: `npm test`
 Expected: 0 failed test files; existing skips may remain.
 
 ```powershell
-git add -- src/types.ts src/ai/publicState.ts src/ai/publicState.test.ts
+git add -- src/types.ts src/ai/publicState.ts src/ai/publicState.test.ts src/store/gameStore.ts src/store/gameStore.test.ts
 git commit -m "feat(ai): add public seven-bag state"
 ```
 
