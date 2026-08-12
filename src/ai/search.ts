@@ -436,9 +436,11 @@ export function searchIterative(
     cache: new Map(),
   };
   let committed: SearchDecision | null = null;
+  let aborted = false;
   for (let depth = 1; depth <= budget.maxLockedDepth; depth++) {
     const result = searchDecision(state, depth, true, context);
     if (!result.completed) {
+      aborted = true;
       diagnostics.aborted = true;
       break;
     }
@@ -449,7 +451,7 @@ export function searchIterative(
   }
   if (committed !== null) return committed;
 
-  diagnostics.aborted = true;
+  diagnostics.aborted = aborted;
   const fallback = completePlacementFallback(state, weights);
   if (fallback === null) return null;
   return { ...fallback, diagnostics };

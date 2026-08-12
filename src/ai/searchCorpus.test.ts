@@ -90,6 +90,8 @@ describe('depth-four constrained corpus', () => {
     expect(result!.action.kind).toBe('place');
   });
 
+
+
   it('proves a real four-lock surviving path with exact deterministic counts', () => {
     const first = searchFixed(survivingCorpusState(), Array(FEATURE_COUNT).fill(0), budget());
     const second = searchFixed(survivingCorpusState(), Array(FEATURE_COUNT).fill(0), budget());
