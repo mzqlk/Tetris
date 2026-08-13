@@ -1065,7 +1065,7 @@ function cloneEvaluation(evaluation: ScoreRateEvaluation): ScoreRateEvaluation {
     strategyDiagnostics: { ...evaluation.strategyDiagnostics },
     survivalDiagnostics: { ...evaluation.survivalDiagnostics },
     searchDiagnostics: evaluation.searchDiagnostics === undefined
-      ? undefined
+      ? (() => { throw new Error('evaluation search diagnostics are required'); })()
       : { ...evaluation.searchDiagnostics },
   };
 }

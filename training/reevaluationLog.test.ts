@@ -50,10 +50,17 @@ describe('buildReevaluationLogEntry', () => {
     const event = buildReevaluationLogEntry({
       gen: 30,
       ts: 123,
+      searchContract: 'bag-expectimax-hold-v1',
+      searchDepth: 4,
+      rootBeamWidth: 64,
+      childBeamWidth: 32,
       schedule: {
         games: 30,
         maxPieces: 5000,
-        depth: 2,
+        searchContract: 'bag-expectimax-hold-v1',
+        searchDepth: 4,
+        rootBeamWidth: 64,
+        childBeamWidth: 32,
         baseSeed: 20260727,
       },
       publishedBaseline,
@@ -63,7 +70,7 @@ describe('buildReevaluationLogEntry', () => {
     });
 
     expect(event).toMatchObject({
-      objective: 'score-rate-v3',
+      objective: 'score-rate-v4',
       kind: 'reevaluation',
       gen: 30,
       schedule: { seedStrategy: 'fixed-reevaluation-v1' },
@@ -95,7 +102,11 @@ describe('buildReevaluationLogEntry', () => {
     const event = buildReevaluationLogEntry({
       gen: 10,
       ts: 123,
-      schedule: { games: 30, maxPieces: 5000, depth: 2, baseSeed: 1 },
+      searchContract: 'bag-expectimax-hold-v1',
+      searchDepth: 4,
+      rootBeamWidth: 64,
+      childBeamWidth: 32,
+    schedule: { games: 30, maxPieces: 5000, searchContract: 'bag-expectimax-hold-v1', searchDepth: 4, rootBeamWidth: 64, childBeamWidth: 32, baseSeed: 1 },
       publishedBaseline,
       currentQualified: null,
       candidate,
@@ -123,7 +134,11 @@ describe('buildReevaluationLogEntry', () => {
     const event = buildReevaluationLogEntry({
       gen: 30,
       ts: 123,
-      schedule: { games: 30, maxPieces: 5000, depth: 2, baseSeed: 1 },
+      searchContract: 'bag-expectimax-hold-v1',
+      searchDepth: 4,
+      rootBeamWidth: 64,
+      childBeamWidth: 32,
+    schedule: { games: 30, maxPieces: 5000, searchContract: 'bag-expectimax-hold-v1', searchDepth: 4, rootBeamWidth: 64, childBeamWidth: 32, baseSeed: 1 },
       publishedBaseline,
       currentQualified,
       candidate,

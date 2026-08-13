@@ -588,6 +588,29 @@ describe('readCompatibleRunArtifacts', () => {
   });
 
   it.each(['searchContract', 'searchDepth', 'rootBeamWidth', 'childBeamWidth'] as const)(
+    'rejects a reevaluation missing top-level %s',
+    (field) => {
+      const event = copy(REEVALUATION_2) as unknown as Record<string, unknown>;
+      delete event[field];
+      expect(() => readCompatibleRunArtifacts(
+        writeRun(CHECKPOINT, [GEN_0, GEN_1, event]),
+      )).toThrow(/reevaluation record.*schema/i);
+    },
+  );
+
+  it.each([
+    ['searchContract', 'legacy-search'],
+    ['searchDepth', 3],
+    ['rootBeamWidth', 32],
+    ['childBeamWidth', 16],
+  ] as const)('rejects a reevaluation with wrong top-level %s', (field, value) => {
+    const event = { ...copy(REEVALUATION_2), [field]: value };
+    expect(() => readCompatibleRunArtifacts(
+      writeRun(CHECKPOINT, [GEN_0, GEN_1, event]),
+    )).toThrow(/reevaluation search contract/i);
+  });
+
+  it.each(['searchContract', 'searchDepth', 'rootBeamWidth', 'childBeamWidth'] as const)(
     'rejects a reevaluation schedule missing %s',
     (field) => {
       const event = copy(REEVALUATION_2);

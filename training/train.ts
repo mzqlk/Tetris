@@ -19,13 +19,14 @@ import {
 } from './cem';
 import { hashSeed, mulberry32 } from '../src/ai/rng';
 import { FIXED_SEARCH_LIMITS } from '../src/ai/search';
+import type { SearchDiagnostics } from '../src/ai/weights';
 import {
   DEFAULT_WEIGHTS,
   fromVector,
   normalize,
   toVector,
 } from '../src/ai/weights';
-import { SCORE_RATE_OBJECTIVE } from './objective';
+import { SCORE_RATE_OBJECTIVE, SEARCH_CONTRACT } from './objective';
 import {
   evaluateTetrisCandidate,
   fixedReevaluationSeeds,
@@ -100,6 +101,7 @@ function parseArgs(argv: string[]): {
 function reevaluationSummary(
   stats: CandidateStats,
   index: number,
+  searchDiagnostics: SearchDiagnostics,
 ): ReevaluationSummary {
   return {
     meanScore: stats.meanScore[index],
@@ -110,7 +112,28 @@ function reevaluationSummary(
     tetrisLineShare: stats.tetrisLineShares[index],
     strategyDiagnostics: stats.meanStrategyDiagnostics[index],
     survivalDiagnostics: stats.survivalDiagnostics[index],
+    searchDiagnostics,
   };
+}
+
+function aggregateSearchDiagnostics(
+  results: readonly { searchDiagnostics: SearchDiagnostics }[],
+  population: number,
+  gamesPerCandidate: number,
+): SearchDiagnostics[] {
+  return Array.from({ length: population }, (_, index) => {
+    const group = results.slice(index * gamesPerCandidate, (index + 1) * gamesPerCandidate);
+    const sum = (field: keyof SearchDiagnostics) => group.reduce(
+      (total, result) => total + result.searchDiagnostics[field], 0,
+    );
+    return {
+      holdActions: sum('holdActions'), holdRate: sum('holdRate') / gamesPerCandidate,
+      meanCompletedDepth: sum('meanCompletedDepth') / gamesPerCandidate,
+      minCompletedDepth: Math.min(...group.map((result) => result.searchDiagnostics.minCompletedDepth)),
+      expandedDecisionNodes: sum('expandedDecisionNodes'), expandedChanceNodes: sum('expandedChanceNodes'),
+      cacheHits: sum('cacheHits'), abortedSearches: sum('abortedSearches'),
+    };
+  });
 }
 
 function loggedReevaluation(
@@ -126,6 +149,7 @@ function loggedReevaluation(
     tetrisLineShare: evaluation.tetrisLineShare,
     strategyDiagnostics: evaluation.strategyDiagnostics,
     survivalDiagnostics: evaluation.survivalDiagnostics,
+    searchDiagnostics: evaluation.searchDiagnostics,
     gen: evaluation.gen,
   };
 }
@@ -187,12 +211,13 @@ try {
 console.log(
   `training with ${cfg.workers} workers of ${cpus().length} cores` +
   `${args.workers === null ? '' : ' (--workers)'}` +
-  `, depth ${cfg.depth}, population ${cfg.population}`,
+    `, depth ${cfg.searchDepth}, root beam ${cfg.rootBeamWidth}, ` +
+    `child beam ${cfg.childBeamWidth}, population ${cfg.population}`,
 );
 
 function saveCheckpoint() {
   const cp: ScoreRateCheckpoint = {
-    version: 4,
+    version: 5,
     objective: SCORE_RATE_OBJECTIVE,
     gen: state.gen,
     mu: state.mu,
@@ -202,6 +227,10 @@ function saveCheckpoint() {
     config: cfg,
     publishedBaseline,
     bestQualifiedCandidate,
+    searchContract: 'bag-expectimax-hold-v1',
+    searchDepth: cfg.searchDepth,
+    rootBeamWidth: cfg.rootBeamWidth,
+    childBeamWidth: cfg.childBeamWidth,
   };
   writeFileSync(paths.checkpoint, JSON.stringify(cp, null, 2));
 }
@@ -292,6 +321,10 @@ async function runGeneration(): Promise<void> {
 
   appendFileSync(paths.log, JSON.stringify({
     objective: SCORE_RATE_OBJECTIVE,
+    searchContract: SEARCH_CONTRACT,
+    searchDepth: cfg.searchDepth,
+    rootBeamWidth: cfg.rootBeamWidth,
+    childBeamWidth: cfg.childBeamWidth,
     gen,
     ts: Date.now(),
     bestScoreRate,
@@ -382,15 +415,19 @@ async function runGeneration(): Promise<void> {
     });
 
     const evalResults = await pool.run(evalTasks);
-    const evalStats = aggregateFitness(
+  const evalStats = aggregateFitness(
       evalResults,
       evaluationWeights.length,
       cfg.reevalGames,
       cfg.reevalMaxPieces,
     );
-
+    const evalSearchDiagnostics = aggregateSearchDiagnostics(
+      evalResults,
+      evaluationWeights.length,
+      cfg.reevalGames,
+    );
     if (reevaluation.baselineIndex !== null) {
-      const baseline = reevaluationSummary(evalStats, reevaluation.baselineIndex);
+      const baseline = reevaluationSummary(evalStats, reevaluation.baselineIndex, evalSearchDiagnostics[reevaluation.baselineIndex]);
       publishedBaseline = {
         weights: evaluationWeights[reevaluation.baselineIndex],
         ...baseline,
@@ -404,7 +441,7 @@ async function runGeneration(): Promise<void> {
       );
     }
 
-    const candidateSummary = reevaluationSummary(evalStats, reevaluation.candidateIndex);
+    const candidateSummary = reevaluationSummary(evalStats, reevaluation.candidateIndex, evalSearchDiagnostics[reevaluation.candidateIndex]);
     if (publishedBaseline === null) {
       throw new Error('fixed reevaluation did not establish a published score baseline');
     }
@@ -424,7 +461,7 @@ async function runGeneration(): Promise<void> {
     if (qualification.shouldSave) {
       bestQualifiedCandidate = candidate;
       writeCandidateWeights(paths.candidate, {
-        version: 4,
+        version: 5,
         weights: fromVector(candidate.weights),
         objective: SCORE_RATE_OBJECTIVE,
         meanScore: candidate.meanScore,
@@ -435,9 +472,13 @@ async function runGeneration(): Promise<void> {
         tetrisLineShare: candidate.tetrisLineShare,
         strategyDiagnostics: candidate.strategyDiagnostics,
         survivalDiagnostics: candidate.survivalDiagnostics,
+        searchDiagnostics: candidate.searchDiagnostics,
         evalGames: candidate.evalGames,
         gen: candidate.gen,
-        searchDepth: cfg.depth,
+        searchContract: 'bag-expectimax-hold-v1',
+        searchDepth: cfg.searchDepth,
+        rootBeamWidth: cfg.rootBeamWidth,
+        childBeamWidth: cfg.childBeamWidth,
         trainedAt: new Date().toISOString(),
       });
       console.log(
@@ -449,10 +490,17 @@ async function runGeneration(): Promise<void> {
     const reevaluationEvent = buildReevaluationLogEntry({
       gen: state.gen,
       ts: Date.now(),
+      searchContract: SEARCH_CONTRACT,
+      searchDepth: cfg.searchDepth,
+      rootBeamWidth: cfg.rootBeamWidth,
+      childBeamWidth: cfg.childBeamWidth,
       schedule: {
         games: cfg.reevalGames,
         maxPieces: cfg.reevalMaxPieces,
-        depth: cfg.depth,
+        searchContract: 'bag-expectimax-hold-v1',
+        searchDepth: cfg.searchDepth,
+        rootBeamWidth: cfg.rootBeamWidth,
+        childBeamWidth: cfg.childBeamWidth,
         baseSeed,
       },
       publishedBaseline: loggedReevaluation(publishedBaseline),

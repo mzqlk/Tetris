@@ -1,4 +1,4 @@
-import { SCORE_RATE_OBJECTIVE } from './objective';
+import { SCORE_RATE_OBJECTIVE, SEARCH_CONTRACT } from './objective';
 import type {
   CandidateQualification,
   ReevaluationSummary,
@@ -11,13 +11,20 @@ export interface LoggedReevaluation extends ReevaluationSummary {
 
 export interface ReevaluationLogEntry {
   objective: typeof SCORE_RATE_OBJECTIVE;
+  searchContract: typeof SEARCH_CONTRACT;
+  searchDepth: 4;
+  rootBeamWidth: 64;
+  childBeamWidth: 32;
   kind: 'reevaluation';
   gen: number;
   ts: number;
   schedule: {
     games: number;
     maxPieces: number;
-    depth: 1 | 2;
+    searchContract: typeof SEARCH_CONTRACT;
+    searchDepth: 4;
+    rootBeamWidth: 64;
+    childBeamWidth: 32;
     baseSeed: number;
     seedStrategy: 'fixed-reevaluation-v1';
   };
@@ -36,6 +43,10 @@ export interface ReevaluationLogEntry {
 interface BuildReevaluationLogEntryArgs {
   gen: number;
   ts: number;
+  searchContract: typeof SEARCH_CONTRACT;
+  searchDepth: 4;
+  rootBeamWidth: 64;
+  childBeamWidth: 32;
   schedule: Omit<ReevaluationLogEntry['schedule'], 'seedStrategy'>;
   publishedBaseline: LoggedReevaluation;
   currentQualified: LoggedReevaluation | null;
@@ -56,6 +67,10 @@ export function buildReevaluationLogEntry(
 ): ReevaluationLogEntry {
   return {
     objective: SCORE_RATE_OBJECTIVE,
+    searchContract: args.searchContract,
+    searchDepth: args.searchDepth,
+    rootBeamWidth: args.rootBeamWidth,
+    childBeamWidth: args.childBeamWidth,
     kind: 'reevaluation',
     gen: args.gen,
     ts: args.ts,

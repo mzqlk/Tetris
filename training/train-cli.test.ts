@@ -37,8 +37,12 @@ const SURVIVAL_DIAGNOSTICS = {
 };
 
 const validCheckpoint = (gen = 1) => ({
-  version: 4,
-  objective: 'score-rate-v3',
+  version: 5,
+  objective: 'score-rate-v4',
+  searchContract: 'bag-expectimax-hold-v1',
+  searchDepth: 4,
+  rootBeamWidth: 64,
+  childBeamWidth: 32,
   gen,
   mu: unitVector(),
   sigma: Array(FEATURE_COUNT).fill(1),
@@ -59,7 +63,11 @@ const validGeneration = (
   ),
   elitePieces = maxPieces,
 ) => ({
-  objective: 'score-rate-v3',
+  objective: 'score-rate-v4',
+  searchContract: 'bag-expectimax-hold-v1',
+  searchDepth: 4,
+  rootBeamWidth: 64,
+  childBeamWidth: 32,
   gen,
   ts: 1_000 + gen,
   bestScoreRate: 5,
@@ -118,14 +126,21 @@ const reevaluationRecord = (
   const scoreDelta = candidate.meanScore - publishedBaseline.meanScore;
   const scale = Math.max(Math.abs(candidate.meanScore), Math.abs(publishedBaseline.meanScore));
   return {
-    objective: 'score-rate-v3',
+    objective: 'score-rate-v4',
+    searchContract: 'bag-expectimax-hold-v1',
+    searchDepth: 4,
+    rootBeamWidth: 64,
+    childBeamWidth: 32,
     kind: 'reevaluation',
     gen,
     ts: 2_000 + gen,
     schedule: {
       games: DEFAULT_CONFIG.reevalGames,
       maxPieces: DEFAULT_CONFIG.reevalMaxPieces,
-      depth: DEFAULT_CONFIG.depth,
+      searchContract: 'bag-expectimax-hold-v1',
+      searchDepth: DEFAULT_CONFIG.searchDepth,
+      rootBeamWidth: DEFAULT_CONFIG.rootBeamWidth,
+      childBeamWidth: DEFAULT_CONFIG.childBeamWidth,
       baseSeed: DEFAULT_CONFIG.baseSeed,
       seedStrategy: 'fixed-reevaluation-v1',
     },
@@ -280,6 +295,16 @@ Worker.prototype.postMessage = function (task) {
       meanTetrisSetupProgress: (candidateIndex + 1) % 5,
       meanTetrisReadyRows: (candidateIndex + 2) % 5,
     },
+    searchDiagnostics: {
+      holdActions: 1,
+      holdRate: 0.1,
+      meanCompletedDepth: 4,
+      minCompletedDepth: 4,
+      expandedDecisionNodes: 10,
+      expandedChanceNodes: 20,
+      cacheHits: 3,
+      abortedSearches: 0,
+    },
     reason: 'pieceCap',
     failed: false,
   };
@@ -320,14 +345,22 @@ Worker.prototype.postMessage = function (task) {
       );
 
       expect(checkpoint).toMatchObject({
-        version: 4,
-        objective: 'score-rate-v3',
+        version: 5,
+        objective: 'score-rate-v4',
+        searchContract: 'bag-expectimax-hold-v1',
+        searchDepth: 4,
+        rootBeamWidth: 64,
+        childBeamWidth: 32,
         publishedBaseline: { gen: -1, meanScore: 25_000 },
         bestQualifiedCandidate: { gen: 2, meanScore: 30_000 },
       });
       expect(candidate).toMatchObject({
-        version: 4,
-        objective: 'score-rate-v3',
+        version: 5,
+        objective: 'score-rate-v4',
+        searchContract: 'bag-expectimax-hold-v1',
+        searchDepth: 4,
+        rootBeamWidth: 64,
+        childBeamWidth: 32,
         gen: 2,
         meanScore: 30_000,
       });
@@ -407,7 +440,7 @@ describe('train --resume objective gate', () => {
 
       expect(result.status).not.toBe(0);
       expect(`${result.stdout}\n${result.stderr}`).toMatch(
-        /score-rate-v1.*score-rate-v3/,
+        /score-rate-v1.*score-rate-v4/,
       );
       expect(`${result.stdout}\n${result.stderr}`).not.toMatch(/training with .* workers/);
       expect(readdirSync(outputDir).sort()).toEqual(beforeEntries);
@@ -424,8 +457,12 @@ describe('train --resume objective gate', () => {
     const logPath = join(outputDir, 'training-log.jsonl');
     try {
       writeFileSync(checkpointPath, JSON.stringify({
-        version: 4,
-        objective: 'score-rate-v3',
+        version: 5,
+        objective: 'score-rate-v4',
+        searchContract: 'bag-expectimax-hold-v1',
+        searchDepth: 4,
+        rootBeamWidth: 64,
+        childBeamWidth: 32,
         gen: 0,
         mu: Array(FEATURE_COUNT - 1).fill(0),
         sigma: Array(FEATURE_COUNT).fill(1),
@@ -483,7 +520,7 @@ describe('train --resume objective gate', () => {
     })],
     ['a malformed generation record', () => ({
       checkpoint: validCheckpoint(),
-      log: `${JSON.stringify({ objective: 'score-rate-v3', gen: 0 })}\n`,
+      log: `${JSON.stringify({ objective: 'score-rate-v4', gen: 0 })}\n`,
     })],
     ['missing reevaluation history', () => {
       const checkpoint = validCheckpoint();
