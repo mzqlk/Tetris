@@ -11,7 +11,18 @@ import {
   type LineClearCounts,
 } from './lineClears';
 import { mulberry32 } from './rng';
-import { bestPlacement } from './search';
+import {
+  FIXED_SEARCH_LIMITS,
+  searchFixed,
+  type SearchDiagnostics,
+} from './search';
+import {
+  initialUnseenBagMask,
+  revealPiece,
+  type BagMask,
+  type PublicSearchState,
+} from './publicState';
+import { applyHold as applyPublicHold } from './stateTransitions';
 import {
   addStrategyDiagnostics,
   diagnosticsFromWell,
@@ -21,12 +32,32 @@ import {
   type StrategyDiagnostics,
 } from './tetrisStrategy';
 
-export type SimAction = 'left' | 'right' | 'rotate' | 'softDrop' | 'hardDrop';
+export type SimAction = 'left' | 'right' | 'rotate' | 'softDrop' | 'hardDrop' | 'hold';
+
+export interface FixedSearchConfig {
+  maxLockedDepth: 1 | 2 | 3 | 4;
+  maxRootPlacements: number;
+  maxChildPlacements: number;
+}
+
+export interface SimulationSearchDiagnostics {
+  holdActions: number;
+  holdRate: number;
+  meanCompletedDepth: number;
+  minCompletedDepth: number;
+  expandedDecisionNodes: number;
+  expandedChanceNodes: number;
+  cacheHits: number;
+  abortedSearches: number;
+}
 
 export interface SimState {
   board: Board;
   currentPiece: Piece | null;
   nextPiece: Piece | null;
+  holdPiece: PieceType | null;
+  holdAvailable: boolean;
+  unseenBagMask: BagMask;
   bag: PieceType[];
   score: number;
   level: number;
@@ -38,6 +69,14 @@ export interface SimState {
   heightSum: number;
   /** Sum of the strategy diagnostics sampled after every post-clear board. */
   strategyDiagnosticSum: StrategyDiagnostics;
+  searchCalls: number;
+  holdActions: number;
+  completedDepthSum: number;
+  minCompletedDepth: number;
+  expandedDecisionNodes: number;
+  expandedChanceNodes: number;
+  cacheHits: number;
+  abortedSearches: number;
   rng: () => number;
 }
 
@@ -62,6 +101,7 @@ export interface SimResult {
   meanHeight: number;
   /** Per-piece strategy diagnostics sampled from the post-clear board. */
   strategyDiagnostics: StrategyDiagnostics;
+  searchDiagnostics: SimulationSearchDiagnostics;
   reason: 'gameover' | 'pieceCap';
 }
 
@@ -83,6 +123,9 @@ export function createSimState(seed: number): SimState {
     board: createEmptyBoard(),
     currentPiece: null,
     nextPiece: null,
+    holdPiece: null,
+    holdAvailable: true,
+    unseenBagMask: 0,
     bag: generateBag(rng),
     score: 0,
     level: 1,
@@ -92,6 +135,14 @@ export function createSimState(seed: number): SimState {
     pieces: 0,
     heightSum: 0,
     strategyDiagnosticSum: emptyStrategyDiagnostics(),
+    searchCalls: 0,
+    holdActions: 0,
+    completedDepthSum: 0,
+    minCompletedDepth: 0,
+    expandedDecisionNodes: 0,
+    expandedChanceNodes: 0,
+    cacheHits: 0,
+    abortedSearches: 0,
     rng,
   };
 
@@ -99,6 +150,7 @@ export function createSimState(seed: number): SimState {
   const second = drawFromBag(state);
   state.currentPiece = createPiece(first);
   state.nextPiece = createPiece(second);
+  state.unseenBagMask = initialUnseenBagMask(first, second);
   if (isGameOver(state.board, state.currentPiece)) state.status = 'gameover';
 
   return state;
@@ -117,6 +169,7 @@ function lockAndSpawn(state: SimState, piece: Piece): void {
   state.level = calculateLevel(state.lines);
   state.board = newBoard;
   state.pieces += 1;
+  state.holdAvailable = true;
   // Sampled AFTER the clear, so a move that fills four rows is credited with
   // the low board it leaves behind rather than the tall one it briefly made.
   state.heightSum += stackHeight(newBoard);
@@ -128,7 +181,9 @@ function lockAndSpawn(state: SimState, piece: Piece): void {
   const preview = state.nextPiece;
   const current = createPiece(preview ? preview.type : drawFromBag(state));
   state.currentPiece = current;
-  state.nextPiece = createPiece(drawFromBag(state));
+  const next = drawFromBag(state);
+  state.nextPiece = createPiece(next);
+  state.unseenBagMask = revealPiece(state.unseenBagMask, next);
   if (isGameOver(state.board, current)) state.status = 'gameover';
 }
 
@@ -174,7 +229,66 @@ export function applyAction(state: SimState, action: SimAction): void {
       lockAndSpawn(state, dropped);
       break;
     }
+    case 'hold': {
+      const transition = applyPublicHold(projectPublicSearchState(state));
+      if (transition.kind === 'unavailable') break;
+      if (transition.kind === 'ready') {
+        state.currentPiece = transition.state.current;
+        state.nextPiece = createPiece(transition.state.next);
+        state.holdPiece = transition.state.hold;
+        state.holdAvailable = transition.state.holdAvailable;
+        state.unseenBagMask = transition.state.unseenBagMask;
+      } else {
+        const preview = drawFromBag(state);
+        state.currentPiece = transition.state.current;
+        state.nextPiece = createPiece(preview);
+        state.holdPiece = transition.state.hold;
+        state.holdAvailable = transition.state.holdAvailable;
+        state.unseenBagMask = revealPiece(transition.state.unseenBagMask, preview);
+      }
+      if (isGameOver(state.board, state.currentPiece)) state.status = 'gameover';
+      break;
+    }
   }
+}
+
+export function projectPublicSearchState(state: SimState): PublicSearchState {
+  if (state.currentPiece === null || state.nextPiece === null) {
+    throw new Error('cannot project a simulator state without current and next pieces');
+  }
+  return {
+    board: state.board,
+    current: state.currentPiece,
+    next: state.nextPiece.type,
+    hold: state.holdPiece,
+    holdAvailable: state.holdAvailable,
+    unseenBagMask: state.unseenBagMask,
+  };
+}
+
+function recordSearchDiagnostics(state: SimState, diagnostics: SearchDiagnostics): void {
+  state.searchCalls++;
+  state.completedDepthSum += diagnostics.completedDepth;
+  state.minCompletedDepth = state.searchCalls === 1
+    ? diagnostics.completedDepth
+    : Math.min(state.minCompletedDepth, diagnostics.completedDepth);
+  state.expandedDecisionNodes += diagnostics.expandedDecisionNodes;
+  state.expandedChanceNodes += diagnostics.expandedChanceNodes;
+  state.cacheHits += diagnostics.cacheHits;
+  if (diagnostics.aborted) state.abortedSearches++;
+}
+
+function simulationSearchDiagnostics(state: SimState): SimulationSearchDiagnostics {
+  return {
+    holdActions: state.holdActions,
+    holdRate: state.pieces === 0 ? 0 : state.holdActions / state.pieces,
+    meanCompletedDepth: state.searchCalls === 0 ? 0 : state.completedDepthSum / state.searchCalls,
+    minCompletedDepth: state.searchCalls === 0 ? 0 : state.minCompletedDepth,
+    expandedDecisionNodes: state.expandedDecisionNodes,
+    expandedChanceNodes: state.expandedChanceNodes,
+    cacheHits: state.cacheHits,
+    abortedSearches: state.abortedSearches,
+  };
 }
 
 /**
@@ -184,27 +298,30 @@ export function applyAction(state: SimState, action: SimAction): void {
  * accumulate. Score-rate-v2 continues to use that deterministic scalar-score
  * contract; it is not a per-second metric or a byte-for-byte prediction of the UI score.
  */
-export function simulateGame(opts: {
-  weights: number[];
-  seed: number;
-  maxPieces: number;
-  depth: 1 | 2;
-}): SimResult {
+export function simulateFromState(
+  state: SimState,
+  opts: { weights: number[]; maxPieces: number; search: FixedSearchConfig },
+): SimResult {
   if (opts.weights.length !== FEATURE_COUNT) {
     throw new Error(`expected ${FEATURE_COUNT} weights, got ${opts.weights.length}`);
   }
 
-  const state = createSimState(opts.seed);
-
   while (state.status === 'playing' && state.pieces < opts.maxPieces) {
-    const decision = bestPlacement(
-      state.board, state.currentPiece!, state.nextPiece, opts.weights, opts.depth,
-    );
+    const decision = searchFixed(projectPublicSearchState(state), opts.weights, {
+      ...opts.search,
+      shouldAbort: () => false,
+    });
     if (decision === null) {
       state.status = 'gameover';
       break;
     }
-    state.currentPiece = decision.placement.piece;
+    recordSearchDiagnostics(state, decision.diagnostics);
+    if (decision.action.kind === 'hold') {
+      state.holdActions++;
+      applyAction(state, 'hold');
+      continue;
+    }
+    state.currentPiece = decision.action.placement.piece;
     applyAction(state, 'hardDrop');
   }
 
@@ -217,6 +334,23 @@ export function simulateGame(opts: {
     strategyDiagnostics: state.pieces === 0
       ? emptyStrategyDiagnostics()
       : divideStrategyDiagnostics(state.strategyDiagnosticSum, state.pieces),
+    searchDiagnostics: simulationSearchDiagnostics(state),
     reason: state.status === 'gameover' ? 'gameover' : 'pieceCap',
   };
+}
+
+export function simulateGame(opts: {
+  weights: number[];
+  seed: number;
+  maxPieces: number;
+  search?: FixedSearchConfig;
+  /** Legacy caller metadata; fixed search intentionally ignores this value. */
+  depth?: 1 | 2;
+}): SimResult {
+  const state = createSimState(opts.seed);
+  return simulateFromState(state, {
+    weights: opts.weights,
+    maxPieces: opts.maxPieces,
+    search: opts.search ?? FIXED_SEARCH_LIMITS,
+  });
 }

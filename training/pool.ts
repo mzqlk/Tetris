@@ -3,6 +3,22 @@ import { Worker } from 'node:worker_threads';
 import { TOTAL_ROWS } from '../src/constants';
 import { emptyLineClearCounts, type LineClearCounts } from '../src/ai/lineClears';
 import { emptyStrategyDiagnostics, type StrategyDiagnostics } from '../src/ai/tetrisStrategy';
+import {
+  type FixedSearchConfig,
+  type SimulationSearchDiagnostics,
+} from '../src/ai/simulate';
+import { FIXED_SEARCH_LIMITS } from '../src/ai/search';
+
+const emptySearchDiagnostics = (): SimulationSearchDiagnostics => ({
+  holdActions: 0,
+  holdRate: 0,
+  meanCompletedDepth: 0,
+  minCompletedDepth: 0,
+  expandedDecisionNodes: 0,
+  expandedChanceNodes: 0,
+  cacheHits: 0,
+  abortedSearches: 0,
+});
 
 /**
  * A game that never ran earns zero score, so fixed-schedule score rate ranks it
@@ -16,6 +32,7 @@ export const FAILED_RESULT = {
   pieces: 0,
   meanHeight: TOTAL_ROWS,
   strategyDiagnostics: emptyStrategyDiagnostics(),
+  searchDiagnostics: emptySearchDiagnostics(),
   reason: 'error',
 } as const;
 
@@ -24,7 +41,9 @@ export interface SimTask {
   weights: number[];
   seed: number;
   maxPieces: number;
-  depth: 1 | 2;
+  search?: FixedSearchConfig;
+  /** Retained only so pre-migration scheduling metadata still type-checks. */
+  depth?: 1 | 2;
 }
 
 export interface SimTaskResult {
@@ -35,6 +54,7 @@ export interface SimTaskResult {
   pieces: number;
   meanHeight: number;
   strategyDiagnostics: StrategyDiagnostics;
+  searchDiagnostics: SimulationSearchDiagnostics;
   reason: 'gameover' | 'pieceCap' | 'error';
   failed: boolean;
   error?: string;
@@ -124,7 +144,10 @@ export class WorkerPool {
         const item = queue[cursor++];
         inFlight.set(worker, item);
         item.attempts++;
-        worker.postMessage(item.task);
+        worker.postMessage({
+          ...item.task,
+          search: item.task.search ?? FIXED_SEARCH_LIMITS,
+        });
       };
 
       const retryOrFail = (item: QueueItem, reason: string) => {
@@ -139,6 +162,7 @@ export class WorkerPool {
           ...FAILED_RESULT,
           clearCounts: emptyLineClearCounts(),
           strategyDiagnostics: emptyStrategyDiagnostics(),
+          searchDiagnostics: emptySearchDiagnostics(),
           failed: true, error: reason,
         });
       };

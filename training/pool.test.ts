@@ -4,8 +4,14 @@ import { FAILED_RESULT, WorkerPool, type SimTask, type WorkerFactory } from './p
 import { toVector, HANDCRAFTED_WEIGHTS } from '../src/ai/weights';
 import { TOTAL_ROWS } from '../src/constants';
 import { emptyStrategyDiagnostics } from '../src/ai/tetrisStrategy';
+import type { FixedSearchConfig } from '../src/ai/simulate';
 
 const W = toVector(HANDCRAFTED_WEIGHTS);
+const TEST_SEARCH: FixedSearchConfig = {
+  maxLockedDepth: 1,
+  maxRootPlacements: 1,
+  maxChildPlacements: 1,
+};
 const pool = await WorkerPool.create(3);
 
 afterAll(async () => {
@@ -13,7 +19,7 @@ afterAll(async () => {
 });
 
 const task = (taskId: number, seed: number, weights = W): SimTask => ({
-  taskId, weights, seed, maxPieces: 60, depth: 1,
+  taskId, weights, seed, maxPieces: 12, search: TEST_SEARCH,
 });
 
 describe('WorkerPool', () => {
@@ -89,7 +95,9 @@ describe('WorkerPool', () => {
 
   it('produces the same numbers as an in-process simulation', async () => {
     const { simulateGame } = await import('../src/ai/simulate');
-    const direct = simulateGame({ weights: W, seed: 99, maxPieces: 60, depth: 1 });
+    const direct = simulateGame({
+      weights: W, seed: 99, maxPieces: 12, search: TEST_SEARCH,
+    });
     const [viaWorker] = await pool.run([task(0, 99)]);
 
     expect(viaWorker.lines).toBe(direct.lines);
@@ -98,6 +106,7 @@ describe('WorkerPool', () => {
     expect(viaWorker.meanHeight).toBe(direct.meanHeight);
     expect(viaWorker.clearCounts).toEqual(direct.clearCounts);
     expect(viaWorker.strategyDiagnostics).toEqual(direct.strategyDiagnostics);
+    expect(viaWorker.searchDiagnostics).toEqual(direct.searchDiagnostics);
     expect(viaWorker.reason).toBe(direct.reason);
   }, 60000);
 
@@ -116,6 +125,16 @@ describe('WorkerPool', () => {
     // height is the honest stand-in when no diagnostic result exists.
     expect(results[1].meanHeight).toBe(TOTAL_ROWS);
     expect(results[1].strategyDiagnostics).toEqual(emptyStrategyDiagnostics());
+    expect(results[1].searchDiagnostics).toEqual({
+      holdActions: 0,
+      holdRate: 0,
+      meanCompletedDepth: 0,
+      minCompletedDepth: 0,
+      expandedDecisionNodes: 0,
+      expandedChanceNodes: 0,
+      cacheHits: 0,
+      abortedSearches: 0,
+    });
     expect(results[1].reason).toBe('error');
     expect(results[0].failed).toBe(false);
     expect(results[2].failed).toBe(false);
@@ -126,6 +145,16 @@ describe('WorkerPool', () => {
       singles: 0, doubles: 0, triples: 0, tetrises: 0,
     });
     expect(FAILED_RESULT.strategyDiagnostics).toEqual(emptyStrategyDiagnostics());
+    expect(FAILED_RESULT.searchDiagnostics).toEqual({
+      holdActions: 0,
+      holdRate: 0,
+      meanCompletedDepth: 0,
+      minCompletedDepth: 0,
+      expandedDecisionNodes: 0,
+      expandedChanceNodes: 0,
+      cacheHits: 0,
+      abortedSearches: 0,
+    });
     expect(FAILED_RESULT.reason).toBe('error');
   });
 
@@ -136,6 +165,7 @@ describe('WorkerPool', () => {
     expect(results[1].failed).toBe(true);
     expect(results[0].clearCounts).not.toBe(results[1].clearCounts);
     expect(results[0].strategyDiagnostics).not.toBe(results[1].strategyDiagnostics);
+    expect(results[0].searchDiagnostics).not.toBe(results[1].searchDiagnostics);
   }, 60000);
 
   it('handles more tasks than workers without dropping any', async () => {

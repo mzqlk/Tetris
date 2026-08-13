@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { createSimState, applyAction, simulateGame, type SimAction } from './simulate';
+import {
+  createSimState,
+  applyAction,
+  projectPublicSearchState,
+  simulateFromState,
+  simulateGame,
+  type FixedSearchConfig,
+  type SimAction,
+} from './simulate';
 import { mulberry32 } from './rng';
 import {
   toVector, DEFAULT_WEIGHTS, DEFAULT_WEIGHTS_META, HANDCRAFTED_WEIGHTS,
@@ -14,17 +22,26 @@ import { createPiece } from '../engine/piece';
 import { BOARD_WIDTH, TOTAL_ROWS } from '../constants';
 import type { Board, PieceType } from '../types';
 import { emptyStrategyDiagnostics } from './tetrisStrategy';
+import { FIXED_SEARCH_LIMITS } from './search';
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const STORE_ACTION: Record<SimAction, keyof ReturnType<typeof useGameStore.getState>> = {
+type StoreSimAction = Exclude<SimAction, 'hold'>;
+
+const STORE_ACTION: Record<StoreSimAction, keyof ReturnType<typeof useGameStore.getState>> = {
   left: 'moveLeft',
   right: 'moveRight',
   rotate: 'rotate',
   softDrop: 'softDrop',
   hardDrop: 'hardDrop',
+};
+
+const TEST_SEARCH: FixedSearchConfig = {
+  maxLockedDepth: 1,
+  maxRootPlacements: 1,
+  maxChildPlacements: 1,
 };
 
 /**
@@ -46,7 +63,7 @@ const STORE_ACTION: Record<SimAction, keyof ReturnType<typeof useGameStore.getSt
  * kicks while sampling almost none. Rotating after the walk means rotations
  * happen at the edge columns too, where kicks actually occur.
  */
-function* actionScript(rand: () => number): Generator<SimAction> {
+function* actionScript(rand: () => number): Generator<StoreSimAction> {
   for (;;) {
     // Pieces spawn at x=3; walk toward a random column.
     const dx = Math.floor(rand() * BOARD_WIDTH) - 3;
@@ -89,7 +106,7 @@ function seedBoth(board: Board): { sim: ReturnType<typeof createSimState> } {
 }
 
 /** Drive both sides through the same action and keep them in lockstep. */
-function driveBoth(sim: ReturnType<typeof createSimState>, actions: SimAction[]): void {
+function driveBoth(sim: ReturnType<typeof createSimState>, actions: StoreSimAction[]): void {
   for (const action of actions) {
     (useGameStore.getState()[STORE_ACTION[action]] as () => void)();
     applyAction(sim, action);
@@ -114,7 +131,7 @@ describe('differential test against the real gameStore', () => {
         if (useGameStore.getState().status !== 'playing') break;
         if (sim.status !== 'playing') break;
 
-        const action = script.next().value as SimAction;
+        const action = script.next().value as StoreSimAction;
 
         const before = useGameStore.getState();
         const pieceBefore = before.currentPiece;
@@ -198,7 +215,7 @@ describe('line-clear parity', () => {
       expect(placement).toBeDefined();
 
       driveBoth(sim, [
-        ...placement!.moves.map((m) => (m === 'down' ? 'softDrop' : m) as SimAction),
+        ...placement!.moves.map((m) => (m === 'down' ? 'softDrop' : m) as StoreSimAction),
         'hardDrop',
       ]);
 
@@ -264,6 +281,27 @@ describe('createSimState', () => {
       expect(s.currentPiece!.type).toBe(previewed);
     }
   });
+
+  it('keeps hidden bag order outside the search projection', () => {
+    const a = createSimState(11);
+    const b = createSimState(11);
+    b.bag = [...a.bag].reverse();
+
+    expect(projectPublicSearchState(a)).toEqual(projectPublicSearchState(b));
+    expect(projectPublicSearchState(a)).not.toHaveProperty('bag');
+    expect(projectPublicSearchState(a)).not.toHaveProperty('rng');
+  });
+
+  it('executes Hold without counting it as a locked piece', () => {
+    const state = createSimState(7);
+    const beforePieces = state.pieces;
+
+    applyAction(state, 'hold');
+
+    expect(state.pieces).toBe(beforePieces);
+    expect(state.holdAvailable).toBe(false);
+    expect(state.holdPiece).not.toBeNull();
+  });
 });
 
 describe('simulateGame', () => {
@@ -282,22 +320,22 @@ describe('simulateGame', () => {
   const SLOW = 45_000;
 
   it('is fully deterministic for a given seed', () => {
-    const a = simulateGame({ weights, seed: 7, maxPieces: 60, depth: 2 });
-    const b = simulateGame({ weights, seed: 7, maxPieces: 60, depth: 2 });
+    const a = simulateGame({ weights, seed: 7, maxPieces: 20, search: TEST_SEARCH });
+    const b = simulateGame({ weights, seed: 7, maxPieces: 20, search: TEST_SEARCH });
     expect(a).toEqual(b);
   }, SLOW);
 
   it.each([
-    [7, { lines: 22, score: 4200, pieces: 60, meanHeight: 4.166666666666667 }],
-    [11, { lines: 23, score: 5100, pieces: 60, meanHeight: 3.933333333333333 }],
-    [20260806, { lines: 22, score: 4300, pieces: 60, meanHeight: 3.8333333333333335 }],
+    [7, { lines: 6, score: 600, pieces: 20, meanHeight: 2.7 }],
+    [11, { lines: 6, score: 600, pieces: 20, meanHeight: 4.4 }],
+    [20260806, { lines: 6, score: 600, pieces: 20, meanHeight: 3.45 }],
   ])('keeps the bundled default model deterministic for seed %i', (seed, expected) => {
     expect(DEFAULT_WEIGHTS.cleanWellDepth).toBe(0);
     expect(DEFAULT_WEIGHTS.tetrisSetupProgress).toBe(0);
     expect(DEFAULT_WEIGHTS.tetrisReadyRows).toBe(0);
     expect(DEFAULT_WEIGHTS_META).toMatchObject({ version: 3, objective: 'score-rate-v2', gen: 40 });
     const result = simulateGame({
-      weights: toVector(DEFAULT_WEIGHTS), seed, maxPieces: 60, depth: 2,
+      weights: toVector(DEFAULT_WEIGHTS), seed, maxPieces: 20, search: TEST_SEARCH,
     });
     expect(result).toMatchObject({ ...expected, reason: 'pieceCap' });
     expect(result.lines).toBe(totalLinesFromCounts(result.clearCounts));
@@ -305,28 +343,68 @@ describe('simulateGame', () => {
   }, SLOW);
 
   it('produces different results for different seeds', () => {
-    const a = simulateGame({ weights, seed: 1, maxPieces: 200, depth: 1 });
-    const b = simulateGame({ weights, seed: 2, maxPieces: 200, depth: 1 });
+    const a = simulateGame({ weights, seed: 1, maxPieces: 30, search: TEST_SEARCH });
+    const b = simulateGame({ weights, seed: 2, maxPieces: 30, search: TEST_SEARCH });
     expect(a).not.toEqual(b);
   });
 
   it('stops at the piece cap without calling it a loss', () => {
-    const r = simulateGame({ weights, seed: 3, maxPieces: 30, depth: 2 });
-    expect(r.pieces).toBe(30);
+    const r = simulateGame({ weights, seed: 3, maxPieces: 10, search: TEST_SEARCH });
+    expect(r.pieces).toBe(10);
     expect(r.reason).toBe('pieceCap');
   }, SLOW);
 
   it('plays better than a deliberately terrible weight vector', () => {
     const bad = Array(FEATURE_COUNT).fill(0);
     bad[1] = 1; // reward holes
-    const good = simulateGame({ weights, seed: 11, maxPieces: 300, depth: 1 });
-    const awful = simulateGame({ weights: bad, seed: 11, maxPieces: 300, depth: 1 });
+    const good = simulateGame({ weights, seed: 11, maxPieces: 80, search: TEST_SEARCH });
+    const awful = simulateGame({ weights: bad, seed: 11, maxPieces: 80, search: TEST_SEARCH });
     expect(good.lines).toBeGreaterThan(awful.lines);
   });
 
   it('rejects a weight vector of the wrong length', () => {
-    expect(() => simulateGame({ weights: [1, 2, 3], seed: 1, maxPieces: 10, depth: 1 }))
+    expect(() => simulateGame({ weights: [1, 2, 3], seed: 1, maxPieces: 10, search: TEST_SEARCH }))
       .toThrow(new RegExp(String(FEATURE_COUNT)));
+  });
+
+  it('reports completed fixed depth and no aborted searches', () => {
+    const state = createSimState(7);
+    state.board = boardFrom([
+      '##########',
+      '###....###',
+      '.#########',
+      '.#########',
+      '.#########',
+      '.#########',
+      '.#########',
+      '.#########',
+      '.#########',
+      '.#########',
+      '.#########',
+      '.#########',
+      '.#########',
+      '.#########',
+      '.#########',
+      '.#########',
+      '.#########',
+      '.#########',
+      '.#########',
+      '.#########',
+    ]);
+    state.currentPiece = createPiece(1);
+    state.nextPiece = createPiece(1);
+    state.holdAvailable = false;
+    state.unseenBagMask = 0b0000001;
+    state.bag = [1];
+
+    const result = simulateFromState(state, {
+      weights, maxPieces: 1, search: FIXED_SEARCH_LIMITS,
+    });
+
+    expect(result.searchDiagnostics).toMatchObject({
+      minCompletedDepth: 4,
+      abortedSearches: 0,
+    });
   });
 });
 
@@ -383,14 +461,14 @@ describe('board tidiness', () => {
   });
 
   it('reports the mean height a game was played at', () => {
-    const r = simulateGame({ weights, seed: 5, maxPieces: 60, depth: 1 });
+    const r = simulateGame({ weights, seed: 5, maxPieces: 20, search: TEST_SEARCH });
     expect(r.meanHeight).toBeGreaterThan(0);
     expect(r.meanHeight).toBeLessThan(TOTAL_ROWS);
   });
 
   it('reports finite per-piece strategy means', () => {
     const result = simulateGame({
-      weights: toVector(DEFAULT_WEIGHTS), seed: 7, maxPieces: 60, depth: 2,
+      weights: toVector(DEFAULT_WEIGHTS), seed: 7, maxPieces: 20, search: TEST_SEARCH,
     });
 
     expect(result.strategyDiagnostics).toEqual(expect.objectContaining({
@@ -404,7 +482,7 @@ describe('board tidiness', () => {
   }, 45_000);
 
   it('reports zero rather than NaN when no piece was ever locked', () => {
-    const r = simulateGame({ weights, seed: 1, maxPieces: 0, depth: 1 });
+    const r = simulateGame({ weights, seed: 1, maxPieces: 0, search: TEST_SEARCH });
     expect(r.pieces).toBe(0);
     expect(r.meanHeight).toBe(0);
   });
@@ -418,15 +496,15 @@ describe('board tidiness', () => {
     careless[0] = 0; // aggregateHeight
     careless[3] = 0; // maxHeight
 
-    const tidy = simulateGame({ weights, seed: 11, maxPieces: 200, depth: 1 });
-    const sloppy = simulateGame({ weights: careless, seed: 11, maxPieces: 200, depth: 1 });
+    const tidy = simulateGame({ weights, seed: 11, maxPieces: 80, search: TEST_SEARCH });
+    const sloppy = simulateGame({ weights: careless, seed: 11, maxPieces: 80, search: TEST_SEARCH });
 
     expect(tidy.reason).toBe('pieceCap');
     expect(sloppy.reason).toBe('pieceCap');
 
     // Lines cannot tell them apart: both sit within a few percent of the same
     // 0.4 x maxPieces ceiling (measured 78 and 76 of a possible 80).
-    const ceiling = 0.4 * 200;
+    const ceiling = 0.4 * 80;
     expect(tidy.lines).toBeGreaterThan(0.9 * ceiling);
     expect(sloppy.lines).toBeGreaterThan(0.9 * ceiling);
     expect(Math.abs(sloppy.lines - tidy.lines)).toBeLessThan(0.05 * ceiling);

@@ -7,6 +7,7 @@ import {
   type LineClearCounts,
 } from '../src/ai/lineClears';
 import type { StrategyDiagnostics } from '../src/ai/tetrisStrategy';
+import type { SimulationSearchDiagnostics } from '../src/ai/simulate';
 
 export interface BenchResult {
   score: number;
@@ -16,6 +17,7 @@ export interface BenchResult {
   reason: 'gameover' | 'pieceCap';
   clearCounts: LineClearCounts;
   strategyDiagnostics: StrategyDiagnostics;
+  searchDiagnostics: SimulationSearchDiagnostics;
 }
 
 export interface Distribution {
@@ -40,6 +42,16 @@ export interface BenchSummary {
     cleanWellDepth: Distribution;
     tetrisSetupProgress: Distribution;
     tetrisReadyRows: Distribution;
+  };
+  search: {
+    holdActions: number;
+    holdRate: number;
+    completedDepth: Distribution;
+    minCompletedDepth: number;
+    expandedDecisionNodes: number;
+    expandedChanceNodes: number;
+    cacheHits: number;
+    abortedSearches: number;
   };
 }
 
@@ -74,6 +86,10 @@ export function summarizeBench(
     (sum, result) => addLineClearCounts(sum, result.clearCounts),
     emptyLineClearCounts(),
   );
+  const totalPieces = results.reduce((sum, result) => sum + result.pieces, 0);
+  const holdActions = results.reduce(
+    (sum, result) => sum + result.searchDiagnostics.holdActions, 0,
+  );
   return {
     score: distribution(results.map((result) => result.score)),
     scorePerScheduledPiece: distribution(
@@ -81,7 +97,7 @@ export function summarizeBench(
     ),
     lines: distribution(results.map((result) => result.lines)),
     height: distribution(results.map((result) => result.meanHeight)),
-    totalPieces: results.reduce((sum, result) => sum + result.pieces, 0),
+    totalPieces,
     cappedGames: results.filter((result) => result.reason === 'pieceCap').length,
     gameoverGames: results.filter((result) => result.reason === 'gameover').length,
     clearCounts,
@@ -97,6 +113,28 @@ export function summarizeBench(
       ),
       tetrisReadyRows: distribution(
         results.map((result) => result.strategyDiagnostics.meanTetrisReadyRows),
+      ),
+    },
+    search: {
+      holdActions,
+      holdRate: totalPieces === 0 ? 0 : holdActions / totalPieces,
+      completedDepth: distribution(
+        results.map((result) => result.searchDiagnostics.meanCompletedDepth),
+      ),
+      minCompletedDepth: Math.min(
+        ...results.map((result) => result.searchDiagnostics.minCompletedDepth),
+      ),
+      expandedDecisionNodes: results.reduce(
+        (sum, result) => sum + result.searchDiagnostics.expandedDecisionNodes, 0,
+      ),
+      expandedChanceNodes: results.reduce(
+        (sum, result) => sum + result.searchDiagnostics.expandedChanceNodes, 0,
+      ),
+      cacheHits: results.reduce(
+        (sum, result) => sum + result.searchDiagnostics.cacheHits, 0,
+      ),
+      abortedSearches: results.reduce(
+        (sum, result) => sum + result.searchDiagnostics.abortedSearches, 0,
       ),
     },
   };

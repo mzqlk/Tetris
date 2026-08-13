@@ -11,6 +11,11 @@ describe('summarizeBench', () => {
         meanTetrisSetupProgress: 3,
         meanTetrisReadyRows: 2,
       },
+      searchDiagnostics: {
+        holdActions: 30, holdRate: 0.1, meanCompletedDepth: 4, minCompletedDepth: 4,
+        expandedDecisionNodes: 100, expandedChanceNodes: 40, cacheHits: 10,
+        abortedSearches: 0,
+      },
     },
     {
       score: 600, lines: 10, pieces: 20, meanHeight: 8, reason: 'gameover',
@@ -19,6 +24,11 @@ describe('summarizeBench', () => {
         meanCleanWellDepth: 2,
         meanTetrisSetupProgress: 1,
         meanTetrisReadyRows: 0,
+      },
+      searchDiagnostics: {
+        holdActions: 4, holdRate: 0.2, meanCompletedDepth: 3, minCompletedDepth: 2,
+        expandedDecisionNodes: 60, expandedChanceNodes: 20, cacheHits: 8,
+        abortedSearches: 1,
       },
     },
   ];
@@ -56,6 +66,20 @@ describe('summarizeBench', () => {
     expect(summary.strategy.tetrisReadyRows.mean).toBe(1);
   });
 
+  it('summarizes Hold and fixed-search diagnostics', () => {
+    const summary = summarizeBench(games, 300);
+    expect(summary.search).toEqual({
+      holdActions: 34,
+      holdRate: 34 / 320,
+      completedDepth: { mean: 3.5, median: 3.5, min: 3, max: 4 },
+      minCompletedDepth: 2,
+      expandedDecisionNodes: 160,
+      expandedChanceNodes: 60,
+      cacheHits: 18,
+      abortedSearches: 1,
+    });
+  });
+
   it('reports no tetris line share when no lines were cleared', () => {
     const summary = summarizeBench([{
       score: 0, lines: 0, pieces: 10, meanHeight: 20, reason: 'gameover',
@@ -64,6 +88,11 @@ describe('summarizeBench', () => {
         meanCleanWellDepth: 0,
         meanTetrisSetupProgress: 0,
         meanTetrisReadyRows: 0,
+      },
+      searchDiagnostics: {
+        holdActions: 0, holdRate: 0, meanCompletedDepth: 4, minCompletedDepth: 4,
+        expandedDecisionNodes: 1, expandedChanceNodes: 1, cacheHits: 0,
+        abortedSearches: 0,
       },
     }], 300);
     expect(summary.tetrisLineShare).toBe(0);
@@ -92,6 +121,11 @@ describe('summarizeBench', () => {
         meanCleanWellDepth: 0,
         meanTetrisSetupProgress: 0,
         meanTetrisReadyRows: 0,
+      },
+      searchDiagnostics: {
+        holdActions: 0, holdRate: 0, meanCompletedDepth: 0, minCompletedDepth: 0,
+        expandedDecisionNodes: 0, expandedChanceNodes: 0, cacheHits: 0,
+        abortedSearches: 0,
       },
     }], 300)).toThrow(/clearCounts|integer|finite|non-negative/);
   });

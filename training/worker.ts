@@ -11,7 +11,7 @@ port.on('message', (task: SimTask) => {
       weights: task.weights,
       seed: task.seed,
       maxPieces: task.maxPieces,
-      depth: task.depth,
+      search: task.search,
     });
     port.postMessage({ taskId: task.taskId, ...result, failed: false });
   } catch (err) {
