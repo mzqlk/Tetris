@@ -492,6 +492,9 @@ const GENERATION_KEYS = [
   'bestStrategyDiagnostics',
   'medianStrategyDiagnostics',
   'eliteStrategyDiagnostics',
+  'bestSearchDiagnostics',
+  'medianSearchDiagnostics',
+  'eliteSearchDiagnostics',
   'gamesPerCandidate',
   'elapsedMs',
 ] as const;
@@ -738,6 +741,9 @@ function validateGeneration(
   const mu = logVector(raw.mu, line, 'generation mu');
   const sigma = logPositiveVector(raw.sigma, line, 'generation sigma');
   logNormalizedVector(raw.bestWeights, line, 'generation bestWeights');
+  logSearchDiagnostics(raw.bestSearchDiagnostics, line, 'generation bestSearchDiagnostics');
+  logSearchDiagnostics(raw.medianSearchDiagnostics, line, 'generation medianSearchDiagnostics');
+  logSearchDiagnostics(raw.eliteSearchDiagnostics, line, 'generation eliteSearchDiagnostics');
   const maxPieces = logInteger(raw.maxPieces, line, 'generation maxPieces', 1);
   if (maxPieces > checkpoint.config.maxPiecesCap) {
     throw logError(line, 'generation maxPieces exceeds checkpoint config.maxPiecesCap');

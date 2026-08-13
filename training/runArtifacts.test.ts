@@ -169,6 +169,9 @@ const GEN_0 = {
   bestStrategyDiagnostics: { ...STRATEGY },
   medianStrategyDiagnostics: { ...STRATEGY },
   eliteStrategyDiagnostics: { ...STRATEGY },
+  bestSearchDiagnostics: { holdActions: 1, holdRate: 0.1, meanCompletedDepth: 4, minCompletedDepth: 4, expandedDecisionNodes: 10, expandedChanceNodes: 20, cacheHits: 3, abortedSearches: 0 },
+  medianSearchDiagnostics: { holdActions: 1, holdRate: 0.1, meanCompletedDepth: 4, minCompletedDepth: 4, expandedDecisionNodes: 10, expandedChanceNodes: 20, cacheHits: 3, abortedSearches: 0 },
+  eliteSearchDiagnostics: { holdActions: 1, holdRate: 0.1, meanCompletedDepth: 4, minCompletedDepth: 4, expandedDecisionNodes: 10, expandedChanceNodes: 20, cacheHits: 3, abortedSearches: 0 },
   gamesPerCandidate: 5,
   elapsedMs: 100,
 };
