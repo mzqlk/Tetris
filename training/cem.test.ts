@@ -7,6 +7,7 @@ import { mulberry32 } from '../src/ai/rng';
 import { FEATURE_COUNT } from '../src/ai/features';
 import type { LineClearCounts } from '../src/ai/lineClears';
 import type { StrategyDiagnostics } from '../src/ai/tetrisStrategy';
+import type { SimulationSearchDiagnostics } from '../src/ai/simulate';
 
 const l2 = (v: number[]) => Math.sqrt(v.reduce((s, x) => s + x * x, 0));
 
@@ -17,6 +18,7 @@ const result = (overrides: Partial<{
   meanHeight: number;
   clearCounts: LineClearCounts;
   strategyDiagnostics: StrategyDiagnostics;
+  searchDiagnostics: SimulationSearchDiagnostics;
   reason: 'gameover' | 'pieceCap' | 'error';
 }> = {}) => {
   const lines = overrides.lines ?? 0;
@@ -32,6 +34,16 @@ const result = (overrides: Partial<{
       meanCleanWellDepth: 0,
       meanTetrisSetupProgress: 0,
       meanTetrisReadyRows: 0,
+    },
+    searchDiagnostics: overrides.searchDiagnostics ?? {
+      holdActions: 0,
+      holdRate: 0,
+      meanCompletedDepth: 0,
+      minCompletedDepth: 0,
+      expandedDecisionNodes: 0,
+      expandedChanceNodes: 0,
+      cacheHits: 0,
+      abortedSearches: 0,
     },
     reason: 'pieceCap' as const,
     ...overrides,
@@ -273,6 +285,15 @@ describe('aggregateFitness', () => {
       { singles: 2, doubles: 0, triples: 0, tetrises: 0.5 },
     ]);
     expect(stats.tetrisLineShares).toEqual([0.5]);
+  });
+
+  it('keeps search diagnostics out of scalar fitness and candidate ordering', () => {
+    const stats = aggregateFitness([
+      result({ score: 100, searchDiagnostics: { holdActions: 0, holdRate: 0, meanCompletedDepth: 1, minCompletedDepth: 1, expandedDecisionNodes: 1, expandedChanceNodes: 2, cacheHits: 3, abortedSearches: 0 } }),
+      result({ score: 100, searchDiagnostics: { holdActions: 4, holdRate: 1, meanCompletedDepth: 4, minCompletedDepth: 4, expandedDecisionNodes: 10, expandedChanceNodes: 20, cacheHits: 30, abortedSearches: 1 } }),
+    ], 2, 1, 1);
+    expect(stats.fitness).toEqual([100, 100]);
+    expect(stats.meanSearchDiagnostics[0]).not.toEqual(stats.meanSearchDiagnostics[1]);
   });
 
   it('averages strategy diagnostics per game and counts exact end reasons', () => {

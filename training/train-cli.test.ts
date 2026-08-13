@@ -35,6 +35,10 @@ const SURVIVAL_DIAGNOSTICS = {
   pieceCapGames: DEFAULT_CONFIG.reevalGames,
   gameoverGames: 0,
 };
+const SEARCH_DIAGNOSTICS = {
+  holdActions: 1, holdRate: 0.1, meanCompletedDepth: 4, minCompletedDepth: 4,
+  expandedDecisionNodes: 10, expandedChanceNodes: 20, cacheHits: 3, abortedSearches: 0,
+};
 
 const validCheckpoint = (gen = 1) => ({
   version: 5,
@@ -92,6 +96,9 @@ const validGeneration = (
   bestStrategyDiagnostics: { ...STRATEGY_DIAGNOSTICS },
   medianStrategyDiagnostics: { ...STRATEGY_DIAGNOSTICS },
   eliteStrategyDiagnostics: { ...STRATEGY_DIAGNOSTICS },
+  bestSearchDiagnostics: { ...SEARCH_DIAGNOSTICS },
+  medianSearchDiagnostics: { ...SEARCH_DIAGNOSTICS },
+  eliteSearchDiagnostics: { ...SEARCH_DIAGNOSTICS },
   gamesPerCandidate: DEFAULT_CONFIG.gamesPerCandidate,
   elapsedMs: 100,
 });
@@ -111,6 +118,7 @@ const evaluated = (
   tetrisLineShare: 0.25,
   strategyDiagnostics: { ...STRATEGY_DIAGNOSTICS },
   survivalDiagnostics: { ...SURVIVAL_DIAGNOSTICS },
+  searchDiagnostics: { ...SEARCH_DIAGNOSTICS },
 });
 
 type LoggedEvaluation = ReturnType<typeof evaluated>;

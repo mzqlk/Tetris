@@ -116,26 +116,6 @@ function reevaluationSummary(
   };
 }
 
-function aggregateSearchDiagnostics(
-  results: readonly { searchDiagnostics: SearchDiagnostics }[],
-  population: number,
-  gamesPerCandidate: number,
-): SearchDiagnostics[] {
-  return Array.from({ length: population }, (_, index) => {
-    const group = results.slice(index * gamesPerCandidate, (index + 1) * gamesPerCandidate);
-    const sum = (field: keyof SearchDiagnostics) => group.reduce(
-      (total, result) => total + result.searchDiagnostics[field], 0,
-    );
-    return {
-      holdActions: sum('holdActions'), holdRate: sum('holdRate') / gamesPerCandidate,
-      meanCompletedDepth: sum('meanCompletedDepth') / gamesPerCandidate,
-      minCompletedDepth: Math.min(...group.map((result) => result.searchDiagnostics.minCompletedDepth)),
-      expandedDecisionNodes: sum('expandedDecisionNodes'), expandedChanceNodes: sum('expandedChanceNodes'),
-      cacheHits: sum('cacheHits'), abortedSearches: sum('abortedSearches'),
-    };
-  });
-}
-
 function loggedReevaluation(
   evaluation: ScoreRateEvaluation,
 ): LoggedReevaluation {
@@ -275,7 +255,7 @@ async function runGeneration(): Promise<void> {
 
   const results = await pool.run(tasks);
 
-  const {
+    const {
     fitness: scoreRates,
     meanScore,
     meanLines,
@@ -283,6 +263,7 @@ async function runGeneration(): Promise<void> {
     meanHeight,
     tetrisLineShares,
     meanStrategyDiagnostics,
+    meanSearchDiagnostics,
     survivalDiagnostics,
   } = aggregateFitness(results, candidates.length, cfg.gamesPerCandidate, maxPieces);
 
@@ -306,6 +287,7 @@ async function runGeneration(): Promise<void> {
       tetrisLineShare: tetrisLineShares[index],
       strategy: meanStrategyDiagnostics[index],
       survival: survivalDiagnostics[index],
+      search: meanSearchDiagnostics[index],
     }))
     .sort((a, b) => b.fit - a.fit)
     .slice(0, eliteCount(cfg.eliteFrac, candidates.length));
@@ -369,6 +351,27 @@ async function runGeneration(): Promise<void> {
         elites.map((elite) => elite.strategy.meanTetrisReadyRows),
       ),
     },
+    bestSearchDiagnostics: meanSearchDiagnostics[bestIndex],
+    medianSearchDiagnostics: {
+      holdActions: median(meanSearchDiagnostics.map((d) => d.holdActions)),
+      holdRate: median(meanSearchDiagnostics.map((d) => d.holdRate)),
+      meanCompletedDepth: median(meanSearchDiagnostics.map((d) => d.meanCompletedDepth)),
+      minCompletedDepth: median(meanSearchDiagnostics.map((d) => d.minCompletedDepth)),
+      expandedDecisionNodes: median(meanSearchDiagnostics.map((d) => d.expandedDecisionNodes)),
+      expandedChanceNodes: median(meanSearchDiagnostics.map((d) => d.expandedChanceNodes)),
+      cacheHits: median(meanSearchDiagnostics.map((d) => d.cacheHits)),
+      abortedSearches: median(meanSearchDiagnostics.map((d) => d.abortedSearches)),
+    },
+    eliteSearchDiagnostics: {
+      holdActions: median(elites.map((elite) => elite.search.holdActions)),
+      holdRate: median(elites.map((elite) => elite.search.holdRate)),
+      meanCompletedDepth: median(elites.map((elite) => elite.search.meanCompletedDepth)),
+      minCompletedDepth: median(elites.map((elite) => elite.search.minCompletedDepth)),
+      expandedDecisionNodes: median(elites.map((elite) => elite.search.expandedDecisionNodes)),
+      expandedChanceNodes: median(elites.map((elite) => elite.search.expandedChanceNodes)),
+      cacheHits: median(elites.map((elite) => elite.search.cacheHits)),
+      abortedSearches: median(elites.map((elite) => elite.search.abortedSearches)),
+    },
     gamesPerCandidate: cfg.gamesPerCandidate,
     elapsedMs,
   }) + '\n');
@@ -421,11 +424,7 @@ async function runGeneration(): Promise<void> {
       cfg.reevalGames,
       cfg.reevalMaxPieces,
     );
-    const evalSearchDiagnostics = aggregateSearchDiagnostics(
-      evalResults,
-      evaluationWeights.length,
-      cfg.reevalGames,
-    );
+    const evalSearchDiagnostics = evalStats.meanSearchDiagnostics;
     if (reevaluation.baselineIndex !== null) {
       const baseline = reevaluationSummary(evalStats, reevaluation.baselineIndex, evalSearchDiagnostics[reevaluation.baselineIndex]);
       publishedBaseline = {

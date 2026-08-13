@@ -3,7 +3,11 @@ import { FEATURE_COUNT } from '../../ai/features';
 import { LOG_URL, parseLog } from './useTrainingLog';
 
 const line = (gen: number) => JSON.stringify({
-  objective: 'score-rate-v3',
+  objective: 'score-rate-v4',
+  searchContract: 'bag-expectimax-hold-v1',
+  searchDepth: 4,
+  rootBeamWidth: 64,
+  childBeamWidth: 32,
   gen,
   ts: 1785000000000 + gen,
   bestScoreRate: 125.5 + gen,
@@ -40,13 +44,16 @@ const line = (gen: number) => JSON.stringify({
     meanTetrisSetupProgress: 4,
     meanTetrisReadyRows: 3,
   },
+  bestSearchDiagnostics: { holdActions: 1, holdRate: 0.1, meanCompletedDepth: 4, minCompletedDepth: 4, expandedDecisionNodes: 10, expandedChanceNodes: 20, cacheHits: 3, abortedSearches: 0 },
+  medianSearchDiagnostics: { holdActions: 1, holdRate: 0.1, meanCompletedDepth: 4, minCompletedDepth: 4, expandedDecisionNodes: 10, expandedChanceNodes: 20, cacheHits: 3, abortedSearches: 0 },
+  eliteSearchDiagnostics: { holdActions: 1, holdRate: 0.1, meanCompletedDepth: 4, minCompletedDepth: 4, expandedDecisionNodes: 10, expandedChanceNodes: 20, cacheHits: 3, abortedSearches: 0 },
   gamesPerCandidate: 5,
   elapsedMs: 1000,
 });
 
 describe('parseLog', () => {
-  it('uses the score-rate-v3 log URL', () => {
-    expect(LOG_URL).toBe('/ai/score-rate-v3/training-log.jsonl');
+  it('uses the score-rate-v4 log URL', () => {
+    expect(LOG_URL).toBe('/ai/score-rate-v4/training-log.jsonl');
   });
 
   it('parses one entry per line', () => {
@@ -59,7 +66,7 @@ describe('parseLog', () => {
   it('parses score-rate fields used by the dashboard', () => {
     const [entry] = parseLog(line(0));
     expect(entry).toMatchObject({
-      objective: 'score-rate-v3',
+      objective: 'score-rate-v4',
       bestScoreRate: 125.5,
       medianScoreRate: 75,
       medianScore: 22500,
@@ -88,7 +95,7 @@ describe('parseLog', () => {
 
   it('ignores a score-rate-v2 generation line', () => {
     const legacy = JSON.parse(line(0));
-    legacy.objective = 'score-rate-v2';
+    legacy.objective = 'score-rate-v3';
     expect(parseLog(`${JSON.stringify(legacy)}\n${line(1)}`)).toHaveLength(1);
     expect(parseLog(`${JSON.stringify(legacy)}\n${line(1)}`)[0].gen).toBe(1);
   });

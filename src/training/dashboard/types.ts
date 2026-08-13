@@ -1,5 +1,6 @@
 import type { ScoreRateObjective } from '../../ai/trainingObjective';
 import type { StrategyDiagnostics } from '../../ai/tetrisStrategy';
+import type { SearchDiagnostics } from '../../ai/weights';
 
 export interface LogEntry {
   objective: ScoreRateObjective;
@@ -27,6 +28,9 @@ export interface LogEntry {
   bestStrategyDiagnostics: StrategyDiagnostics;
   medianStrategyDiagnostics: StrategyDiagnostics;
   eliteStrategyDiagnostics: StrategyDiagnostics;
+  bestSearchDiagnostics: SearchDiagnostics;
+  medianSearchDiagnostics: SearchDiagnostics;
+  eliteSearchDiagnostics: SearchDiagnostics;
   gamesPerCandidate: number;
   elapsedMs: number;
 }

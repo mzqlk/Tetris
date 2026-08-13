@@ -16,6 +16,7 @@ import {
   type StrategyDiagnostics,
   type SurvivalDiagnostics,
 } from '../src/ai/tetrisStrategy';
+import type { SimulationSearchDiagnostics } from '../src/ai/simulate';
 
 export interface CemState {
   mu: number[];
@@ -111,6 +112,7 @@ export interface CandidateStats {
   meanClearCounts: LineClearCounts[];
   tetrisLineShares: number[];
   meanStrategyDiagnostics: StrategyDiagnostics[];
+  meanSearchDiagnostics: SimulationSearchDiagnostics[];
   survivalDiagnostics: SurvivalDiagnostics[];
 }
 
@@ -139,6 +141,7 @@ export function aggregateFitness(
     meanHeight: number;
     clearCounts: LineClearCounts;
     strategyDiagnostics: StrategyDiagnostics;
+    searchDiagnostics: SimulationSearchDiagnostics;
     reason: 'gameover' | 'pieceCap' | 'error';
   }[],
   population: number,
@@ -153,6 +156,17 @@ export function aggregateFitness(
     throw new Error(`expected ${expected} results, got ${results.length}`);
   }
   for (const result of results) {
+    const search = result.searchDiagnostics;
+    for (const field of ['holdActions', 'holdRate', 'meanCompletedDepth', 'minCompletedDepth',
+      'expandedDecisionNodes', 'expandedChanceNodes', 'cacheHits', 'abortedSearches'] as const) {
+      const value = search[field];
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+        throw new Error(`searchDiagnostics.${field} must be finite and non-negative`);
+      }
+    }
+    if (search.holdRate > 1 || search.meanCompletedDepth > 4 || search.minCompletedDepth > 4) {
+      throw new Error('searchDiagnostics depth/rate is out of range');
+    }
     for (const field of [
       'meanCleanWellDepth',
       'meanTetrisSetupProgress',
@@ -180,6 +194,7 @@ export function aggregateFitness(
   const meanClearCounts: LineClearCounts[] = [];
   const tetrisLineShares: number[] = [];
   const meanStrategyDiagnostics: StrategyDiagnostics[] = [];
+  const meanSearchDiagnostics: SimulationSearchDiagnostics[] = [];
   const survivalDiagnostics: SurvivalDiagnostics[] = [];
 
   for (let i = 0; i < population; i++) {
@@ -189,6 +204,10 @@ export function aggregateFitness(
     let height = 0;
     let clearCounts = emptyLineClearCounts();
     let strategyDiagnostics = emptyStrategyDiagnostics();
+    const searchDiagnostics: SimulationSearchDiagnostics = {
+      holdActions: 0, holdRate: 0, meanCompletedDepth: 0, minCompletedDepth: 0,
+      expandedDecisionNodes: 0, expandedChanceNodes: 0, cacheHits: 0, abortedSearches: 0,
+    };
     let pieceCapGames = 0;
     let gameoverGames = 0;
     for (let j = 0; j < gamesPerCandidate; j++) {
@@ -199,6 +218,16 @@ export function aggregateFitness(
       height += r.meanHeight;
       clearCounts = addLineClearCounts(clearCounts, r.clearCounts);
       strategyDiagnostics = addStrategyDiagnostics(strategyDiagnostics, r.strategyDiagnostics);
+      searchDiagnostics.holdActions += r.searchDiagnostics.holdActions;
+      searchDiagnostics.holdRate += r.searchDiagnostics.holdRate;
+      searchDiagnostics.meanCompletedDepth += r.searchDiagnostics.meanCompletedDepth;
+      searchDiagnostics.minCompletedDepth = j === 0
+        ? r.searchDiagnostics.minCompletedDepth
+        : Math.min(searchDiagnostics.minCompletedDepth, r.searchDiagnostics.minCompletedDepth);
+      searchDiagnostics.expandedDecisionNodes += r.searchDiagnostics.expandedDecisionNodes;
+      searchDiagnostics.expandedChanceNodes += r.searchDiagnostics.expandedChanceNodes;
+      searchDiagnostics.cacheHits += r.searchDiagnostics.cacheHits;
+      searchDiagnostics.abortedSearches += r.searchDiagnostics.abortedSearches;
       if (r.reason === 'pieceCap') pieceCapGames++;
       if (r.reason === 'gameover') gameoverGames++;
     }
@@ -215,6 +244,11 @@ export function aggregateFitness(
     meanClearCounts.push(candidateMeanClearCounts);
     tetrisLineShares.push(tetrisLineShare(candidateMeanClearCounts));
     meanStrategyDiagnostics.push(divideStrategyDiagnostics(strategyDiagnostics, gamesPerCandidate));
+    meanSearchDiagnostics.push({
+      ...searchDiagnostics,
+      holdRate: searchDiagnostics.holdRate / gamesPerCandidate,
+      meanCompletedDepth: searchDiagnostics.meanCompletedDepth / gamesPerCandidate,
+    });
     survivalDiagnostics.push({ pieceCapGames, gameoverGames });
     fitness.push(candidateMeanScore / maxPieces);
   }
@@ -228,6 +262,7 @@ export function aggregateFitness(
     meanClearCounts,
     tetrisLineShares,
     meanStrategyDiagnostics,
+    meanSearchDiagnostics,
     survivalDiagnostics,
   };
 }
