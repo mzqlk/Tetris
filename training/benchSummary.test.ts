@@ -1,5 +1,39 @@
+import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
+import { FIXED_SEARCH_LIMITS } from '../src/ai/search';
+import { buildBenchPlan, parseBenchArgs } from './bench';
 import { formatLineClearCounts, summarizeBench, type BenchResult } from './benchSummary';
+
+describe('bench CLI contract', () => {
+  it('rejects the removed user-selectable depth flag', () => {
+    expect(() => parseBenchArgs(['--depth', '2'])).toThrow(/unknown flag.*--depth/i);
+  });
+
+  it('builds every game with the fixed search contract', () => {
+    const weights = [1, 2, 3];
+    const plan = buildBenchPlan(weights, {
+      weights: null,
+      games: 2,
+      maxPieces: 5000,
+      seed: 11,
+    });
+
+    expect(plan).toMatchObject({ weights, maxPieces: 5000 });
+    expect(plan.seeds).toHaveLength(2);
+    expect(new Set(plan.seeds)).toHaveLength(2);
+    expect(plan.search).toEqual(FIXED_SEARCH_LIMITS);
+  });
+
+  it('does not execute the CLI when imported', () => {
+    const output = execFileSync(
+      process.execPath,
+      ['--import', 'tsx', '--input-type=module', '-e', "await import('./training/bench.ts')"],
+      { cwd: process.cwd(), encoding: 'utf8' },
+    );
+
+    expect(output).toBe('');
+  });
+});
 
 describe('summarizeBench', () => {
   const games: BenchResult[] = [

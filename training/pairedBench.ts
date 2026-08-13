@@ -1,9 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { hashSeed } from '../src/ai/rng';
+import { FIXED_SEARCH_LIMITS } from '../src/ai/search';
 import { simulateGame } from '../src/ai/simulate';
 import { tetrisLineShare } from '../src/ai/lineClears';
 import { parseWeightsFile, toVector, type WeightsFile } from '../src/ai/weights';
+import { parseCandidateWeights } from './candidateWeights';
 import {
   evaluatePairedAcceptance,
   type PairedGameResult,
@@ -11,7 +13,13 @@ import {
 
 const GAMES = 30;
 const MAX_PIECES = 5000;
-const DEPTH = 2 as const;
+
+export interface PairedSimulationPlan {
+  seeds: number[];
+  baseline: { weights: number[]; search: typeof FIXED_SEARCH_LIMITS };
+  candidate: { weights: number[]; search: typeof FIXED_SEARCH_LIMITS };
+  maxPieces: 5000;
+}
 
 interface PairedBenchArgs {
   baseline: string;
@@ -102,6 +110,27 @@ function requireMetadata(
   }
 }
 
+export function buildPairedPlan(
+  baseline: WeightsFile,
+  candidate: WeightsFile,
+  seed: number,
+): PairedSimulationPlan {
+  requireMetadata(baseline, 'baseline', {
+    version: 3,
+    objective: 'score-rate-v2',
+    gen: 40,
+  });
+  if (parseCandidateWeights(candidate) === null) {
+    throw new Error('candidate must match the exact version 5 score-rate-v4 search contract 4/64/32');
+  }
+  return {
+    seeds: Array.from({ length: GAMES }, (_, gameIndex) => hashSeed(seed, gameIndex)),
+    baseline: { weights: toVector(baseline.weights), search: FIXED_SEARCH_LIMITS },
+    candidate: { weights: toVector(candidate.weights), search: FIXED_SEARCH_LIMITS },
+    maxPieces: MAX_PIECES,
+  };
+}
+
 function toPairedGame(result: ReturnType<typeof simulateGame>): PairedGameResult {
   return {
     score: result.score,
@@ -118,39 +147,29 @@ async function main(): Promise<void> {
   const args = parsePairedBenchArgs(process.argv.slice(2));
   const baselineWeights = readWeightsFile(args.baseline, 'baseline');
   const candidateWeights = readWeightsFile(args.candidate, 'candidate');
-  requireMetadata(baselineWeights, 'baseline', {
-    version: 3,
-    objective: 'score-rate-v2',
-    gen: 40,
-  });
-  requireMetadata(candidateWeights, 'candidate', {
-    version: 4,
-    objective: 'score-rate-v3',
-  });
+  const plan = buildPairedPlan(baselineWeights, candidateWeights, args.seed);
 
   const baselineGames: PairedGameResult[] = [];
   const candidateGames: PairedGameResult[] = [];
-  const baselineVector = toVector(baselineWeights.weights);
-  const candidateVector = toVector(candidateWeights.weights);
 
-  for (let gameIndex = 0; gameIndex < GAMES; gameIndex += 1) {
-    const seed = hashSeed(args.seed, gameIndex);
+  for (let gameIndex = 0; gameIndex < plan.seeds.length; gameIndex += 1) {
+    const seed = plan.seeds[gameIndex];
     const baseline = toPairedGame(simulateGame({
-      weights: baselineVector,
+      weights: plan.baseline.weights,
       seed,
-      maxPieces: MAX_PIECES,
-      depth: DEPTH,
+      maxPieces: plan.maxPieces,
+      search: plan.baseline.search,
     }));
     const candidate = toPairedGame(simulateGame({
-      weights: candidateVector,
+      weights: plan.candidate.weights,
       seed,
-      maxPieces: MAX_PIECES,
-      depth: DEPTH,
+      maxPieces: plan.maxPieces,
+      search: plan.candidate.search,
     }));
     baselineGames.push(baseline);
     candidateGames.push(candidate);
 
-    const scoreRateDelta = (candidate.score - baseline.score) / MAX_PIECES;
+    const scoreRateDelta = (candidate.score - baseline.score) / plan.maxPieces;
     const tetrisShareDelta = tetrisLineShare(candidate.clearCounts) -
       tetrisLineShare(baseline.clearCounts);
     console.log(
@@ -160,7 +179,9 @@ async function main(): Promise<void> {
     );
   }
 
-  console.log(JSON.stringify(evaluatePairedAcceptance(baselineGames, candidateGames, MAX_PIECES)));
+  console.log(JSON.stringify(
+    evaluatePairedAcceptance(baselineGames, candidateGames, plan.maxPieces),
+  ));
 }
 
 const isMain = process.argv[1] !== undefined &&
