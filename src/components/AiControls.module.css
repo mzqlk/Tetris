@@ -85,3 +85,10 @@
   line-height: 1.5;
   color: #33607a;
 }
+
+.searchMode {
+  font-family: 'Fira Code', 'JetBrains Mono', 'Courier New', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #00f0ff;
+}

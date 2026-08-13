@@ -22,3 +22,55 @@
   gap: 20px;
   min-width: 160px;
 }
+
+.holdPanel {
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+}
+
+.previewLabel,
+.holdHint {
+  font-family: 'Fira Code', 'JetBrains Mono', 'Courier New', monospace;
+  text-transform: uppercase;
+}
+
+.previewLabel {
+  margin-bottom: 8px;
+  color: #4488aa;
+  font-size: 12px;
+  letter-spacing: 2px;
+}
+
+.previewCanvasWrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  background: #0a0e1a;
+  border: 1px solid #1a1e3a;
+  border-radius: 4px;
+}
+
+.holdHint {
+  margin-top: 6px;
+  color: #33607a;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .gameContainer {
+    flex-wrap: wrap;
+    padding: 24px;
+  }
+
+  .holdPanel {
+    order: 2;
+  }
+
+  .sidebar {
+    order: 3;
+  }
+}

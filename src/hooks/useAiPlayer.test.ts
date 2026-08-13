@@ -20,7 +20,7 @@ import {
   type AiPlan,
   expectedPose,
   isPlanValid,
-  planPlacement,
+  planAction,
   useAiPlayer,
   type AiPlayerOptions,
 } from './useAiPlayer';
@@ -31,6 +31,8 @@ import { createEmptyBoard } from '../engine/board';
 import { createPiece, movePiece } from '../engine/piece';
 import { cellKey, projectHardDrop } from '../ai/placements';
 import * as placements from '../ai/placements';
+import * as search from '../ai/search';
+import type { PublicSearchState } from '../ai/publicState';
 import { useGameStore } from '../store/gameStore';
 import type { Board, Piece, PieceType } from '../types';
 
@@ -48,6 +50,7 @@ const ORIGINAL_ACTIONS = (() => {
     softDrop: store.softDrop,
     hardDrop: store.hardDrop,
     rotate: store.rotate,
+    hold: store.hold,
   };
 })();
 
@@ -70,6 +73,9 @@ function resetStore(
     flashTimer: 0,
     hardDropTrail: null,
     trailTimer: 0,
+    holdPiece: null,
+    holdAvailable: true,
+    unseenBagMask: 0b1111100,
     ...ORIGINAL_ACTIONS,
   });
 }
@@ -104,7 +110,24 @@ function options(
   weights = HANDCRAFTED_WEIGHTS,
   enabled = true,
 ): AiPlayerOptions {
-  return { enabled, depth: 1, speed, weights };
+  return { enabled, speed, weights };
+}
+
+function planFor(
+  board: Board,
+  current: Piece,
+  next: PieceType = 2,
+): AiPlan {
+  const result = planAction({
+    board,
+    current,
+    next,
+    hold: null,
+    holdAvailable: true,
+    unseenBagMask: 0b1111100,
+  }, W, () => false);
+  if (result === null || 'kind' in result) throw new Error('expected a placement plan');
+  return result;
 }
 
 function runNextTimer(): void {
@@ -117,6 +140,27 @@ beforeEach(() => {
   vi.stubGlobal('window', globalThis);
   reactHarness.cleanup = undefined;
   resetStore();
+  vi.spyOn(search, 'searchIterative').mockImplementation((state, weights) => {
+    const decision = search.bestPlacement(
+      state.board,
+      state.current,
+      createPiece(state.next),
+      weights,
+      1,
+    );
+    if (!decision) return null;
+    return {
+      action: { kind: 'place', placement: decision.placement },
+      value: { survivalProbability: 1, expectedHeuristicValue: decision.score },
+      diagnostics: {
+        completedDepth: 1,
+        expandedDecisionNodes: 1,
+        expandedChanceNodes: 0,
+        cacheHits: 0,
+        aborted: false,
+      },
+    };
+  });
 });
 
 afterEach(() => {
@@ -127,10 +171,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('planPlacement', () => {
+describe('planAction', () => {
   it('returns a plan whose path matches its move list', () => {
     const board = createEmptyBoard();
-    const plan = planPlacement(board, createPiece(3), createPiece(5), W, 2)!;
+    const plan = planFor(board, createPiece(3), 5);
     expect(plan).not.toBeNull();
     expect(plan.path).toHaveLength(plan.moves.length);
     expect(plan.cursor).toBe(0);
@@ -139,7 +183,7 @@ describe('planPlacement', () => {
   it('stores a locked target reached by hard-dropping the path endpoint', () => {
     const board = boardFrom(['..#.......', '##.#####.#']);
     const origin = createPiece(7);
-    const plan = planPlacement(board, origin, null, W, 1)!;
+    const plan = planFor(board, origin);
     const preDrop = plan.path.at(-1) ?? origin;
 
     expect(samePiece(projectHardDrop(board, preDrop), plan.target)).toBe(true);
@@ -156,12 +200,26 @@ describe('planPlacement', () => {
     expect(samePiece(declaredTarget, wrongPose)).toBe(false);
     vi.spyOn(placements, 'projectHardDrop').mockReturnValue(wrongPose);
 
-    expect(planPlacement(board, createPiece(1), null, weights, 1)).toBeNull();
+    expect(planAction({
+      board,
+      current: createPiece(1),
+      next: 2,
+      hold: null,
+      holdAvailable: true,
+      unseenBagMask: 0b1111100,
+    }, weights, () => false)).toBeNull();
   });
 
   it('returns null when the piece cannot be placed anywhere', () => {
     const full = boardFrom(Array(22).fill('##########'));
-    expect(planPlacement(full, createPiece(1), null, W, 1)).toBeNull();
+    expect(planAction({
+      board: full,
+      current: createPiece(1),
+      next: 2,
+      hold: null,
+      holdAvailable: true,
+      unseenBagMask: 0b1111100,
+    }, W, () => false)).toBeNull();
   });
 });
 
@@ -217,6 +275,80 @@ describe('advanceAiPlan', () => {
 });
 
 describe('useAiPlayer timer and lifecycle integration', () => {
+  it.each([
+    ['instant', 100],
+    ['normal', 200],
+    ['slow', 200],
+  ] as const)('injects the %s planning budget', (speed, milliseconds) => {
+    let now = 0;
+    vi.stubGlobal('performance', { now: () => now });
+    const observed: boolean[] = [];
+    vi.spyOn(search, 'searchIterative').mockImplementation((_state, _weights, budget) => {
+      observed.push(budget.shouldAbort());
+      now = milliseconds;
+      observed.push(budget.shouldAbort());
+      expect(budget.maxLockedDepth).toBe(4);
+      return null;
+    });
+
+    useAiPlayer(options(speed));
+    runNextTimer();
+
+    expect(observed).toEqual([false, true]);
+  });
+
+  it('executes Hold and replans only after the new preview is visible', () => {
+    const states: PublicSearchState[] = [];
+    const placement = placements.enumeratePlacements(createEmptyBoard(), createPiece(2))[0];
+    vi.spyOn(search, 'searchIterative').mockImplementation((state) => {
+      states.push(state);
+      return states.length === 1
+        ? {
+            action: { kind: 'hold' },
+            value: { survivalProbability: 1, expectedHeuristicValue: 0 },
+            diagnostics: {
+              completedDepth: 1,
+              expandedDecisionNodes: 1,
+              expandedChanceNodes: 0,
+              cacheHits: 0,
+              aborted: false,
+            },
+          }
+        : {
+            action: { kind: 'place', placement },
+            value: { survivalProbability: 1, expectedHeuristicValue: 0 },
+            diagnostics: {
+              completedDepth: 1,
+              expandedDecisionNodes: 1,
+              expandedChanceNodes: 0,
+              cacheHits: 0,
+              aborted: false,
+            },
+          };
+    });
+    const events: string[] = [];
+    useGameStore.setState({
+      hold: () => {
+        events.push('hold');
+        ORIGINAL_ACTIONS.hold();
+      },
+      hardDrop: () => {
+        events.push('hardDrop');
+        ORIGINAL_ACTIONS.hardDrop();
+      },
+    });
+
+    useAiPlayer(options('instant'));
+    runNextTimer();
+    expect(events).toEqual(['hold']);
+    runNextTimer();
+
+    expect(events).toEqual(['hold', 'hardDrop']);
+    expect(states).toHaveLength(2);
+    expect(states[1].holdAvailable).toBe(false);
+    expect(states[1].current.type).toBe(2);
+  });
+
   it.each(['normal', 'slow'] as const)(
     '%s runs at most one positioning action per timer and hard-drops with the last action',
     (speed) => {
@@ -339,40 +471,40 @@ describe('useAiPlayer timer and lifecycle integration', () => {
 describe('plan validation', () => {
   it('expects the origin pose before the first move', () => {
     const board = createEmptyBoard();
-    const plan = planPlacement(board, createPiece(6), null, W, 1)!;
+    const plan = planFor(board, createPiece(6));
     expect(samePiece(expectedPose(plan), plan.origin)).toBe(true);
   });
 
   it('expects the previous path entry once execution has started', () => {
     const board = createEmptyBoard();
-    const plan = planPlacement(board, createPiece(6), null, W, 1)!;
+    const plan = planFor(board, createPiece(6));
     plan.cursor = 2;
     expect(samePiece(expectedPose(plan), plan.path[1])).toBe(true);
   });
 
   it('accepts a plan while the piece is where the plan expects it', () => {
     const board = createEmptyBoard();
-    const plan = planPlacement(board, createPiece(6), null, W, 1)!;
+    const plan = planFor(board, createPiece(6));
     expect(isPlanValid(plan, plan.origin)).toBe(true);
   });
 
   it('rejects a plan once gravity has pulled the piece down', () => {
     const board = createEmptyBoard();
     const origin = createPiece(6);
-    const plan = planPlacement(board, origin, null, W, 1)!;
+    const plan = planFor(board, origin);
     const pulled = movePiece(board, origin, 0, 1)!;
     expect(isPlanValid(plan, pulled)).toBe(false);
   });
 
   it('rejects a plan when the piece type changed underneath it', () => {
     const board = createEmptyBoard();
-    const plan = planPlacement(board, createPiece(6), null, W, 1)!;
+    const plan = planFor(board, createPiece(6));
     expect(isPlanValid(plan, createPiece(7))).toBe(false);
   });
 
   it('rejects a finished plan so the caller hard-drops instead of stepping past the end', () => {
     const board = createEmptyBoard();
-    const plan = planPlacement(board, createPiece(6), null, W, 1)!;
+    const plan = planFor(board, createPiece(6));
     plan.cursor = plan.moves.length + 1;
     expect(isPlanValid(plan, plan.origin)).toBe(false);
   });

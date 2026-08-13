@@ -9,7 +9,6 @@ const SPEEDS: AiSpeed[] = ['instant', 'normal', 'slow'];
 export default function AiControls() {
   const [enabled, setEnabled] = useState(false);
   const [speed, setSpeed] = useState<AiSpeed>('normal');
-  const [depth, setDepth] = useState<1 | 2>(2);
   const [runtime, setRuntime] = useState<WeightsFile | null>(null);
   const [useRuntime, setUseRuntime] = useState(true);
 
@@ -30,7 +29,7 @@ export default function AiControls() {
   const usingRuntime = useRuntime && runtime !== null;
   const active: Weights = usingRuntime ? runtime.weights : DEFAULT_WEIGHTS;
 
-  useAiPlayer({ enabled, depth, speed, weights: active });
+  useAiPlayer({ enabled, speed, weights: active });
 
   const source = usingRuntime
     // Height is shown alongside lines because lines alone saturate: any model
@@ -68,19 +67,8 @@ export default function AiControls() {
         ))}
       </div>
 
-      <div className={styles.label}>Lookahead</div>
-      <div className={styles.row}>
-        {([1, 2] as const).map((d) => (
-          <button
-            key={d}
-            type="button"
-            className={`${styles.segment} ${depth === d ? styles.segmentActive : ''}`}
-            onClick={() => setDepth(d)}
-          >
-            {d} ply
-          </button>
-        ))}
-      </div>
+      <div className={styles.label}>Search</div>
+      <div className={styles.searchMode}>4-lock expectimax</div>
 
       <div className={styles.label}>Weights</div>
       <div className={styles.row}>

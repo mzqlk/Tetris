@@ -15,6 +15,7 @@ interface GameActions {
   softDrop: () => void;
   hardDrop: () => void;
   rotate: () => void;
+  hold: () => void;
   tick: (deltaTime: number) => void;
   clearFlashRows: () => void;
   clearHardDropTrail: () => void;
@@ -29,6 +30,10 @@ function drawFromBag(bag: PieceType[]): { type: PieceType; newBag: PieceType[] }
   }
   const type = currentBag.shift()!;
   return { type, newBag: currentBag };
+}
+
+function unseenBagMaskFromRemainder(bag: PieceType[]): number {
+  return bag.reduce((mask, piece) => mask | (1 << (piece - 1)), 0);
 }
 
 /** Initial spawn: draw two pieces — one to play, one to preview. */
@@ -87,12 +92,14 @@ function lockAndSpawn(
   score: number,
   level: number,
   lines: number,
-  preview: Piece | null
+  preview: Piece | null,
 ): {
   board: Board;
   currentPiece: Piece;
   nextPiece: Piece;
   bag: PieceType[];
+  unseenBagMask: number;
+  holdAvailable: boolean;
   score: number;
   level: number;
   lines: number;
@@ -109,12 +116,17 @@ function lockAndSpawn(
   const result = preview
     ? promoteNextPiece(bag, boardAfterClear, preview)
     : spawnInitial(bag, boardAfterClear);
+  const nextMask = preview
+    ? unseenBagMaskFromRemainder(result.bag)
+    : (result as ReturnType<typeof spawnInitial>).unseenBagMask;
 
   return {
     board: boardAfterClear,
     currentPiece: result.currentPiece,
     nextPiece: result.nextPiece,
     bag: result.bag,
+    unseenBagMask: nextMask,
+    holdAvailable: true,
     score: score + lineScore,
     level: newLevel,
     lines: totalLines,
@@ -224,7 +236,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     };
 
     const spawned = lockAndSpawn(
-      board, dropped, get().bag, score + hardDropScore, get().level, get().lines, get().nextPiece
+      board, dropped, get().bag, score + hardDropScore, get().level, get().lines,
+      get().nextPiece,
     );
 
     set({
@@ -243,6 +256,37 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (rotated !== currentPiece) {
       set({ currentPiece: rotated });
     }
+  },
+
+  hold: () => {
+    const state = get();
+    if (state.status !== 'playing' || state.currentPiece === null || !state.holdAvailable) return;
+
+    if (state.holdPiece !== null) {
+      const currentPiece = createPiece(state.holdPiece);
+      set({
+        currentPiece,
+        holdPiece: state.currentPiece.type,
+        holdAvailable: false,
+        status: isGameOver(state.board, currentPiece) ? 'gameover' : 'playing',
+        dropTimer: 0,
+      });
+      return;
+    }
+
+    if (state.nextPiece === null) return;
+    const currentPiece = createPiece(state.nextPiece.type);
+    const drawn = drawFromBag(state.bag);
+    set({
+      currentPiece,
+      nextPiece: createPiece(drawn.type),
+      holdPiece: state.currentPiece.type,
+      holdAvailable: false,
+      bag: drawn.newBag,
+      unseenBagMask: unseenBagMaskFromRemainder(drawn.newBag),
+      status: isGameOver(state.board, currentPiece) ? 'gameover' : 'playing',
+      dropTimer: 0,
+    });
   },
 
   tick: (deltaTime: number) => {
@@ -272,7 +316,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       } else {
         // Piece can't move down — lock it
         const spawned = lockAndSpawn(
-          state.board, state.currentPiece, state.bag, state.score, state.level, state.lines, state.nextPiece
+          state.board, state.currentPiece, state.bag, state.score, state.level, state.lines,
+          state.nextPiece,
         );
 
         set({

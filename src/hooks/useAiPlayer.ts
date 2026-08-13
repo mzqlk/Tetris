@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react';
-import type { Board, Piece } from '../types';
+import type { Piece } from '../types';
 import { useGameStore } from '../store/gameStore';
-import { bestPlacement } from '../ai/search';
+import { FIXED_SEARCH_LIMITS, searchIterative } from '../ai/search';
+import type { PublicSearchState } from '../ai/publicState';
 import { projectPath, samePiece } from '../ai/replay';
 import { projectHardDrop, type AiMove } from '../ai/placements';
 import { toVector, type Weights } from '../ai/weights';
@@ -10,9 +11,31 @@ export type AiSpeed = 'instant' | 'normal' | 'slow';
 
 export interface AiPlayerOptions {
   enabled: boolean;
-  depth: 1 | 2;
   speed: AiSpeed;
   weights: Weights;
+}
+
+export function planAction(
+  state: PublicSearchState,
+  weights: number[],
+  shouldAbort: () => boolean,
+): AiPlan | { kind: 'hold' } | null {
+  const decision = searchIterative(state, weights, { ...FIXED_SEARCH_LIMITS, shouldAbort });
+  if (decision === null) return null;
+  if (decision.action.kind === 'hold') return { kind: 'hold' };
+
+  const moves = decision.action.placement.moves;
+  const path = projectPath(state.board, state.current, moves);
+  if (path.length !== moves.length) return null;
+  const preDrop = path.at(-1) ?? state.current;
+  if (!samePiece(projectHardDrop(state.board, preDrop), decision.action.placement.piece)) return null;
+  return {
+    moves,
+    path,
+    cursor: 0,
+    origin: state.current,
+    target: decision.action.placement.piece,
+  };
 }
 
 export interface AiPlan {
@@ -32,36 +55,6 @@ const STEP_DELAY_MS: Record<AiSpeed, number> = {
 
 /** Delay used while idling — game over, paused, or nowhere to place the piece. */
 const IDLE_DELAY_MS = 120;
-
-export function planPlacement(
-  board: Board,
-  current: Piece,
-  next: Piece | null,
-  weights: number[],
-  depth: 1 | 2,
-): AiPlan | null {
-  const decision = bestPlacement(board, current, next, weights, depth);
-  if (decision === null) return null;
-
-  const moves = decision.placement.moves;
-  const path = projectPath(board, current, moves);
-  // projectPath replays through the same engine BFS used, so this should never
-  // happen. Bail to a fresh plan rather than executing a half-valid sequence.
-  if (path.length !== moves.length) return null;
-
-  const preDrop = path.at(-1) ?? current;
-  if (!samePiece(projectHardDrop(board, preDrop), decision.placement.piece)) {
-    return null;
-  }
-
-  return {
-    moves,
-    path,
-    cursor: 0,
-    origin: current,
-    target: decision.placement.piece,
-  };
-}
 
 /** Executes one positioning action and hard-drops when the plan is complete. */
 export function advanceAiPlan(
@@ -129,7 +122,7 @@ export function useAiPlayer(opts: AiPlayerOptions): void {
     const step = () => {
       if (cancelled) return;
 
-      const { depth, weights, speed } = optsRef.current;
+      const { weights, speed } = optsRef.current;
       const store = useGameStore.getState();
 
       if (store.status !== 'playing' || store.currentPiece === null) {
@@ -140,9 +133,26 @@ export function useAiPlayer(opts: AiPlayerOptions): void {
 
       let active = plan;
       if (active === null || !isPlanValid(active, store.currentPiece)) {
-        active = planPlacement(
-          store.board, store.currentPiece, store.nextPiece, toVector(weights), depth,
-        );
+        if (store.nextPiece === null) {
+          schedule(IDLE_DELAY_MS);
+          return;
+        }
+        const deadline = performance.now() + (speed === 'instant' ? 100 : 200);
+        const decision = planAction({
+          board: store.board,
+          current: store.currentPiece,
+          next: store.nextPiece.type,
+          hold: store.holdPiece,
+          holdAvailable: store.holdAvailable,
+          unseenBagMask: store.unseenBagMask,
+        }, toVector(weights), () => performance.now() >= deadline);
+        if (decision !== null && 'kind' in decision) {
+          store.hold();
+          plan = null;
+          schedule(0);
+          return;
+        }
+        active = decision;
         plan = active;
         if (active === null) {
           // Nowhere to put this piece; let gravity end the game.
