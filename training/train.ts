@@ -18,6 +18,7 @@ import {
   type CemState,
 } from './cem';
 import { hashSeed, mulberry32 } from '../src/ai/rng';
+import { FIXED_SEARCH_LIMITS } from '../src/ai/search';
 import {
   DEFAULT_WEIGHTS,
   fromVector,
@@ -233,7 +234,13 @@ async function runGeneration(): Promise<void> {
   const tasks: SimTask[] = [];
   candidates.forEach((weights, i) => {
     seeds.forEach((seed, j) => {
-      tasks.push({ taskId: i * cfg.gamesPerCandidate + j, weights, seed, maxPieces, depth: cfg.depth });
+      tasks.push({
+        taskId: i * cfg.gamesPerCandidate + j,
+        weights,
+        seed,
+        maxPieces,
+        search: FIXED_SEARCH_LIMITS,
+      });
     });
   });
 
@@ -369,7 +376,7 @@ async function runGeneration(): Promise<void> {
           weights,
           seed,
           maxPieces: cfg.reevalMaxPieces,
-          depth: cfg.depth,
+          search: FIXED_SEARCH_LIMITS,
         });
       });
     });

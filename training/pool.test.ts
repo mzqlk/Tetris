@@ -1,6 +1,8 @@
 import { describe, it, expect, afterAll } from 'vitest';
+import { EventEmitter } from 'node:events';
 import { Worker } from 'node:worker_threads';
 import { FAILED_RESULT, WorkerPool, type SimTask, type WorkerFactory } from './pool';
+import { FIXED_SEARCH_LIMITS } from '../src/ai/search';
 import { toVector, HANDCRAFTED_WEIGHTS } from '../src/ai/weights';
 import { TOTAL_ROWS } from '../src/constants';
 import { emptyStrategyDiagnostics } from '../src/ai/tetrisStrategy';
@@ -22,7 +24,65 @@ const task = (taskId: number, seed: number, weights = W): SimTask => ({
   taskId, weights, seed, maxPieces: 12, search: TEST_SEARCH,
 });
 
+const acceptsSimTask = (_task: SimTask): void => {};
+
+// @ts-expect-error SimTask producers must provide an explicit fixed-search contract.
+acceptsSimTask({ taskId: 0, weights: W, seed: 1, maxPieces: 12 });
+acceptsSimTask({
+  taskId: 0,
+  weights: W,
+  seed: 1,
+  maxPieces: 12,
+  search: FIXED_SEARCH_LIMITS,
+  // @ts-expect-error Legacy depth metadata is not part of the SimTask contract.
+  depth: 2,
+});
+
 describe('WorkerPool', () => {
+  it('passes the required fixed search config to the worker without rewriting the task', async () => {
+    const messages: SimTask[] = [];
+    class RecordingWorker extends EventEmitter {
+      postMessage(message: SimTask): void {
+        messages.push(message);
+        queueMicrotask(() => this.emit('message', {
+          taskId: message.taskId,
+          ...FAILED_RESULT,
+          failed: false,
+        }));
+      }
+
+      async terminate(): Promise<number> {
+        return 0;
+      }
+    }
+
+    const recordingPool = await WorkerPool.create(
+      1,
+      () => new RecordingWorker() as unknown as Worker,
+    );
+    const fixedTask: SimTask = {
+      taskId: 17,
+      weights: W,
+      seed: 23,
+      maxPieces: 12,
+      search: FIXED_SEARCH_LIMITS,
+    };
+
+    try {
+      await recordingPool.run([fixedTask]);
+    } finally {
+      await recordingPool.destroy();
+    }
+
+    expect(messages).toEqual([fixedTask]);
+    expect(messages[0]).toBe(fixedTask);
+    expect(messages[0].search).toEqual({
+      maxLockedDepth: 4,
+      maxRootPlacements: 64,
+      maxChildPlacements: 32,
+    });
+  });
+
   it('terminates already-created workers when a later construction fails', async () => {
     const created: Worker[] = [];
     const exits: Promise<unknown>[] = [];

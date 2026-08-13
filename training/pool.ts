@@ -7,7 +7,6 @@ import {
   type FixedSearchConfig,
   type SimulationSearchDiagnostics,
 } from '../src/ai/simulate';
-import { FIXED_SEARCH_LIMITS } from '../src/ai/search';
 
 const emptySearchDiagnostics = (): SimulationSearchDiagnostics => ({
   holdActions: 0,
@@ -41,9 +40,7 @@ export interface SimTask {
   weights: number[];
   seed: number;
   maxPieces: number;
-  search?: FixedSearchConfig;
-  /** Retained only so pre-migration scheduling metadata still type-checks. */
-  depth?: 1 | 2;
+  search: FixedSearchConfig;
 }
 
 export interface SimTaskResult {
@@ -144,10 +141,7 @@ export class WorkerPool {
         const item = queue[cursor++];
         inFlight.set(worker, item);
         item.attempts++;
-        worker.postMessage({
-          ...item.task,
-          search: item.task.search ?? FIXED_SEARCH_LIMITS,
-        });
+        worker.postMessage(item.task);
       };
 
       const retryOrFail = (item: QueueItem, reason: string) => {
