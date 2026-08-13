@@ -6,6 +6,7 @@ import { FIXED_SEARCH_LIMITS } from '../src/ai/search';
 import { parseWeightsFile, toVector, HANDCRAFTED_WEIGHTS } from '../src/ai/weights';
 import {
   formatLineClearCounts,
+  formatSearchDiagnostics,
   summarizeBench,
   type Distribution,
 } from './benchSummary';
@@ -136,6 +137,9 @@ mean clean well depth  ${summary.strategy.cleanWellDepth.mean.toFixed(2)}
 mean tetris setup progress  ${summary.strategy.tetrisSetupProgress.mean.toFixed(2)}
 mean tetris-ready rows  ${summary.strategy.tetrisReadyRows.mean.toFixed(2)}
 tetrises/100 scheduled pieces  ${summary.tetrisesPer100ScheduledPieces.toFixed(3)}
+
+search diagnostics
+${formatSearchDiagnostics(summary.search)}
 
 survival capped/gameover/total  ${summary.cappedGames}/${summary.gameoverGames}/${results.length}
 throughput  ${Math.round(summary.totalPieces / (elapsedMs / 1000))} pieces/sec (single core)

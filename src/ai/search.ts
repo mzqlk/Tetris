@@ -52,6 +52,14 @@ export const FIXED_SEARCH_LIMITS = Object.freeze({
   maxLockedDepth: 4 as const,
 });
 
+/**
+ * Floating-point tolerance for the survival-first ordering. A depth-four
+ * seven-bag path has probability denominator at most 7*6*5*4 = 840, so the
+ * smallest genuine rational gap is >= 1/840. This 1e-12 tolerance is many
+ * orders smaller and only absorbs IEEE-754 accumulation noise.
+ */
+export const SURVIVAL_EPSILON = 1e-12;
+
 const TERMINAL_VALUE: SearchValue = Object.freeze({
   survivalProbability: 0,
   expectedHeuristicValue: 0,
@@ -95,9 +103,14 @@ export function selectPlacementBeam<T extends PlacementBeamEntry>(
 }
 
 export function compareSearchValues(a: SearchValue, b: SearchValue): number {
-  if (a.survivalProbability !== b.survivalProbability) {
-    return a.survivalProbability - b.survivalProbability;
-  }
+  const normalizeSurvival = (value: number): number => {
+    if (Math.abs(value) <= SURVIVAL_EPSILON) return 0;
+    if (Math.abs(1 - value) <= SURVIVAL_EPSILON) return 1;
+    return value;
+  };
+  const survivalDelta = normalizeSurvival(a.survivalProbability)
+    - normalizeSurvival(b.survivalProbability);
+  if (Math.abs(survivalDelta) > SURVIVAL_EPSILON) return survivalDelta;
   return a.expectedHeuristicValue - b.expectedHeuristicValue;
 }
 
@@ -224,7 +237,12 @@ function searchChance(
   }
 
   const result: NodeResult = {
-    value: { survivalProbability, expectedHeuristicValue },
+    value: {
+      survivalProbability: Math.abs(survivalProbability) <= SURVIVAL_EPSILON
+        ? 0
+        : Math.abs(1 - survivalProbability) <= SURVIVAL_EPSILON ? 1 : survivalProbability,
+      expectedHeuristicValue,
+    },
     completed: true,
     action: null,
   };

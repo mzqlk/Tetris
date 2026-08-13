@@ -23,6 +23,7 @@ import { BOARD_WIDTH, TOTAL_ROWS } from '../constants';
 import type { Board, PieceType } from '../types';
 import { emptyStrategyDiagnostics } from './tetrisStrategy';
 import { FIXED_SEARCH_LIMITS } from './search';
+import { aggregateFitness } from '../../training/cem';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -412,6 +413,57 @@ describe('simulateGame', () => {
       minCompletedDepth: 4,
       abortedSearches: 0,
     });
+  });
+});
+
+describe('terminal Hold diagnostics', () => {
+  const weights = toVector(HANDCRAFTED_WEIGHTS);
+  const blockedSpawn = boardFrom([
+    '##########', '##########', '##########', '##########',
+    ...Array(TOTAL_ROWS - 4).fill('..........'),
+  ]);
+
+  it('does not count a Hold that causes spawn gameover before any lock', () => {
+    const state = createSimState(1);
+    state.board = blockedSpawn;
+    state.currentPiece = createPiece(1);
+    state.nextPiece = createPiece(2);
+    state.holdPiece = null;
+    state.holdAvailable = true;
+    state.unseenBagMask = 0b1111100;
+    state.bag = [3];
+
+    const result = simulateFromState(state, { weights, maxPieces: 1, search: {
+      maxLockedDepth: 1, maxRootPlacements: 64, maxChildPlacements: 32,
+    } });
+
+    expect(result.reason).toBe('gameover');
+    expect(result.pieces).toBe(0);
+    expect(result.searchDiagnostics).toMatchObject({ holdActions: 0, holdRate: 0 });
+    expect(() => aggregateFitness([result], 1, 1, 1)).not.toThrow();
+  });
+
+  it('keeps terminal Hold rate bounded after prior locked Hold cycles', () => {
+    const state = createSimState(2);
+    state.board = blockedSpawn;
+    state.currentPiece = createPiece(2);
+    state.nextPiece = createPiece(3);
+    state.holdPiece = 1;
+    state.holdAvailable = true;
+    state.unseenBagMask = 0b1111000;
+    state.bag = [4];
+    state.pieces = 1;
+    state.holdActions = 1;
+
+    const result = simulateFromState(state, { weights, maxPieces: 2, search: {
+      maxLockedDepth: 1, maxRootPlacements: 64, maxChildPlacements: 32,
+    } });
+
+    expect(result.reason).toBe('gameover');
+    expect(result.pieces).toBe(1);
+    expect(result.searchDiagnostics.holdActions).toBe(1);
+    expect(result.searchDiagnostics.holdRate).toBe(1);
+    expect(() => aggregateFitness([result], 1, 1, 2)).not.toThrow();
   });
 });
 

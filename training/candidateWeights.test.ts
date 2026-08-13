@@ -101,6 +101,14 @@ describe('buildCandidateWeights', () => {
       '2026-08-11T00:00:00.000Z',
     )).toThrow(/search diagnostics/i);
   });
+
+  it.each([1, 2])('rejects legacy depth %s instead of silently stamping depth four', (depth) => {
+    expect(() => buildCandidateWeights(
+      evaluation,
+      depth as unknown as 4,
+      '2026-08-11T00:00:00.000Z',
+    )).toThrow(/depth.*4|fixed search/i);
+  });
 });
 
 describe('writeCandidateWeights', () => {

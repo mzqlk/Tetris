@@ -89,9 +89,12 @@ export function parseCandidateWeights(payload: unknown): CandidateWeightsFile | 
 
 export function buildCandidateWeights(
   evaluation: ScoreRateEvaluation,
-  _searchDepth: 1 | 2 | 4,
+  searchDepth: 4,
   trainedAt: string,
 ): CandidateWeightsFile {
+  if (searchDepth !== 4) {
+    throw new Error('candidate weights require the fixed depth-4 search contract');
+  }
   if (evaluation.searchDiagnostics === undefined) {
     throw new Error('candidate evaluation must include search diagnostics');
   }

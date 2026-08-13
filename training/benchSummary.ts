@@ -142,3 +142,16 @@ export function summarizeBench(
 
 export const formatLineClearCounts = (counts: LineClearCounts): string =>
   `1/2/3/4 clears ${counts.singles}/${counts.doubles}/${counts.triples}/${counts.tetrises}`;
+
+export function formatSearchDiagnostics(search: BenchSummary['search']): string {
+  return [
+    `hold actions ${search.holdActions}`,
+    `hold rate ${(100 * search.holdRate).toFixed(2)}%`,
+    `completed depth mean/median/min/max ${search.completedDepth.mean.toFixed(2)}/`
+      + `${search.completedDepth.median.toFixed(2)}/${search.completedDepth.min}/${search.completedDepth.max}`,
+    `decision nodes ${search.expandedDecisionNodes}`,
+    `chance nodes ${search.expandedChanceNodes}`,
+    `cache hits ${search.cacheHits}`,
+    `aborts ${search.abortedSearches}`,
+  ].join('\n');
+}

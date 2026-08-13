@@ -90,7 +90,7 @@ npm run lint
 
 - **Autoplay 开关** — 开启/关闭 AI 自动对战。
 - **Speed** — 出手速度：`instant`（立即落子）、`normal`、`slow`。
-- **Lookahead** — 搜索深度，`1 ply`（只看当前方块）或 `2 ply`（同时看一步之后的下一个方块，决策更好但更慢）。
+- **Lookahead** — 当前固定的 4-lock bag-aware 搜索（`bag-expectimax-hold-v1`，root/child beams 64/32）；旧的 1/2-ply helpers 仅作兼容保留。
 - **Weights** — 权重来源：
   - `bundled`：打包进构建产物的权重（`src/ai/trained-weights.json`，训练产出，缺省时回退到手工设定的 Dellacherie 式权重）。
   - `trained`：运行时从 `public/ai/best-weights.json` 拉取的最新训练权重，无需重新构建即可生效；训练尚未产出该文件前此选项不可用。
@@ -105,8 +105,8 @@ npm run lint
 # 运行全部单元测试
 npm test
 
-# 对一组权重跑基准评测（局数/搜索深度/单局最大方块数可调）
-npm run bench -- --games 20 --depth 2 --max-pieces 5000
+# 对一组权重跑基准评测（搜索固定为 depth 4、beams 64/32）
+npm run bench -- --games 20 --max-pieces 5000
 
 # 新建 CEM（交叉熵方法）训练轮次 —— 仅在已授权且 output dir 为空时
 npm run train -- --generations 200 --output-dir public/ai/<new-run-id>
@@ -156,7 +156,7 @@ src/
 ├── constants.ts       # 游戏常量和配置
 ├── ai/                # AI 评估引擎（纯函数，无 DOM / 文件系统 / node: 依赖）
 │   ├── features.ts    # 局面特征提取
-│   ├── search.ts      # 1/2-ply 落子搜索
+│   ├── search.ts      # active searchIterative/searchFixed：公开 bag chance + Hold，固定 4-lock、beams 64/32；旧 evalMove/bestPlacement 为 legacy compatibility
 │   ├── weights.ts     # 权重加载、校验与内置默认权重
 │   └── trained-weights.json  # 训练产出的默认权重，构建时打包进 dist
 ├── training/dashboard/  # 训练可视化面板（training.html 的入口）

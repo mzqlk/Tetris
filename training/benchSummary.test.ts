@@ -1,10 +1,22 @@
 import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { FIXED_SEARCH_LIMITS } from '../src/ai/search';
 import { buildBenchPlan, parseBenchArgs } from './bench';
-import { formatLineClearCounts, summarizeBench, type BenchResult } from './benchSummary';
+import { formatLineClearCounts, formatSearchDiagnostics, summarizeBench, type BenchResult } from './benchSummary';
 
 describe('bench CLI contract', () => {
+  it('keeps current documented bench commands parseable without --depth', () => {
+    for (const file of ['AGENTS.md', 'README.md', 'docs/ai-training-handoff.md']) {
+      const source = readFileSync(resolve(process.cwd(), file), 'utf8');
+      for (const line of source.split(/\r?\n/).filter((entry) => entry.includes('npm run bench --') && !entry.includes('no user-selectable'))) {
+        expect(line).not.toMatch(/--depth/);
+        const command = line.match(/npm run bench --\s+(.+?)(?:\s+#|\s*`|\s*\)|$)/)?.[1]?.trim() ?? '';
+        if (command) expect(() => parseBenchArgs(command.split(/\s+/))).not.toThrow();
+      }
+    }
+  });
   it('rejects the removed user-selectable depth flag', () => {
     expect(() => parseBenchArgs(['--depth', '2'])).toThrow(/unknown flag.*--depth/i);
   });
@@ -112,6 +124,17 @@ describe('summarizeBench', () => {
       cacheHits: 18,
       abortedSearches: 1,
     });
+  });
+
+  it('formats all aggregated search diagnostics for CLI output', () => {
+    const summary = summarizeBench(games, 300);
+    expect(formatSearchDiagnostics(summary.search)).toContain('hold actions 34');
+    expect(formatSearchDiagnostics(summary.search)).toContain('hold rate 10.63%');
+    expect(formatSearchDiagnostics(summary.search)).toContain('completed depth mean/median/min/max 3.50/3.50/3/4');
+    expect(formatSearchDiagnostics(summary.search)).toContain('decision nodes 160');
+    expect(formatSearchDiagnostics(summary.search)).toContain('chance nodes 60');
+    expect(formatSearchDiagnostics(summary.search)).toContain('cache hits 18');
+    expect(formatSearchDiagnostics(summary.search)).toContain('aborts 1');
   });
 
   it('reports no tetris line share when no lines were cleared', () => {

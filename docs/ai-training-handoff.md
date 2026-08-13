@@ -64,7 +64,7 @@ gen-20 权重由提交 `ef3cbac feat(ai): publish gen-20 score-rate weights` 纳
 | `trained-weights.json` | **模型本体**，已提交进 git，打包进构建 |
 | `placements.ts` | BFS 落点枚举（走引擎的 `rotatePiece`，含 SRS 踢墙），按最终格子集合去重 |
 | `replay.ts` | 按键序列的状态投影，网页回放与落点测试共用 |
-| `search.ts` | `evalMove` / `bestPlacement`，1–2 层前瞻 |
+| `search.ts` | active `searchIterative` / `searchFixed`：公开 bag chance、标准 Hold、固定 depth 4、beams 64/32；`evalMove` / `bestPlacement` 是 legacy compatibility helpers |
 | `simulate.ts` | 无头对局：`createSimState` / `applyAction` / `simulateGame` |
 | `loadWeights.ts` | **唯一的浏览器专用文件**（用 `fetch`），已在 `tsconfig.train.json` 里排除 |
 | `testUtils.ts` | 测试用 ASCII 棋盘构造器 |
@@ -111,7 +111,7 @@ npm run typecheck:train     # 单独检查 training/（与主应用 tsconfig 分
 npm run dev                 # http://localhost:5190/          游戏 + AI 面板
                             # http://localhost:5190/training.html  训练面板
 
-npm run bench -- --games 30 --depth 2 --max-pieces 2000  # 内置手调基线
+npm run bench -- --games 30 --max-pieces 2000  # 内置手调基线；固定 bag-expectimax-hold-v1 depth 4、beams 64/32
 # 仅在文件存在且已核验时追加：--weights <权重文件>
 npm run train -- --generations 20 --output-dir public/ai/<new-v4-run-id>  # 仅限已授权的空目录
 npm run train -- --generations 20 --workers 8 --output-dir public/ai/<new-v4-run-id>
@@ -192,7 +192,7 @@ fitness = meanLines - heightPenalty * meanHeight
 
 两项量级相当，且**局长上限翻倍后仍然相当**，所以当时预计后期不会退化成只看消行。权重不能调太大：高度上限是 `TOTAL_ROWS = 22`，而活满全场值 `0.4 × maxPieces` 分；一旦 `22 × heightPenalty` 逼近 `0.4 × initialMaxPieces`（当时 `initialMaxPieces = 300`，对应 120 行天花板），**5 个方块就顶死的候选因为棋盘几乎全空反而显得最整洁**，CEM 会开始偏爱「干净地速死」。这是 lines-height-v1 的历史设计约束；当前 `training/config.ts` 已不再包含 `heightPenalty`。
 
-实测确实区分出来了（`npm run bench --games 3 --depth 2 --max-pieces 600`）：
+实测确实区分出来了（历史命令等价于当前固定搜索的 `npm run bench -- --games 3 --max-pieces 600`）：
 
 | 权重 | 消行 | 占天花板 | 平均高度 |
 |---|---|---|---|

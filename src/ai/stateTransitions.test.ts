@@ -50,6 +50,13 @@ describe('standard Hold transitions', () => {
     });
     expect(before.current.type).toBe(2);
   });
+
+  it('returns unavailable for a spent Hold without mutating the public state', () => {
+    const before = publicState({ holdAvailable: false, hold: 1 });
+    const snapshot = structuredClone(before);
+    expect(applyHold(before)).toEqual({ kind: 'unavailable' });
+    expect(before).toEqual(snapshot);
+  });
 });
 
 describe('lock and preview transitions', () => {

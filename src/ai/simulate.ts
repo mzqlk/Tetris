@@ -317,8 +317,12 @@ export function simulateFromState(
     }
     recordSearchDiagnostics(state, decision.diagnostics);
     if (decision.action.kind === 'hold') {
-      state.holdActions++;
       applyAction(state, 'hold');
+      // Count only Holds that complete a valid decision cycle. A Hold may
+      // promote a blocked piece and end the game before any lock; recording it
+      // against the locked-piece denominator would make the diagnostic rate
+      // inconsistent (and can exceed one).
+      if (state.status === 'playing') state.holdActions++;
       continue;
     }
     state.currentPiece = decision.action.placement.piece;

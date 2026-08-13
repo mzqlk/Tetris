@@ -66,6 +66,24 @@ describe('search value contract', () => {
       { survivalProbability: 1, expectedHeuristicValue: 3 },
     )).toBeLessThan(0);
   });
+
+  it('treats mathematically equal survival values as a heuristic tie despite accumulation noise', () => {
+    const exact = 1 / 7 + 1 / 7 + 1 / 7 + 1 / 7 + 1 / 7 + 1 / 7 + 1 / 7;
+    const alternate = (1 / 7) * 7;
+    expect(exact).not.toBe(alternate);
+    expect(compareSearchValues(
+      { survivalProbability: exact, expectedHeuristicValue: 3 },
+      { survivalProbability: alternate, expectedHeuristicValue: 2 },
+    )).toBeGreaterThan(0);
+  });
+
+  it('keeps the smallest genuine depth-four bag probability difference survival-first', () => {
+    const smallestDepthFourDelta = 1 / (7 * 6 * 5 * 4);
+    expect(compareSearchValues(
+      { survivalProbability: 0.5 + smallestDepthFourDelta, expectedHeuristicValue: -1_000 },
+      { survivalProbability: 0.5, expectedHeuristicValue: 1_000_000 },
+    )).toBeGreaterThan(0);
+  });
 });
 
 describe('fixed expectimax search', () => {
