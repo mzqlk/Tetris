@@ -49,4 +49,13 @@ describe('DEFAULT_CONFIG', () => {
     expect(DEFAULT_CONFIG.reevalGames).toBe(30);
     expect(DEFAULT_CONFIG.reevalMaxPieces).toBe(5000);
   });
+
+  it('uses the exact bag-expectimax search contract', () => {
+    expect(DEFAULT_CONFIG).toMatchObject({
+      searchDepth: 4,
+      rootBeamWidth: 64,
+      childBeamWidth: 32,
+    });
+    expect(DEFAULT_CONFIG).not.toHaveProperty('depth');
+  });
 });

@@ -92,6 +92,9 @@ export function buildCandidateWeights(
   _searchDepth: 1 | 2 | 4,
   trainedAt: string,
 ): CandidateWeightsFile {
+  if (evaluation.searchDiagnostics === undefined) {
+    throw new Error('candidate evaluation must include search diagnostics');
+  }
   return {
     version: 5,
     weights: fromVector(evaluation.weights),
@@ -110,16 +113,7 @@ export function buildCandidateWeights(
     searchDepth: 4,
     rootBeamWidth: 64,
     childBeamWidth: 32,
-    searchDiagnostics: evaluation.searchDiagnostics ?? {
-      holdActions: 0,
-      holdRate: 0,
-      meanCompletedDepth: 4,
-      minCompletedDepth: 4,
-      expandedDecisionNodes: 0,
-      expandedChanceNodes: 0,
-      cacheHits: 0,
-      abortedSearches: 0,
-    },
+    searchDiagnostics: { ...evaluation.searchDiagnostics },
     trainedAt,
   };
 }

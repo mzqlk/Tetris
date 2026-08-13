@@ -34,6 +34,16 @@ const evaluation: ScoreRateEvaluation = {
     meanTetrisReadyRows: 1,
   },
   survivalDiagnostics: { pieceCapGames: 30, gameoverGames: 0 },
+  searchDiagnostics: {
+    holdActions: 900,
+    holdRate: 0.15,
+    meanCompletedDepth: 3.9,
+    minCompletedDepth: 3,
+    expandedDecisionNodes: 12_000,
+    expandedChanceNodes: 8_000,
+    cacheHits: 2_000,
+    abortedSearches: 1,
+  },
   gen: 20,
   evalGames: 30,
   evalMaxPieces: 5_000,
@@ -44,11 +54,11 @@ afterEach(() => {
 });
 
 describe('buildCandidateWeights', () => {
-  it('builds an exact version-4 candidate without publication paths', () => {
-    expect(buildCandidateWeights(evaluation, 2, '2026-08-11T00:00:00.000Z')).toEqual({
-      version: 4,
+  it('builds an exact version-5 candidate with search diagnostics and no publication paths', () => {
+    expect(buildCandidateWeights(evaluation, 4, '2026-08-11T00:00:00.000Z')).toEqual({
+      version: 5,
       weights: fromVector(evaluation.weights),
-      objective: 'score-rate-v3',
+      objective: 'score-rate-v4',
       meanScore: 3_100_000,
       evalMaxPieces: 5_000,
       meanLines: 1_950,
@@ -61,11 +71,35 @@ describe('buildCandidateWeights', () => {
         meanTetrisReadyRows: 1,
       },
       survivalDiagnostics: { pieceCapGames: 30, gameoverGames: 0 },
+      searchDiagnostics: {
+        holdActions: 900,
+        holdRate: 0.15,
+        meanCompletedDepth: 3.9,
+        minCompletedDepth: 3,
+        expandedDecisionNodes: 12_000,
+        expandedChanceNodes: 8_000,
+        cacheHits: 2_000,
+        abortedSearches: 1,
+      },
       evalGames: 30,
       gen: 20,
-      searchDepth: 2,
+      searchContract: 'bag-expectimax-hold-v1',
+      searchDepth: 4,
+      rootBeamWidth: 64,
+      childBeamWidth: 32,
       trainedAt: '2026-08-11T00:00:00.000Z',
     });
+  });
+
+  it('fails closed when the evaluation has no search diagnostics', () => {
+    const missingDiagnostics = { ...evaluation } as Partial<ScoreRateEvaluation>;
+    delete missingDiagnostics.searchDiagnostics;
+
+    expect(() => buildCandidateWeights(
+      missingDiagnostics as ScoreRateEvaluation,
+      4,
+      '2026-08-11T00:00:00.000Z',
+    )).toThrow(/search diagnostics/i);
   });
 });
 
@@ -75,7 +109,7 @@ describe('writeCandidateWeights', () => {
     const candidatePath = join(dir, 'run-local-candidate.json');
     const sentinelPath = join(dir, 'published-sentinel.json');
     writeFileSync(sentinelPath, 'do-not-touch');
-    const payload = buildCandidateWeights(evaluation, 2, '2026-08-11T00:00:00.000Z');
+    const payload = buildCandidateWeights(evaluation, 4, '2026-08-11T00:00:00.000Z');
 
     writeCandidateWeights(candidatePath, payload);
 
@@ -86,22 +120,34 @@ describe('writeCandidateWeights', () => {
   it('rejects an invalid payload before creating a file', () => {
     const path = join(temp(), 'candidate.json');
     const invalid = {
-      ...buildCandidateWeights(evaluation, 2, '2026-08-11T00:00:00.000Z'),
-      version: 3,
+      ...buildCandidateWeights(evaluation, 4, '2026-08-11T00:00:00.000Z'),
+      version: 4,
     };
 
-    expect(() => writeCandidateWeights(path, invalid)).toThrow(/version 4|candidate/i);
+    expect(() => writeCandidateWeights(path, invalid)).toThrow(/version 5|candidate/i);
     expect(existsSync(path)).toBe(false);
   });
 
   it('rejects an extra top-level key before creating a file', () => {
     const path = join(temp(), 'candidate.json');
     const invalid = {
-      ...buildCandidateWeights(evaluation, 2, '2026-08-11T00:00:00.000Z'),
+      ...buildCandidateWeights(evaluation, 4, '2026-08-11T00:00:00.000Z'),
       extra: true,
     };
 
     expect(() => writeCandidateWeights(path, invalid)).toThrow(/candidate.*schema|extra/i);
     expect(existsSync(path)).toBe(false);
   });
+
+  it.each(['searchContract', 'searchDepth', 'rootBeamWidth', 'childBeamWidth', 'searchDiagnostics'])(
+    'rejects a payload missing %s before creating a file',
+    (field) => {
+      const path = join(temp(), 'candidate.json');
+      const invalid = buildCandidateWeights(evaluation, 4, '2026-08-11T00:00:00.000Z') as unknown as Record<string, unknown>;
+      Reflect.deleteProperty(invalid, field);
+
+      expect(() => writeCandidateWeights(path, invalid)).toThrow(/version 5|candidate|schema/i);
+      expect(existsSync(path)).toBe(false);
+    },
+  );
 });

@@ -222,6 +222,7 @@ const SEARCH_DIAGNOSTICS_KEYS = [
 const EVALUATION_KEYS = [
   'gen', 'weights', 'meanScore', 'scoreRate', 'meanLines', 'meanHeight',
   'meanClearCounts', 'tetrisLineShare', 'strategyDiagnostics', 'survivalDiagnostics',
+  'searchDiagnostics',
 ] as const;
 
 function lineClearCounts(value: unknown, label: string): LineClearCounts {
@@ -253,7 +254,6 @@ function trainConfig(value: unknown): TrainConfig {
     population: positiveInteger(raw.population, 'config.population'),
     eliteFrac: fraction(raw.eliteFrac, 'config.eliteFrac'),
     gamesPerCandidate: positiveInteger(raw.gamesPerCandidate, 'config.gamesPerCandidate'),
-    depth: 2,
     searchDepth: 4,
     rootBeamWidth: 64,
     childBeamWidth: 32,
@@ -324,7 +324,6 @@ function survivalDiagnostics(
 
 const CHECKPOINT_EVALUATION_KEYS = [
   ...EVALUATION_KEYS, 'evalGames', 'evalMaxPieces',
-  'searchDiagnostics',
 ] as const;
 
 function searchDiagnostics(value: unknown, label: string) {
@@ -465,6 +464,10 @@ export function readCompatibleCheckpoint(path: string): ScoreRateCheckpoint {
 
 const GENERATION_KEYS = [
   'objective',
+  'searchContract',
+  'searchDepth',
+  'rootBeamWidth',
+  'childBeamWidth',
   'gen',
   'ts',
   'bestScoreRate',
@@ -494,11 +497,13 @@ const GENERATION_KEYS = [
 ] as const;
 
 const REEVALUATION_KEYS = [
-  'objective', 'kind', 'gen', 'ts', 'schedule', 'publishedBaseline',
-  'currentQualified', 'candidate', 'qualification',
+  'objective', 'searchContract', 'searchDepth', 'rootBeamWidth', 'childBeamWidth',
+  'kind', 'gen', 'ts', 'schedule', 'publishedBaseline', 'currentQualified',
+  'candidate', 'qualification',
 ] as const;
 const SCHEDULE_KEYS = [
-  'games', 'maxPieces', 'depth', 'baseSeed', 'seedStrategy',
+  'games', 'maxPieces', 'searchContract', 'searchDepth', 'rootBeamWidth',
+  'childBeamWidth', 'baseSeed', 'seedStrategy',
 ] as const;
 const QUALIFICATION_KEYS = [
   'shouldSave', 'reason', 'scoreTolerance', 'scoreQualified', 'tetrisQualified',
@@ -655,6 +660,39 @@ function logSurvivalDiagnostics(
   return result;
 }
 
+function logSearchDiagnostics(
+  value: unknown,
+  line: number,
+  label: string,
+): NonNullable<ScoreRateEvaluation['searchDiagnostics']> {
+  const raw = logRecord(value, line, label);
+  exactKeys(raw, SEARCH_DIAGNOSTICS_KEYS, line, label);
+  const result = {
+    holdActions: logNonNegative(raw.holdActions, line, `${label}.holdActions`),
+    holdRate: logProportion(raw.holdRate, line, `${label}.holdRate`),
+    meanCompletedDepth: logNonNegative(
+      raw.meanCompletedDepth, line, `${label}.meanCompletedDepth`,
+    ),
+    minCompletedDepth: logNonNegative(
+      raw.minCompletedDepth, line, `${label}.minCompletedDepth`,
+    ),
+    expandedDecisionNodes: logNonNegative(
+      raw.expandedDecisionNodes, line, `${label}.expandedDecisionNodes`,
+    ),
+    expandedChanceNodes: logNonNegative(
+      raw.expandedChanceNodes, line, `${label}.expandedChanceNodes`,
+    ),
+    cacheHits: logNonNegative(raw.cacheHits, line, `${label}.cacheHits`),
+    abortedSearches: logNonNegative(
+      raw.abortedSearches, line, `${label}.abortedSearches`,
+    ),
+  };
+  if (result.meanCompletedDepth > 4 || result.minCompletedDepth > 4) {
+    throw logError(line, `${label} search diagnostics are out of range`);
+  }
+  return result;
+}
+
 function assertLogClose(
   actual: number,
   expected: number,
@@ -674,6 +712,14 @@ function validateGeneration(
   expectedMaxPieces: number,
 ): { gen: number; mu: number[]; sigma: number[]; nextMaxPieces: number } {
   exactKeys(raw, GENERATION_KEYS, line, 'generation record');
+  if (
+    raw.searchContract !== SEARCH_CONTRACT ||
+    raw.searchDepth !== 4 ||
+    raw.rootBeamWidth !== 64 ||
+    raw.childBeamWidth !== 32
+  ) {
+    throw logError(line, 'generation search contract must be bag-expectimax-hold-v1/4/64/32');
+  }
   const gen = logInteger(raw.gen, line, 'generation gen');
   logInteger(raw.ts, line, 'generation ts');
   const bestScoreRate = logNonNegative(
@@ -794,6 +840,9 @@ function validateLoggedEvaluation(
     survivalDiagnostics: logSurvivalDiagnostics(
       raw.survivalDiagnostics, line, `${label}.survivalDiagnostics`, evalGames,
     ),
+    searchDiagnostics: logSearchDiagnostics(
+      raw.searchDiagnostics, line, `${label}.searchDiagnostics`,
+    ),
     evalGames,
     evalMaxPieces: maxPieces,
   };
@@ -813,6 +862,14 @@ function validateReevaluation(
   checkpoint: ScoreRateCheckpoint,
 ): ValidatedReevaluation {
   exactKeys(raw, REEVALUATION_KEYS, line, 'reevaluation record');
+  if (
+    raw.searchContract !== SEARCH_CONTRACT ||
+    raw.searchDepth !== 4 ||
+    raw.rootBeamWidth !== 64 ||
+    raw.childBeamWidth !== 32
+  ) {
+    throw logError(line, 'reevaluation search contract must be bag-expectimax-hold-v1/4/64/32');
+  }
   if (raw.kind !== 'reevaluation') throw logError(line, 'reevaluation kind is invalid');
   const gen = logInteger(raw.gen, line, 'reevaluation gen', 1);
   logInteger(raw.ts, line, 'reevaluation ts');
@@ -821,12 +878,14 @@ function validateReevaluation(
   exactKeys(schedule, SCHEDULE_KEYS, line, 'reevaluation schedule');
   const games = logInteger(schedule.games, line, 'reevaluation schedule.games', 1);
   const maxPieces = logInteger(schedule.maxPieces, line, 'reevaluation schedule.maxPieces', 1);
-  const depth = schedule.depth;
   const baseSeed = logSafeInteger(schedule.baseSeed, line, 'reevaluation schedule.baseSeed');
   if (
     games !== checkpoint.config.reevalGames ||
     maxPieces !== checkpoint.config.reevalMaxPieces ||
-    depth !== checkpoint.config.searchDepth ||
+    schedule.searchContract !== SEARCH_CONTRACT ||
+    schedule.searchDepth !== checkpoint.config.searchDepth ||
+    schedule.rootBeamWidth !== checkpoint.config.rootBeamWidth ||
+    schedule.childBeamWidth !== checkpoint.config.childBeamWidth ||
     baseSeed !== checkpoint.baseSeed ||
     schedule.seedStrategy !== 'fixed-reevaluation-v1'
   ) {
@@ -968,6 +1027,13 @@ function sameSurvivalDiagnostics(
   return SURVIVAL_KEYS.every((key) => left[key] === right[key]);
 }
 
+function sameSearchDiagnostics(
+  left: NonNullable<ScoreRateEvaluation['searchDiagnostics']>,
+  right: NonNullable<ScoreRateEvaluation['searchDiagnostics']>,
+): boolean {
+  return SEARCH_DIAGNOSTICS_KEYS.every((key) => left[key] === right[key]);
+}
+
 function sameEvaluation(
   left: ScoreRateEvaluation,
   right: ScoreRateEvaluation,
@@ -983,6 +1049,9 @@ function sameEvaluation(
     left.tetrisLineShare === right.tetrisLineShare &&
     sameStrategyDiagnostics(left.strategyDiagnostics, right.strategyDiagnostics) &&
     sameSurvivalDiagnostics(left.survivalDiagnostics, right.survivalDiagnostics) &&
+    left.searchDiagnostics !== undefined &&
+    right.searchDiagnostics !== undefined &&
+    sameSearchDiagnostics(left.searchDiagnostics, right.searchDiagnostics) &&
     left.evalGames === right.evalGames &&
     left.evalMaxPieces === right.evalMaxPieces
   );
@@ -995,6 +1064,9 @@ function cloneEvaluation(evaluation: ScoreRateEvaluation): ScoreRateEvaluation {
     meanClearCounts: { ...evaluation.meanClearCounts },
     strategyDiagnostics: { ...evaluation.strategyDiagnostics },
     survivalDiagnostics: { ...evaluation.survivalDiagnostics },
+    searchDiagnostics: evaluation.searchDiagnostics === undefined
+      ? undefined
+      : { ...evaluation.searchDiagnostics },
   };
 }
 
@@ -1023,7 +1095,7 @@ function readCandidateEvaluation(
   }
   const parsed = parseCandidateWeights(value);
   if (parsed === null) {
-    throw new Error('candidate weights must match the exact score-rate-v3 version 4 schema');
+    throw new Error('candidate weights must match the exact score-rate-v4 version 5 schema');
   }
   if (parsed.searchDepth !== checkpoint.config.searchDepth) {
     throw new Error('candidate weights searchDepth disagrees with checkpoint config');
@@ -1038,6 +1110,7 @@ function readCandidateEvaluation(
     tetrisLineShare: parsed.tetrisLineShare,
     strategyDiagnostics: { ...parsed.strategyDiagnostics },
     survivalDiagnostics: { ...parsed.survivalDiagnostics },
+    searchDiagnostics: { ...parsed.searchDiagnostics },
     evalGames: parsed.evalGames,
     evalMaxPieces: parsed.evalMaxPieces,
     gen: parsed.gen,
