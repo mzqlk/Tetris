@@ -149,6 +149,7 @@ export function formatSearchDiagnostics(search: BenchSummary['search']): string 
     `hold rate ${(100 * search.holdRate).toFixed(2)}%`,
     `completed depth mean/median/min/max ${search.completedDepth.mean.toFixed(2)}/`
       + `${search.completedDepth.median.toFixed(2)}/${search.completedDepth.min}/${search.completedDepth.max}`,
+    `search min completed depth ${search.minCompletedDepth}`,
     `decision nodes ${search.expandedDecisionNodes}`,
     `chance nodes ${search.expandedChanceNodes}`,
     `cache hits ${search.cacheHits}`,

@@ -131,6 +131,7 @@ describe('summarizeBench', () => {
     expect(formatSearchDiagnostics(summary.search)).toContain('hold actions 34');
     expect(formatSearchDiagnostics(summary.search)).toContain('hold rate 10.63%');
     expect(formatSearchDiagnostics(summary.search)).toContain('completed depth mean/median/min/max 3.50/3.50/3/4');
+    expect(formatSearchDiagnostics(summary.search)).toContain('search min completed depth 2');
     expect(formatSearchDiagnostics(summary.search)).toContain('decision nodes 160');
     expect(formatSearchDiagnostics(summary.search)).toContain('chance nodes 60');
     expect(formatSearchDiagnostics(summary.search)).toContain('cache hits 18');
