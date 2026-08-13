@@ -1,9 +1,10 @@
 # Tetris AI 训练系统 — 交接文档
 
-**写于**：2026-07-28；**更新于**：2026-08-11（score-rate-v3 代码实现交接；本次未运行训练、benchmark 或 paired benchmark）
+**写于**：2026-07-28；**更新于**：2026-08-13（score-rate-v4 代码实现交接；本次未运行训练、benchmark 或 paired benchmark）
 **当前状态的读取方式**：每次先运行 `git status` / `git log`，检查 `public/ai/` 产物与训练进程，再决定操作。旧 HEAD、未推送状态和固定测试数都只是历史快照，不是本交接的持久指令。
 **验证**：分别运行当前 `npm test`、`npm run lint`、`npm run build` 与 `npm run typecheck:train`；以实际输出为准。
-**当前 score-rate-v3 设计**：[`2026-08-11 score-rate-v3 design`](superpowers/specs/2026-08-11-score-rate-v3-tetris-strategy-design.md)
+**当前 score-rate-v4 设计**：[`2026-08-12 bag-aware search design`](superpowers/specs/2026-08-12-bag-aware-tetris-search-design.md)
+**历史 score-rate-v3 设计**：[`2026-08-11 score-rate-v3 design`](superpowers/specs/2026-08-11-score-rate-v3-tetris-strategy-design.md)
 **历史 score-rate-v2 设计与实施计划**：[`2026-08-06 design`](superpowers/specs/2026-08-06-ai-hard-drop-and-tetris-strategy-design.md) / [`AI hard-drop plan`](superpowers/plans/2026-08-06-ai-hard-drop-execution.md) / [`score-rate-v2 plan`](superpowers/plans/2026-08-06-score-rate-v2-tetris-strategy.md)
 **score-rate-v1 历史目标设计与计划**：[`2026-07-30 design`](superpowers/specs/2026-07-30-fixed-schedule-score-rate-design.md) / [`2026-07-30 plan`](superpowers/plans/2026-07-30-fixed-schedule-score-rate.md)
 **复评证据设计与计划**：[`2026-08-02 design`](superpowers/specs/2026-08-02-score-rate-reevaluation-observability-design.md) / [`2026-08-02 plan`](superpowers/plans/2026-08-02-score-rate-reevaluation-observability.md)
@@ -13,13 +14,19 @@
 
 ## 1. 一句话现状
 
-代码与训练器的当前契约是 **`score-rate-v3`**：checkpoint schema version 4、`FEATURE_NAMES` 为精确 13 维。它保留 score-rate-v2 的前十维，并在尾部依次追加 `cleanWellDepth`、`tetrisSetupProgress` 与 `tetrisReadyRows`；仍在固定 piece schedule 下以
+### 当前 score-rate-v4 代码门
+
+当前实现契约为 **`score-rate-v4` / schema 5 / `bag-expectimax-hold-v1`**。搜索仅使用公开局面信息，采用标准 Hold、精确 bag chance、depth 4、beams 64/32；fitness 仍严格为 `meanScore / scheduled maxPieces`。默认训练日志路径为 `public/ai/score-rate-v4/training-log.jsonl`。
+
+已发布模型保持 **version 3、`score-rate-v2` gen-40** 不变；受保护的 `public/ai/score-rate-v3/` gen-10 产物保持原地未修改。本次交接未执行 search smoke、training、benchmark、paired acceptance、publication、push 或 browser/runtime acceptance，且未生成任何 v4 checkpoint、log、candidate 或权重文件。
+
+代码与训练器的当前契约是 **`score-rate-v4`**：checkpoint schema version 5、`FEATURE_NAMES` 为精确 13 维。搜索契约为 `bag-expectimax-hold-v1`，只使用公开局面信息，采用标准 Hold、精确 bag chance、depth 4、beams 64/32；仍在固定 piece schedule 下以
 
 ```
 fitness = meanScore / maxPieces
 ```
 
-选择候选。分母是调度给每局的 `maxPieces`，不是候选实际存活的 pieces；提前死亡不会因为分母变小而得到虚高分。`lineClearValue` 继续表达引擎真实的非线性消行价值，三个新增特征连续表达干净四消井的深度、准备进度和完整行数。1/2/3/4 消直方图、四消消行占比、策略诊断与存活诊断都不进入 fitness、精英排序或 CEM 分布更新。
+选择候选。分母是调度给每局的 `maxPieces`，不是候选实际存活的 pieces；提前死亡不会因为分母变小而得到虚高分。`lineClearValue` 继续表达引擎真实的非线性消行价值，三个新增特征连续表达干净四消井的深度、准备进度和完整行数。1/2/3/4 消直方图、四消消行占比、策略诊断、搜索诊断与存活诊断都不进入 fitness、精英排序或 CEM 分布更新。
 
 当前 tracked bundled 权重和 runtime 已发布权重仍是 **version 3、`score-rate-v2` 的 gen-40 模型**。2026-08-11 现场核验时，`src/ai/trained-weights.json` 与 `public/ai/best-weights.json` 的 SHA-256 均为 `062552496E7E1101502E62B8570DFDAF2A60B54EF4FEF1EA539723B910550D90`。加载这份十维模型时，代码仅在内存中对三个 v3 尾维补 `0`；旧九维文件还会同时补 `lineClearValue = 0`，都不改写原文件。version 1–3 checkpoint/log 不是 score-rate-v3 schema 4 可恢复或可追加产物。
 
@@ -105,9 +112,9 @@ npm run dev                 # http://localhost:5190/          游戏 + AI 面板
 
 npm run bench -- --games 30 --depth 2 --max-pieces 2000  # 内置手调基线
 # 仅在文件存在且已核验时追加：--weights <权重文件>
-npm run train -- --generations 20 --output-dir public/ai/<new-v3-run-id>  # 仅限已授权的空目录
-npm run train -- --generations 20 --workers 8 --output-dir public/ai/<new-v3-run-id>
-npm run train -- --resume   # 默认 score-rate-v3；必须先完整核验并获得授权，且仅接受 schema 4 v3 产物
+npm run train -- --generations 20 --output-dir public/ai/<new-v4-run-id>  # 仅限已授权的空目录
+npm run train -- --generations 20 --workers 8 --output-dir public/ai/<new-v4-run-id>
+npm run train -- --resume   # 默认 score-rate-v4；必须先完整核验并获得授权，且仅接受 schema 5 v4 产物
 # --seed 必须是独立整数，不得复用训练或固定复评 seed，并在本次基线/候选配对中固定使用
 npm run bench:paired -- --baseline <published> --candidate <qualified> --seed <independent-integer>  # CLI 已实现；本次未运行
 ```
@@ -118,13 +125,13 @@ npm run bench:paired -- --baseline <published> --candidate <qualified> --seed <i
 
 ---
 
-## 4. 目标演进：消行封顶、旧高度目标与 score-rate-v3
+## 4. 目标演进：消行封顶、旧高度目标与 score-rate-v4
 
 这是整个项目最关键的演进，**不看这段会白跑几小时**。
 
 ### 当前目标：固定调度 score rate
 
-`score-rate-v3` 保留 score-rate-v2 的真实得分目标，直接使用引擎一致的对局分数并按调度 cap 归一化：
+`score-rate-v4` 保留 score-rate-v2 的真实得分目标，直接使用引擎一致的对局分数并按调度 cap 归一化：
 
 ```
 fitness = meanScore / maxPieces
@@ -215,7 +222,7 @@ fitness = meanLines - heightPenalty * meanHeight
 
 ### Checkpoint 决策门
 
-当前训练器默认使用 `public/ai/score-rate-v3/`，也可通过 `--output-dir` 选择隔离目录。只有 objective `score-rate-v3`、schema version 4、精确 13 维且配置/日志连续的产物可恢复；`score-rate-v1/`、`score-rate-v2/` 及 schema version 1–3 checkpoint/log 都是 legacy 产物，v3 绝不恢复或追加。根 `public/ai/checkpoint.json` / `training-log.jsonl` 是更旧目标产物，`score-rate-v1-smoke/` 是历史隔离冒烟产物；路径相邻不表示目标兼容。
+当前训练器默认使用 `public/ai/score-rate-v4/`，也可通过 `--output-dir` 选择隔离目录。只有 objective `score-rate-v4`、schema version 5、精确 13 维且配置/日志连续的产物可恢复；`score-rate-v1/`、`score-rate-v2/`、`score-rate-v3/` 及 schema version 1–4 checkpoint/log 都是 legacy 产物，v4 绝不恢复或追加。根 `public/ai/checkpoint.json` / `training-log.jsonl` 是更旧目标产物，`score-rate-v1-smoke/` 是历史隔离冒烟产物；路径相邻不表示目标兼容。
 
 **2026-08-03 收口快照（历史）**：score-rate-v1 checkpoint 为 gen 20，日志包含 gen 0–19 的 20 条 generation 记录和一条 gen 20 reevaluation；当时发布权重写入了根 `best-weights.json` 与 tracked `src/ai/trained-weights.json`。这些权重现已被 gen-40 v2 替代，该快照只保留为历史证据，不是当前 v3 resume/append 的依据。
 
@@ -223,7 +230,7 @@ fitness = meanLines - heightPenalty * meanHeight
 
 1. 检查 Node 命令行、CPU 和内存，确认没有训练进程正在写目标目录或发布权重。
 2. 明确实际 output dir；读取其中 checkpoint 的 schema version、`objective`、`gen`、`maxPieces`、完整 `config`、`publishedBaseline` 与 `bestQualifiedCandidate`，并检查 candidate 文件是否与 `bestQualifiedCandidate` 一致（无 qualified candidate 时不得存在 candidate 文件），同时检查日志全部记录的 objective、generation/reevaluation schema、连续 generation、固定复评历史和最终换行。
-3. 如果恢复 v3 本轮，只能在 score-rate-v3 schema version 4、精确 13 维权重、配置/日志连续和完整诊断元数据全部校验后显式使用 `--resume`；旧 objective/schema checkpoint/log 一律拒绝恢复或追加。
+3. 如果恢复 v4 本轮，只能在 score-rate-v4 schema version 5、精确 13 维权重、配置/日志连续和完整诊断元数据全部校验后显式使用 `--resume`；旧 objective/schema checkpoint/log 一律拒绝恢复或追加。
 4. 如果新跑，先取得用户授权并选择空的独立 output dir；归档、移动或删除任何已有产物都需要单独授权。
 5. 训练只可改写 run-local checkpoint/log，并在资格门通过后写 run-local candidate；两份发布权重不在训练器写入边界内。启动前仍必须记录二者状态和哈希，以便证明边界未漂移。
 
@@ -275,7 +282,7 @@ Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
 
 ### 训练只写 run-local candidate，不自动发布
 
-score-rate-v3 固定复评只有在候选同时通过得分、`tetrisLineShare >= 0.20` 与存活资格门后，才写当前 run dir 的 `candidate-weights.json`。训练器不会覆写 tracked `src/ai/trained-weights.json` 或 runtime `public/ai/best-weights.json`。训练前后仍要记录这两份文件的 diff 与哈希；若发生漂移且无法明确归因，停止并请用户决定，绝不使用无条件的 `git checkout` 或 `git restore` 覆盖工作树文件。
+score-rate-v4 固定复评只有在候选同时通过得分、`tetrisLineShare >= 0.20` 与存活资格门后，才写当前 run dir 的 `candidate-weights.json`。训练器不会覆写 tracked `src/ai/trained-weights.json` 或 runtime `public/ai/best-weights.json`。训练前后仍要记录这两份文件的 diff 与哈希；若发生漂移且无法明确归因，停止并请用户决定，绝不使用无条件的 `git checkout` 或 `git restore` 覆盖工作树文件。
 
 ### 不想让训练占满 CPU
 
@@ -333,7 +340,7 @@ CEM 是搜索式演化，「模型」当前有 13 个浮点数，算力全花在
 
 1. **先审计 Git、进程和全部 `public/ai/` 产物**——Git 干净不代表 ignored 产物没变；没有用户授权不要启动训练/benchmark，也不要归档、删除或覆盖产物。
 2. **把 gen-40 当作当前已发布基线，但不要把固定复评扩写成独立 paired 验收**——未来候选必须使用相同 seeds、depth、piece cap 的 paired 设计，且不能用训练 `bestScoreRate` 代替基线验收。
-3. **若获准运行 v3，先明确 resume 还是隔离新跑**——默认 output dir 是 `public/ai/score-rate-v3/`；resume 只能指向经完整校验的 score-rate-v3 schema 4 checkpoint，新跑必须使用空 output dir。本次代码实现没有运行训练或生成 v3 candidate，不能把代码门当成可恢复产物或训练接受证据。
+3. **若获准运行 v4，先明确 resume 还是隔离新跑**——默认 output dir 是 `public/ai/score-rate-v4/`；resume 只能指向经完整校验的 score-rate-v4 schema 5 checkpoint，新跑必须使用空 output dir。本次代码实现没有运行训练或生成 v4 candidate，不能把代码门当成可恢复产物或训练接受证据。
 4. 运行当前 `npm run lint`、`npm test`、`npm run typecheck:train` 和 `npm run build`；不要继承旧测试数或成功结论。
 5. **按独立授权门推进**——两代信号 smoke、正式训练、固定复评 candidate 产出、独立 paired 验收、发布、push 与浏览器/runtime 验收不能合并；`bench:paired` CLI 已存在，但本次未运行。
 6. 浏览器验收时区分 bundled 与 runtime：bundled 来自 tracked JSON，runtime 来自 `/ai/best-weights.json`；二者可以同内容但来源标签不同。当前 gen-40 v2 只在内存中补三个 v3 零值，未经过本次浏览器/runtime 验收。

@@ -115,7 +115,7 @@ npm run train -- --generations 200 --output-dir public/ai/<new-run-id>
 # 代价很小：实测 31 → 8 个 worker，单代只慢 16%（一代的耗时由少数长对局的尾巴决定）
 npm run train -- --generations 200 --workers 8 --output-dir public/ai/<new-run-id>
 
-# 从默认 score-rate-v3 checkpoint 继续训练（须先完整核验并获得授权）
+# 从默认 score-rate-v4 checkpoint 继续训练（须先完整核验并获得授权）
 npm run train -- --resume
 
 # 对已产出的 qualified candidate 与发布基线做独立逐局配对（命令已实现；仍须单独授权）
@@ -126,20 +126,24 @@ npm run bench:paired -- --baseline <baseline-weights> --candidate <candidate-wei
 npm run typecheck:train
 ```
 
-当前代码与训练器契约是 **`score-rate-v3`、checkpoint schema 4、13 维特征**。它保留 score-rate-v2 的前十维，并在尾部追加 `cleanWellDepth`、`tetrisSetupProgress` 与 `tetrisReadyRows`。标量 fitness 没有改变，仍严格为 `meanScore / scheduled maxPieces`；clear histogram、`tetrisLineShare`、策略诊断与存活诊断都不进入 CEM 排序或分布更新。
+当前代码与训练器契约是 **`score-rate-v4`、checkpoint schema 5、13 维特征**，搜索契约为 `bag-expectimax-hold-v1`：搜索仅使用公开局面信息，采用标准 Hold、精确 bag chance、depth 4、beams 64/32。标量 fitness 仍严格为 `meanScore / scheduled maxPieces`；clear histogram、`tetrisLineShare`、策略诊断、搜索诊断与存活诊断都不进入 CEM 排序或分布更新。
 
-新轮次默认把 checkpoint 和每代统计写入 `public/ai/score-rate-v3/`；目录中只要已有任何条目，新跑就会 fail closed。只有固定复评同时通过得分、四消与存活资格门后，训练器才会在当前 run dir 写入 `candidate-weights.json`，不会自动改写 `public/ai/best-weights.json` 或 `src/ai/trained-weights.json`。当前已经发布的 bundled/runtime 模型仍是 **version 3、`score-rate-v2` gen-40**；加载时只在内存中把三个 v3 尾维补为 `0`，不会改写发布文件。`score-rate-v1` / `score-rate-v2` checkpoint 和日志均不是 schema 4 v3 可恢复产物。
+新轮次默认把 checkpoint 和每代统计写入 `public/ai/score-rate-v4/`；目录中只要已有任何条目，新跑就会 fail closed。只有固定复评同时通过得分、四消与存活资格门后，训练器才会在当前 run dir 写入 `candidate-weights.json`，不会自动改写 `public/ai/best-weights.json` 或 `src/ai/trained-weights.json`。当前已经发布的 bundled/runtime 模型仍是 **version 3、`score-rate-v2` gen-40**；加载时只在内存中补齐 v4 特征尾维，不会改写发布文件。`score-rate-v1` / `score-rate-v2` / `score-rate-v3` checkpoint 和日志均不是 schema 5 v4 可恢复产物。
 
-访问 `training.html`（开发模式下即 `npm run dev` 后的 `/training.html`）可以打开训练可视化面板，它会持续轮询 `/ai/score-rate-v3/training-log.jsonl`，训练运行时图表随日志增长自动刷新，无需手动刷新页面。
+访问 `training.html`（开发模式下即 `npm run dev` 后的 `/training.html`）可以打开训练可视化面板，它会持续轮询 `/ai/score-rate-v4/training-log.jsonl`，训练运行时图表随日志增长自动刷新，无需手动刷新页面。
 
 > **动手改训练之前，请先读 [`docs/ai-training-handoff.md`](docs/ai-training-handoff.md)。**
-> 它记录了当前进度、几个会浪费数小时的坑，以及最关键的一点：**消行数这个指标会封顶**——称职的候选根本不会死，消行数恒等于 `0.4 × 局长上限`，任何只看消行的基准都区分不出它们。项目曾使用 `平均消行 - heightPenalty × 平均堆叠高度`，但该目标现已退役；当前 `score-rate-v3` 继续在固定调度下优化 `meanScore / maxPieces`，新增建井特征与所有四消指标仍不直接改写 fitness。
+> 它记录了当前进度、几个会浪费数小时的坑，以及最关键的一点：**消行数这个指标会封顶**——称职的候选根本不会死，消行数恒等于 `0.4 × 局长上限`，任何只看消行的基准都区分不出它们。项目曾使用 `平均消行 - heightPenalty × 平均堆叠高度`，但该目标现已退役；当前 `score-rate-v4` 继续在固定调度下优化 `meanScore / maxPieces`，新增建井特征与所有四消指标仍不直接改写 fitness。
 
 当前发布的 gen-40 `score-rate-v2` 权重在固定 `30 × 5000`、depth 2 复评中取得 `meanScore = 3,289,243.33`、`scoreRate = 657.8487`，相对 gen-20 基线 `620.966` 提高约 5.61%。但它每局平均只有 `0.0333` 次四消，`tetrisLineShare = 0.00667%`；得分提升主要来自双消增加，不能描述为已经形成稳定四消。当前可审计产物中未找到 gen-40 相对 gen-20 的独立 paired benchmark，因此固定复评更高分不能替代独立配对验收。
 
 作为历史证据，gen-20 曾以新 seed `20260803` 对它当时的旧发布基线进行独立 paired benchmark：旧权重 `612.228`、gen-20 `621.272`，逐局 `30` 胜 `0` 负，平均差 `+9.044 score/piece`，95% paired 区间为 `[+7.813, +10.275]`。新的稳定四消策略设计见 [`2026-08-11 score-rate-v3 design`](docs/superpowers/specs/2026-08-11-score-rate-v3-tetris-strategy-design.md)；其代码契约现已实施，但这次代码工作**没有运行训练、benchmark 或 paired benchmark，也没有产出 candidate、完成验收、发布权重或进行浏览器/runtime 验收**。
 
 后续门仍彼此独立：先另行授权两代隔离信号短跑；若两代中的 `bestTetrisLineShare` 与 `eliteTetrisLineShare` 始终都低于 `0.01`，立即停止并另写搜索设计。只有正式训练的固定复评候选达到 `tetrisLineShare >= 0.20`，同时通过得分与存活资格门，才可产出 run-local candidate。随后还必须用已实现但本次未运行的 `bench:paired` CLI 证明逐局 score rate 与 `tetrisLineShare` 的 95% paired 区间下界都大于 `0`，再分别申请发布、push 与浏览器/runtime 验收。
+
+当前实现契约为 **`score-rate-v4` / schema 5 / `bag-expectimax-hold-v1`**：搜索仅使用公开局面信息，采用标准 Hold、精确 bag chance、depth 4、beams 64/32；fitness 严格为 `meanScore / scheduled maxPieces`。默认日志路径为 `public/ai/score-rate-v4/training-log.jsonl`。
+
+已发布模型保持 version 3、`score-rate-v2` gen-40 不变；受保护的 `public/ai/score-rate-v3/` gen-10 产物保持原地未修改。本次交接未执行 search smoke、training、benchmark、paired acceptance、publication、push 或 browser/runtime acceptance，也未生成 v4 checkpoint、log、candidate 或权重文件。
 
 ## 📁 项目结构
 

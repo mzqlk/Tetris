@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createPiece } from '../engine/piece';
 import { FEATURE_COUNT, FEATURE_NAMES } from './features';
@@ -61,6 +63,16 @@ const survivingCorpusState = (): PublicSearchState => ({
 });
 
 describe('depth-four constrained corpus', () => {
+  it('keeps the public search source and feature vector contracts exact', () => {
+    const source = readFileSync(resolve(__dirname, 'search.ts'), 'utf8');
+    expect(source).not.toMatch(/\.bag\b|\brng\b|node:|document\.|window\.|performance\./);
+    expect(FEATURE_NAMES).toEqual([
+      'aggregateHeight', 'holes', 'bumpiness', 'maxHeight', 'linesCleared',
+      'landingHeight', 'rowTransitions', 'colTransitions', 'wellDepth',
+      'lineClearValue', 'cleanWellDepth', 'tetrisSetupProgress', 'tetrisReadyRows',
+    ]);
+  });
+
   it('returns the last complete depth and discards a partial next depth', () => {
     let depth1Checks = 0;
     searchFixed(corpusState(), corpusWeights(), {

@@ -292,6 +292,13 @@ describe('createSimState', () => {
     expect(projectPublicSearchState(a)).not.toHaveProperty('rng');
   });
 
+  it('keeps the public projection free of hidden environment fields', () => {
+    const projected = projectPublicSearchState(createSimState(17));
+    expect(projected).not.toHaveProperty('bag');
+    expect(projected).not.toHaveProperty('rng');
+    expect(projected).not.toHaveProperty('random');
+  });
+
   it('executes Hold without counting it as a locked piece', () => {
     const state = createSimState(7);
     const beforePieces = state.pieces;
