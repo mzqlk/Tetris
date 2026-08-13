@@ -24,7 +24,7 @@ const task = (taskId: number, seed: number, weights = W): SimTask => ({
   taskId, weights, seed, maxPieces: 12, search: TEST_SEARCH,
 });
 
-const acceptsSimTask = (_task: SimTask): void => {};
+const acceptsSimTask: (task: SimTask) => void = () => {};
 
 // @ts-expect-error SimTask producers must provide an explicit fixed-search contract.
 acceptsSimTask({ taskId: 0, weights: W, seed: 1, maxPieces: 12 });
