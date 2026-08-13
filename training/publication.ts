@@ -17,6 +17,7 @@ export interface ReevaluationSummary {
   tetrisLineShare: number;
   strategyDiagnostics: StrategyDiagnostics;
   survivalDiagnostics: SurvivalDiagnostics;
+  searchDiagnostics?: import('../src/ai/weights').SearchDiagnostics;
 }
 
 export type CandidateQualificationReason =
