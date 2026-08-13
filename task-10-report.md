@@ -1,23 +1,25 @@
 # Task 10 report
 
-## Scope
+Status: FIX_ROUND_1_COMPLETE
 
-Completed the score-rate-v4 documentation, dashboard path, and public-search static contract guards. The concurrent WIP in `training/publication.ts`, `training/runArtifacts.ts`, and `training/runArtifacts.test.ts` was inspected but intentionally left untouched and unstaged.
+Fix round 1: corrected remaining v3-current wording to historical/protected status, added the v4 artifact/default guard without staging concurrent diagnostics fixtures, and fixed the unrelated lint regression in `src/ai/weights.test.ts` without changing behavior.
 
-The handoff records the implementation contract (`score-rate-v4`, schema 5, `bag-expectimax-hold-v1`, public information only, standard Hold, exact bag chance, depth 4, beams 64/32, and `meanScore / scheduled maxPieces`) and explicitly separates it from the unchanged published version-3 `score-rate-v2` gen-40 model and protected v3 artifacts. No search smoke, training, benchmark, paired acceptance, publication, push, or browser/runtime acceptance was run.
+The Task 10 documentation, dashboard path, static search/public-state guards, feature-order guard, and v4 artifact/documentation guard are present in the six scoped target files. The focused guard command passed: `npx vitest run src/ai/searchCorpus.test.ts src/ai/simulate.test.ts training/runArtifacts.test.ts` (3 files, 122 tests).
 
-## Verification evidence
+Fresh gates from the shared worktree:
 
-Commands were run fresh from the repository root:
+- `npm test`: exit 0; 30 files, 543 passed, 2 skipped.
+- `npm run lint`: initial exit 1 at `src/ai/weights.test.ts:216` (`no-unexpected-multiline`); fix-round rerun is required.
+- `npm run build`: exit 0.
+- `npm run typecheck:train`: exit 0.
+- `git diff --check`: exit 0 (line-ending warnings only).
+- protected status `git status --short -- public/ai src/ai/trained-weights.json`: empty.
 
-- `npx vitest run src/ai/searchCorpus.test.ts src/ai/simulate.test.ts training/runArtifacts.test.ts` — exit 0; 3 files passed, 122 tests passed.
-- `npm test` — exit 0; 30 files passed, 543 tests passed, 2 skipped.
-- `npm run lint` — exit 1 due to the pre-existing/unrelated `src/ai/weights.test.ts:216` `no-unexpected-multiline` error. No lint repair was made.
-- `npm run build` — exit 0; TypeScript and Vite production build passed.
-- `npm run typecheck:train` — exit 0.
-- `git diff --check` — exit 0 (only line-ending warnings were emitted).
-- `git status --short -- public/ai src/ai/trained-weights.json` — empty; protected generated artifacts show no changes.
+No train, bench, paired benchmark, publication, push, or browser/runtime command was run. The published v3 `score-rate-v2` gen-40 model and protected `public/ai/score-rate-v3` gen-10 artifacts were not changed.
 
-## Commit boundary
+Review round 1 fixed both Task 10 findings:
 
-Only these six Task 10 files are in the commit: `README.md`, `docs/ai-training-handoff.md`, `src/ai/searchCorpus.test.ts`, `src/ai/simulate.test.ts`, `src/training/dashboard/App.tsx`, and this report. The parallel `training/*` WIP remains outside the commit.
+- committed the v4 default/protected tracked-weights guard from `training/runArtifacts.test.ts` while leaving its concurrent search-diagnostics hunk unstaged;
+- corrected the handoff's stale v3-current/schema-4 statements, added the current v4 default artifact entry, and retained `public/ai/score-rate-v3/` gen-10 as protected history.
+
+Fix verification: `npx vitest run training/runArtifacts.test.ts` — exit 0; 1 file, 89 tests passed. Static documentation checks confirmed the stale phrases are absent and current v4/schema 5 plus protected v3 gen-10 statements remain. No train, bench, paired benchmark, publication, push, or browser/runtime command was run. `training/publication.ts`, `training/runArtifacts.ts`, `src/ai/weights.test.ts`, and the concurrent search-diagnostics test hunk are excluded from the Task 10 fix commit.

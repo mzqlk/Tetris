@@ -28,7 +28,7 @@ fitness = meanScore / maxPieces
 
 选择候选。分母是调度给每局的 `maxPieces`，不是候选实际存活的 pieces；提前死亡不会因为分母变小而得到虚高分。`lineClearValue` 继续表达引擎真实的非线性消行价值，三个新增特征连续表达干净四消井的深度、准备进度和完整行数。1/2/3/4 消直方图、四消消行占比、策略诊断、搜索诊断与存活诊断都不进入 fitness、精英排序或 CEM 分布更新。
 
-当前 tracked bundled 权重和 runtime 已发布权重仍是 **version 3、`score-rate-v2` 的 gen-40 模型**。2026-08-11 现场核验时，`src/ai/trained-weights.json` 与 `public/ai/best-weights.json` 的 SHA-256 均为 `062552496E7E1101502E62B8570DFDAF2A60B54EF4FEF1EA539723B910550D90`。加载这份十维模型时，代码仅在内存中对三个 v3 尾维补 `0`；旧九维文件还会同时补 `lineClearValue = 0`，都不改写原文件。version 1–3 checkpoint/log 不是 score-rate-v3 schema 4 可恢复或可追加产物。
+当前 tracked bundled 权重和 runtime 已发布权重仍是 **version 3、`score-rate-v2` 的 gen-40 模型**。2026-08-11 现场核验时，`src/ai/trained-weights.json` 与 `public/ai/best-weights.json` 的 SHA-256 均为 `062552496E7E1101502E62B8570DFDAF2A60B54EF4FEF1EA539723B910550D90`。加载这份十维模型时，代码仅在内存中对 v4 所需的三个尾维补 `0`；旧九维文件还会同时补 `lineClearValue = 0`，都不改写原文件。version 1–3 checkpoint/log（包括受保护的 `public/ai/score-rate-v3/` gen-10 历史产物）不是 score-rate-v4 schema 5 可恢复或可追加产物。
 
 本次交付是**代码-only handoff**：实现期间没有运行训练、benchmark 或 paired benchmark，没有产出 `candidate-weights.json`，没有完成候选验收或发布，也没有进行浏览器/runtime 验收。`bench:paired` CLI 已实现，但本次没有运行；完整代码门只能证明实现契约，不能证明特征产生了训练信号、候选达标或模型可发布。
 
@@ -91,10 +91,11 @@ gen-20 权重由提交 `ef3cbac feat(ai): publish gen-20 score-rate weights` 纳
 
 - `score-rate-v2-first-run-20260809/training-log.jsonl` — 当前 gen-40 v2 轮次日志；包含 gen 0–39 generation 记录与 gen 10/20/30/40 typed reevaluation 事件
 - `score-rate-v2-first-run-20260809/checkpoint.json` — 当前 v2 checkpoint；schema version 3、`score-rate-v2`、10 维、gen 40、`maxPieces = 2000`
-- `score-rate-v3/` — 当前训练器的默认新轮次 output dir；路径默认不代表其中存在可续训产物，运行前必须现场检查
-- `<v3-run>/candidate-weights.json` — 仅在固定复评资格门通过后写入当前 run dir；不是已发布权重
+- `score-rate-v4/` — 当前训练器的默认新轮次 output dir；只有 schema version 5、objective `score-rate-v4` 的完整连续产物才可能恢复
+- `score-rate-v3/` — 受保护的历史 gen-10 run；不是当前训练器默认路径，运行前仍须现场检查其 live 状态
+- `<v3-run>/candidate-weights.json` — 历史 v3 run-local 候选路径；不是当前 v4 候选路径，也不是已发布权重
 - `best-weights.json` — 当前 runtime 已发布的 version 3、`score-rate-v2` gen-40 权重
-- `../src/ai/trained-weights.json` — 当前 tracked bundled 的 version 3、`score-rate-v2` gen-40 权重；加载时仅在内存中补三个 v3 尾维
+- `../src/ai/trained-weights.json` — 当前 tracked bundled 的 version 3、`score-rate-v2` gen-40 权重；加载时仅在内存中补 v4 所需的三个尾维
 - 根目录的 `checkpoint.json` / `training-log.jsonl` — 退役 `lines-height-v1` 的 legacy 产物；不得与当前目标混用
 - `score-rate-v1-smoke/` — 目标实现阶段的隔离 smoke 产物；不是当前可续训轮次
 
@@ -202,7 +203,7 @@ fitness = meanLines - heightPenalty * meanHeight
 
 冒烟跑（`npm run train -- --generations 2`）里信号也在动：精英中位高度 gen 0 是 7.0，gen 1 降到 3.5，而同期全体中位高度是 14.3。
 
-以下配套改动描述的是 `lines-height-v1` 历史快照；随后曾由 `score-rate-v1` 和 `score-rate-v2` 依次取代，当前代码、日志与候选产物契约已迁移至 `score-rate-v3`：
+以下配套改动描述的是 `lines-height-v1` 历史快照；随后曾由 `score-rate-v1`、`score-rate-v2` 与 `score-rate-v3` 依次取代，当前代码、日志与候选产物契约已迁移至 `score-rate-v4`：
 
 - `aggregateFitness` 当时返回 `{ fitness, meanLines, meanPieces, meanHeight }`，多收一个 `heightPenalty` 参数
 - 日志每代多写 `medianLines / medianHeight / eliteHeight / heightPenalty`，控制台多打一列 `eliteH`

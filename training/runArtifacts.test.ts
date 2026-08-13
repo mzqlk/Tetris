@@ -46,6 +46,7 @@ const SEARCH = {
   cacheHits: 2_000,
   abortedSearches: 1,
 };
+const ROOT = resolve(__dirname, '..');
 const CONFIG = {
   population: 100,
   eliteFrac: 0.1,
@@ -340,6 +341,16 @@ describe('resolveRunPaths', () => {
     const root = temp();
     resolveRunPaths(root, null);
     expect(readdirSync(root)).toEqual([]);
+  });
+
+  it('keeps v4 defaults isolated from legacy artifacts and documents the gate', () => {
+    expect(resolveRunPaths(ROOT, null).outputDir).toBe(resolve(ROOT, 'public/ai/score-rate-v4'));
+    expect(readFileSync(resolve(ROOT, 'src/ai/trained-weights.json'), 'utf8'))
+      .toContain('"objective": "score-rate-v2"');
+    expect(readFileSync(resolve(ROOT, 'README.md'), 'utf8')).toContain('score-rate-v4');
+    expect(readFileSync(resolve(ROOT, 'docs/ai-training-handoff.md'), 'utf8')).toContain('score-rate-v4');
+    expect(readFileSync(resolve(ROOT, 'docs/superpowers/specs/2026-08-12-bag-aware-tetris-search-design.md'), 'utf8'))
+      .toContain('public/ai/score-rate-v3/');
   });
 });
 

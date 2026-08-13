@@ -212,8 +212,7 @@ describe('parseWeightsFile', () => {
     });
   });
 
-  it.each(['searchContract', 'searchDepth', 'rootBeamWidth', 'childBeamWidth'])
-    ('rejects version-5 weights missing %s', (key) => {
+  it.each(['searchContract', 'searchDepth', 'rootBeamWidth', 'childBeamWidth'])('rejects version-5 weights missing %s', (key) => {
       const payload = { ...v5File } as Record<string, unknown>;
       Reflect.deleteProperty(payload, key);
       expect(parseWeightsFile(payload)).toBeNull();
