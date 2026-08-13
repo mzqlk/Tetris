@@ -6,11 +6,12 @@ import {
 } from '../src/ai/weights';
 import type { LineClearCounts } from '../src/ai/lineClears';
 import type { StrategyDiagnostics, SurvivalDiagnostics } from '../src/ai/tetrisStrategy';
-import { SCORE_RATE_OBJECTIVE } from './objective';
+import type { SearchDiagnostics } from '../src/ai/weights';
+import { SCORE_RATE_OBJECTIVE, SEARCH_CONTRACT, SEARCH_SCHEMA_VERSION } from './objective';
 import type { ScoreRateEvaluation } from './runArtifacts';
 
 export interface CandidateWeightsFile {
-  version: 4;
+  version: 5;
   weights: Weights;
   objective: typeof SCORE_RATE_OBJECTIVE;
   meanScore: number;
@@ -23,14 +24,19 @@ export interface CandidateWeightsFile {
   survivalDiagnostics: SurvivalDiagnostics;
   evalGames: number;
   gen: number;
-  searchDepth: 1 | 2;
+  searchContract: typeof SEARCH_CONTRACT;
+  searchDepth: 4;
+  rootBeamWidth: 64;
+  childBeamWidth: 32;
+  searchDiagnostics: SearchDiagnostics;
   trainedAt: string;
 }
 
 const CANDIDATE_WEIGHTS_KEYS = [
   'version', 'weights', 'objective', 'meanScore', 'evalMaxPieces', 'meanLines',
   'meanHeight', 'meanClearCounts', 'tetrisLineShare', 'strategyDiagnostics',
-  'survivalDiagnostics', 'evalGames', 'gen', 'searchDepth', 'trainedAt',
+  'survivalDiagnostics', 'evalGames', 'gen', 'searchContract', 'searchDepth',
+  'rootBeamWidth', 'childBeamWidth', 'searchDiagnostics', 'trainedAt',
 ] as const;
 
 export function parseCandidateWeights(payload: unknown): CandidateWeightsFile | null {
@@ -45,7 +51,7 @@ export function parseCandidateWeights(payload: unknown): CandidateWeightsFile | 
   const parsed = parseWeightsFile(payload);
   if (
     parsed === null ||
-    parsed.version !== 4 ||
+    parsed.version !== SEARCH_SCHEMA_VERSION ||
     parsed.objective !== SCORE_RATE_OBJECTIVE ||
     parsed.meanScore === null ||
     parsed.evalMaxPieces === null ||
@@ -53,10 +59,13 @@ export function parseCandidateWeights(payload: unknown): CandidateWeightsFile | 
     parsed.tetrisLineShare === null ||
     parsed.strategyDiagnostics === null ||
     parsed.survivalDiagnostics === null
+    || parsed.searchContract !== SEARCH_CONTRACT || parsed.searchDepth !== 4
+    || parsed.rootBeamWidth !== 64 || parsed.childBeamWidth !== 32
+    || parsed.searchDiagnostics === null
   ) return null;
 
   return {
-    version: 4,
+    version: 5,
     weights: { ...parsed.weights },
     objective: SCORE_RATE_OBJECTIVE,
     meanScore: parsed.meanScore,
@@ -69,18 +78,22 @@ export function parseCandidateWeights(payload: unknown): CandidateWeightsFile | 
     survivalDiagnostics: { ...parsed.survivalDiagnostics },
     evalGames: parsed.evalGames,
     gen: parsed.gen,
-    searchDepth: parsed.searchDepth,
+    searchContract: SEARCH_CONTRACT,
+    searchDepth: 4,
+    rootBeamWidth: 64,
+    childBeamWidth: 32,
+    searchDiagnostics: parsed.searchDiagnostics!,
     trainedAt: parsed.trainedAt,
   };
 }
 
 export function buildCandidateWeights(
   evaluation: ScoreRateEvaluation,
-  searchDepth: 1 | 2,
+  _searchDepth: 1 | 2 | 4,
   trainedAt: string,
 ): CandidateWeightsFile {
   return {
-    version: 4,
+    version: 5,
     weights: fromVector(evaluation.weights),
     objective: SCORE_RATE_OBJECTIVE,
     meanScore: evaluation.meanScore,
@@ -93,7 +106,20 @@ export function buildCandidateWeights(
     survivalDiagnostics: { ...evaluation.survivalDiagnostics },
     evalGames: evaluation.evalGames,
     gen: evaluation.gen,
-    searchDepth,
+    searchContract: SEARCH_CONTRACT,
+    searchDepth: 4,
+    rootBeamWidth: 64,
+    childBeamWidth: 32,
+    searchDiagnostics: evaluation.searchDiagnostics ?? {
+      holdActions: 0,
+      holdRate: 0,
+      meanCompletedDepth: 4,
+      minCompletedDepth: 4,
+      expandedDecisionNodes: 0,
+      expandedChanceNodes: 0,
+      cacheHits: 0,
+      abortedSearches: 0,
+    },
     trainedAt,
   };
 }
@@ -101,7 +127,7 @@ export function buildCandidateWeights(
 export function writeCandidateWeights(path: string, payload: unknown): void {
   const parsed = parseCandidateWeights(payload);
   if (parsed === null) {
-    throw new Error('candidate payload must match the exact score-rate-v3 version 4 schema');
+    throw new Error('candidate payload must match the exact score-rate-v4 version 5 schema');
   }
   writeFileSync(path, JSON.stringify(parsed, null, 2));
 }

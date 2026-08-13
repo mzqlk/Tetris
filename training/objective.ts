@@ -1,6 +1,10 @@
 export {
   LEGACY_SCORE_RATE_OBJECTIVE,
+  SCORE_RATE_V2_OBJECTIVE,
+  SCORE_RATE_V3_OBJECTIVE,
   SCORE_RATE_OBJECTIVE,
+  SEARCH_CONTRACT,
+  SEARCH_SCHEMA_VERSION,
 } from '../src/ai/trainingObjective';
 
 /** Height may break a publication tie only inside this relative score band. */

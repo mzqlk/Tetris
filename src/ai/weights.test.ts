@@ -116,6 +116,21 @@ describe('parseWeightsFile', () => {
     survivalDiagnostics: { pieceCapGames: 30, gameoverGames: 0 },
   };
 
+  const v5File = {
+    ...v4File,
+    version: 5,
+    objective: 'score-rate-v4',
+    searchContract: 'bag-expectimax-hold-v1',
+    searchDepth: 4,
+    rootBeamWidth: 64,
+    childBeamWidth: 32,
+    searchDiagnostics: {
+      holdActions: 10, holdRate: 0.1, meanCompletedDepth: 4,
+      minCompletedDepth: 4, expandedDecisionNodes: 100,
+      expandedChanceNodes: 50, cacheHits: 5, abortedSearches: 0,
+    },
+  };
+
   it('accepts a complete file', () => {
     const parsed = parseWeightsFile(valid);
     expect(parsed).not.toBeNull();
@@ -185,6 +200,24 @@ describe('parseWeightsFile', () => {
       survivalDiagnostics: { pieceCapGames: 31, gameoverGames: 0 },
     })).toBeNull();
   });
+
+  it('accepts exact version-5 score-rate-v4 metadata', () => {
+    expect(parseWeightsFile(v5File)).toMatchObject({
+      version: 5,
+      objective: 'score-rate-v4',
+      searchContract: 'bag-expectimax-hold-v1',
+      searchDepth: 4,
+      rootBeamWidth: 64,
+      childBeamWidth: 32,
+    });
+  });
+
+  it.each(['searchContract', 'searchDepth', 'rootBeamWidth', 'childBeamWidth'])
+    ('rejects version-5 weights missing %s', (key) => {
+      const payload = { ...v5File } as Record<string, unknown>;
+      Reflect.deleteProperty(payload, key);
+      expect(parseWeightsFile(payload)).toBeNull();
+    });
 
   it.each([
     'meanScore',

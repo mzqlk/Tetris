@@ -25,6 +25,8 @@ import {
   PUBLICATION_GAMES,
   PUBLICATION_MAX_PIECES,
   SCORE_RATE_OBJECTIVE,
+  SEARCH_CONTRACT,
+  SEARCH_SCHEMA_VERSION,
 } from './objective';
 import {
   evaluateTetrisCandidate,
@@ -37,10 +39,11 @@ export interface ScoreRateEvaluation extends ReevaluationSummary {
   gen: number;
   evalGames: number;
   evalMaxPieces: number;
+  searchDiagnostics?: import('../src/ai/weights').SearchDiagnostics;
 }
 
 export interface ScoreRateCheckpoint {
-  version: 4;
+  version: 4 | 5;
   objective: typeof SCORE_RATE_OBJECTIVE;
   gen: number;
   mu: number[];
@@ -50,6 +53,10 @@ export interface ScoreRateCheckpoint {
   config: TrainConfig;
   publishedBaseline: ScoreRateEvaluation | null;
   bestQualifiedCandidate: ScoreRateEvaluation | null;
+  searchContract?: typeof SEARCH_CONTRACT;
+  searchDepth?: 4;
+  rootBeamWidth?: 64;
+  childBeamWidth?: 32;
 }
 
 export interface RunPaths {
@@ -60,7 +67,7 @@ export interface RunPaths {
 }
 
 export function resolveRunPaths(root: string, requested: string | null): RunPaths {
-  const outputDir = resolve(root, requested ?? 'public/ai/score-rate-v3');
+  const outputDir = resolve(root, requested ?? 'public/ai/score-rate-v4');
   return {
     outputDir,
     checkpoint: resolve(outputDir, 'checkpoint.json'),
@@ -195,10 +202,11 @@ function nonNegative(value: unknown, label: string): number {
 
 const CHECKPOINT_KEYS = [
   'version', 'objective', 'gen', 'mu', 'sigma', 'baseSeed', 'maxPieces', 'config',
-  'publishedBaseline', 'bestQualifiedCandidate',
+  'publishedBaseline', 'bestQualifiedCandidate', 'searchContract', 'searchDepth',
+  'rootBeamWidth', 'childBeamWidth',
 ] as const;
 const CONFIG_KEYS = [
-  'population', 'eliteFrac', 'gamesPerCandidate', 'depth', 'initialMaxPieces',
+  'population', 'eliteFrac', 'gamesPerCandidate', 'searchDepth', 'rootBeamWidth', 'childBeamWidth', 'initialMaxPieces',
   'maxPiecesCap', 'initialNoise', 'noiseDecay', 'noiseFloor', 'baseSeed', 'workers',
   'reevalEvery', 'reevalGames', 'reevalMaxPieces',
 ] as const;
@@ -207,6 +215,10 @@ const STRATEGY_KEYS = [
   'meanCleanWellDepth', 'meanTetrisSetupProgress', 'meanTetrisReadyRows',
 ] as const;
 const SURVIVAL_KEYS = ['pieceCapGames', 'gameoverGames'] as const;
+const SEARCH_DIAGNOSTICS_KEYS = [
+  'holdActions', 'holdRate', 'meanCompletedDepth', 'minCompletedDepth',
+  'expandedDecisionNodes', 'expandedChanceNodes', 'cacheHits', 'abortedSearches',
+] as const;
 const EVALUATION_KEYS = [
   'gen', 'weights', 'meanScore', 'scoreRate', 'meanLines', 'meanHeight',
   'meanClearCounts', 'tetrisLineShare', 'strategyDiagnostics', 'survivalDiagnostics',
@@ -233,16 +245,18 @@ function assertClose(actual: number, expected: number, label: string): void {
 function trainConfig(value: unknown): TrainConfig {
   const raw = record(value, 'config');
   exactKeys(raw, CONFIG_KEYS, null, 'config');
-  const depth = raw.depth;
-  if (depth !== 1 && depth !== 2) {
-    throw new Error('checkpoint config.depth must be 1 or 2');
+  if (raw.searchDepth !== 4 || raw.rootBeamWidth !== 64 || raw.childBeamWidth !== 32) {
+    throw new Error('checkpoint search configuration must be 4/64/32');
   }
 
   const config: TrainConfig = {
     population: positiveInteger(raw.population, 'config.population'),
     eliteFrac: fraction(raw.eliteFrac, 'config.eliteFrac'),
     gamesPerCandidate: positiveInteger(raw.gamesPerCandidate, 'config.gamesPerCandidate'),
-    depth,
+    depth: 2,
+    searchDepth: 4,
+    rootBeamWidth: 64,
+    childBeamWidth: 32,
     initialMaxPieces: positiveInteger(raw.initialMaxPieces, 'config.initialMaxPieces'),
     maxPiecesCap: positiveInteger(raw.maxPiecesCap, 'config.maxPiecesCap'),
     initialNoise: nonNegative(raw.initialNoise, 'config.initialNoise'),
@@ -310,7 +324,27 @@ function survivalDiagnostics(
 
 const CHECKPOINT_EVALUATION_KEYS = [
   ...EVALUATION_KEYS, 'evalGames', 'evalMaxPieces',
+  'searchDiagnostics',
 ] as const;
+
+function searchDiagnostics(value: unknown, label: string) {
+  const raw = record(value, label);
+  exactKeys(raw, SEARCH_DIAGNOSTICS_KEYS, null, label);
+  const result = {
+    holdActions: nonNegative(raw.holdActions, `${label}.holdActions`),
+    holdRate: nonNegative(raw.holdRate, `${label}.holdRate`),
+    meanCompletedDepth: nonNegative(raw.meanCompletedDepth, `${label}.meanCompletedDepth`),
+    minCompletedDepth: nonNegative(raw.minCompletedDepth, `${label}.minCompletedDepth`),
+    expandedDecisionNodes: nonNegative(raw.expandedDecisionNodes, `${label}.expandedDecisionNodes`),
+    expandedChanceNodes: nonNegative(raw.expandedChanceNodes, `${label}.expandedChanceNodes`),
+    cacheHits: nonNegative(raw.cacheHits, `${label}.cacheHits`),
+    abortedSearches: nonNegative(raw.abortedSearches, `${label}.abortedSearches`),
+  };
+  if (result.holdRate > 1 || result.meanCompletedDepth > 4 || result.minCompletedDepth > 4) {
+    throw new Error(`checkpoint ${label} search diagnostics are out of range`);
+  }
+  return result;
+}
 
 function scoreRateEvaluation(
   value: unknown,
@@ -336,6 +370,7 @@ function scoreRateEvaluation(
     survivalDiagnostics: survivalDiagnostics(
       raw.survivalDiagnostics, `${label}.survivalDiagnostics`, evalGames,
     ),
+    searchDiagnostics: searchDiagnostics(raw.searchDiagnostics, `${label}.searchDiagnostics`),
     gen: integer(raw.gen, `${label}.gen`, -1),
     evalGames,
     evalMaxPieces,
@@ -373,10 +408,13 @@ export function readCompatibleCheckpoint(path: string): ScoreRateCheckpoint {
   if (objective !== SCORE_RATE_OBJECTIVE) {
     throw new Error(`checkpoint objective ${objective} is incompatible with ${SCORE_RATE_OBJECTIVE}`);
   }
-  if (checkpoint.version !== 4) {
-    throw new Error(`checkpoint schema ${String(checkpoint.version)} is incompatible with version 4`);
+  if (checkpoint.version !== SEARCH_SCHEMA_VERSION) {
+    throw new Error(`checkpoint schema ${String(checkpoint.version)} is incompatible with version 5`);
   }
   exactKeys(checkpoint, CHECKPOINT_KEYS, null, 'checkpoint');
+  if (checkpoint.searchContract !== SEARCH_CONTRACT || checkpoint.searchDepth !== 4 || checkpoint.rootBeamWidth !== 64 || checkpoint.childBeamWidth !== 32) {
+    throw new Error('checkpoint search metadata is incompatible with score-rate-v4');
+  }
 
   const config = trainConfig(checkpoint.config);
   const gen = integer(checkpoint.gen, 'gen', 0);
@@ -408,7 +446,7 @@ export function readCompatibleCheckpoint(path: string): ScoreRateCheckpoint {
   }
 
   return {
-    version: 4,
+    version: 5,
     objective: SCORE_RATE_OBJECTIVE,
     gen,
     mu,
@@ -418,6 +456,10 @@ export function readCompatibleCheckpoint(path: string): ScoreRateCheckpoint {
     config,
     publishedBaseline,
     bestQualifiedCandidate,
+    searchContract: SEARCH_CONTRACT,
+    searchDepth: 4,
+    rootBeamWidth: 64,
+    childBeamWidth: 32,
   };
 }
 
@@ -784,7 +826,7 @@ function validateReevaluation(
   if (
     games !== checkpoint.config.reevalGames ||
     maxPieces !== checkpoint.config.reevalMaxPieces ||
-    depth !== checkpoint.config.depth ||
+    depth !== checkpoint.config.searchDepth ||
     baseSeed !== checkpoint.baseSeed ||
     schedule.seedStrategy !== 'fixed-reevaluation-v1'
   ) {
@@ -983,7 +1025,7 @@ function readCandidateEvaluation(
   if (parsed === null) {
     throw new Error('candidate weights must match the exact score-rate-v3 version 4 schema');
   }
-  if (parsed.searchDepth !== checkpoint.config.depth) {
+  if (parsed.searchDepth !== checkpoint.config.searchDepth) {
     throw new Error('candidate weights searchDepth disagrees with checkpoint config');
   }
   return {

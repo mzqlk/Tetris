@@ -9,7 +9,9 @@ import {
 } from './lineClears';
 import type { StrategyDiagnostics, SurvivalDiagnostics } from './tetrisStrategy';
 import {
-  LEGACY_SCORE_RATE_OBJECTIVE, SCORE_RATE_V2_OBJECTIVE, SCORE_RATE_OBJECTIVE,
+  LEGACY_SCORE_RATE_OBJECTIVE, SCORE_RATE_V2_OBJECTIVE, SCORE_RATE_V3_OBJECTIVE,
+  SCORE_RATE_OBJECTIVE, SEARCH_CONTRACT, SEARCH_SCHEMA_VERSION,
+  type SearchMetadata,
 } from './trainingObjective';
 import trainedWeightsJson from './trained-weights.json';
 
@@ -28,10 +30,25 @@ export interface WeightsFile {
   tetrisLineShare: number | null;
   evalGames: number;
   gen: number;
-  searchDepth: 1 | 2;
+  searchDepth: 1 | 2 | 4;
+  searchContract?: typeof SEARCH_CONTRACT;
+  rootBeamWidth?: 64;
+  childBeamWidth?: 32;
+  searchDiagnostics?: SearchDiagnostics | null;
   trainedAt: string;
   strategyDiagnostics: StrategyDiagnostics | null;
   survivalDiagnostics: SurvivalDiagnostics | null;
+}
+
+export interface SearchDiagnostics {
+  holdActions: number;
+  holdRate: number;
+  meanCompletedDepth: number;
+  minCompletedDepth: number;
+  expandedDecisionNodes: number;
+  expandedChanceNodes: number;
+  cacheHits: number;
+  abortedSearches: number;
 }
 
 export function toVector(w: Weights): number[] {
@@ -130,7 +147,7 @@ interface ScoreMetadata {
   tetrisLineShare: number;
   evalGames: number;
   gen: number;
-  searchDepth: 1 | 2;
+  searchDepth: 1 | 2 | 4;
   trainedAt: string;
 }
 
@@ -143,7 +160,7 @@ function parseScoreMetadata(d: Record<string, unknown>): ScoreMetadata | null {
   const tetrisLineShare = nonNegativeFinite(d.tetrisLineShare);
   const evalGames = integerAtLeast(d.evalGames, 1);
   const gen = integerAtLeast(d.gen, -1);
-  const searchDepth = d.searchDepth === 1 || d.searchDepth === 2 ? d.searchDepth : null;
+  const searchDepth = d.searchDepth === 1 || d.searchDepth === 2 || d.searchDepth === 4 ? d.searchDepth : null;
   const trainedAt = isoTimestamp(d.trainedAt);
   if (
     meanScore === null ||
@@ -181,6 +198,35 @@ function parseScoreMetadata(d: Record<string, unknown>): ScoreMetadata | null {
     trainedAt,
   };
 }
+
+function parseSearchMetadata(d: Record<string, unknown>): SearchMetadata | null {
+  if (
+    d.searchContract !== SEARCH_CONTRACT || d.searchDepth !== 4 ||
+    d.rootBeamWidth !== 64 || d.childBeamWidth !== 32
+  ) return null;
+  return { searchContract: SEARCH_CONTRACT, searchDepth: 4, rootBeamWidth: 64, childBeamWidth: 32 };
+}
+
+function parseSearchDiagnostics(value: unknown): SearchDiagnostics | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const keys = ['holdActions', 'holdRate', 'meanCompletedDepth', 'minCompletedDepth',
+    'expandedDecisionNodes', 'expandedChanceNodes', 'cacheHits', 'abortedSearches'] as const;
+  if (Object.keys(raw).length !== keys.length || keys.some((key) => !Object.prototype.hasOwnProperty.call(raw, key))) return null;
+  for (const key of keys) {
+    const valueAtKey = raw[key];
+    if (typeof valueAtKey !== 'number' || !Number.isFinite(valueAtKey) || valueAtKey < 0) return null;
+  }
+  if ((raw.holdRate as number) > 1 || (raw.meanCompletedDepth as number) > 4 || (raw.minCompletedDepth as number) > 4) return null;
+  return raw as unknown as SearchDiagnostics;
+}
+
+const V5_KEYS = [
+  'version', 'weights', 'objective', 'meanScore', 'evalMaxPieces', 'meanLines',
+  'meanHeight', 'meanClearCounts', 'tetrisLineShare', 'evalGames', 'gen',
+  'searchContract', 'searchDepth', 'rootBeamWidth', 'childBeamWidth',
+  'searchDiagnostics', 'trainedAt', 'strategyDiagnostics', 'survivalDiagnostics',
+] as const;
 
 function parseStrategyDiagnostics(value: unknown): StrategyDiagnostics | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
@@ -241,6 +287,7 @@ export function parseWeightsFile(data: unknown): WeightsFile | null {
   let currentMetadata: ScoreMetadata | null = null;
   let strategyDiagnostics: StrategyDiagnostics | null = null;
   let survivalDiagnostics: SurvivalDiagnostics | null = null;
+  let searchDiagnostics: SearchDiagnostics | null = null;
   const zeroV3 = {
     cleanWellDepth: 0,
     tetrisSetupProgress: 0,
@@ -260,7 +307,7 @@ export function parseWeightsFile(data: unknown): WeightsFile | null {
     weights = { ...v2, ...zeroV3 } as Weights;
     currentMetadata = parseScoreMetadata(d);
     if (currentMetadata === null) return null;
-  } else if (version === 4 && objective === SCORE_RATE_OBJECTIVE) {
+  } else if (version === 4 && objective === SCORE_RATE_V3_OBJECTIVE) {
     const current = parseExactWeights(raw, FEATURE_NAMES);
     if (current === null) return null;
     weights = current as Weights;
@@ -269,6 +316,18 @@ export function parseWeightsFile(data: unknown): WeightsFile | null {
     strategyDiagnostics = parseStrategyDiagnostics(d.strategyDiagnostics);
     survivalDiagnostics = parseSurvivalDiagnostics(d.survivalDiagnostics, currentMetadata.evalGames);
     if (strategyDiagnostics === null || survivalDiagnostics === null) return null;
+  } else if (version === SEARCH_SCHEMA_VERSION && objective === SCORE_RATE_OBJECTIVE) {
+    if (Object.keys(d).length !== V5_KEYS.length || V5_KEYS.some((key) => !Object.prototype.hasOwnProperty.call(d, key))) return null;
+    const current = parseExactWeights(raw, FEATURE_NAMES);
+    if (current === null) return null;
+    weights = current as Weights;
+    currentMetadata = parseScoreMetadata(d);
+    if (currentMetadata === null || parseSearchMetadata(d) === null) return null;
+    strategyDiagnostics = parseStrategyDiagnostics(d.strategyDiagnostics);
+    survivalDiagnostics = parseSurvivalDiagnostics(d.survivalDiagnostics, currentMetadata.evalGames);
+    if (strategyDiagnostics === null || survivalDiagnostics === null) return null;
+    searchDiagnostics = parseSearchDiagnostics(d.searchDiagnostics);
+    if (searchDiagnostics === null) return null;
   } else {
     return null;
   }
@@ -290,7 +349,11 @@ export function parseWeightsFile(data: unknown): WeightsFile | null {
     tetrisLineShare: currentMetadata?.tetrisLineShare ?? null,
     evalGames: currentMetadata?.evalGames ?? num(d.evalGames, 0),
     gen: currentMetadata?.gen ?? num(d.gen, 0),
-    searchDepth: currentMetadata?.searchDepth ?? (d.searchDepth === 1 ? 1 : 2),
+    searchDepth: currentMetadata?.searchDepth ?? (d.searchDepth === 1 ? 1 : d.searchDepth === 4 ? 4 : 2),
+    searchContract: version === SEARCH_SCHEMA_VERSION ? SEARCH_CONTRACT : undefined,
+    rootBeamWidth: version === SEARCH_SCHEMA_VERSION ? 64 : undefined,
+    childBeamWidth: version === SEARCH_SCHEMA_VERSION ? 32 : undefined,
+    searchDiagnostics,
     trainedAt: currentMetadata?.trainedAt ?? (typeof d.trainedAt === 'string' ? d.trainedAt : ''),
     strategyDiagnostics,
     survivalDiagnostics,

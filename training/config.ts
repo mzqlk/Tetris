@@ -32,7 +32,11 @@ export interface TrainConfig {
   eliteFrac: number;
   /** Games each candidate plays, all against the same seed set. */
   gamesPerCandidate: number;
+  /** @deprecated retained for downstream Task 8 compile compatibility. */
   depth: 1 | 2;
+  searchDepth: 4;
+  rootBeamWidth: 64;
+  childBeamWidth: 32;
   /** Starting piece cap per game; doubles as candidates outgrow it. */
   initialMaxPieces: number;
   /**
@@ -67,6 +71,9 @@ export const DEFAULT_CONFIG: TrainConfig = {
   eliteFrac: 0.1,
   gamesPerCandidate: 5,
   depth: 2,
+  searchDepth: 4,
+  rootBeamWidth: 64,
+  childBeamWidth: 32,
   initialMaxPieces: 300,
   maxPiecesCap: 2000,
   initialNoise: 0.5,
