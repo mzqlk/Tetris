@@ -25,6 +25,16 @@ const evaluated = (
     meanTetrisSetupProgress: 2,
     meanTetrisReadyRows: 1,
   },
+  searchDiagnostics: {
+    holdActions: 4,
+    holdRate: 0.2,
+    meanCompletedDepth: 3.5,
+    minCompletedDepth: 2,
+    expandedDecisionNodes: 10,
+    expandedChanceNodes: 20,
+    cacheHits: 3,
+    abortedSearches: 1,
+  },
   survivalDiagnostics: {
     pieceCapGames,
     gameoverGames: 30 - pieceCapGames,
@@ -149,6 +159,7 @@ describe('buildReevaluationLogEntry', () => {
       evaluation.weights[0] = 99;
       evaluation.meanClearCounts.singles = 99;
       evaluation.strategyDiagnostics.meanCleanWellDepth = 99;
+      evaluation.searchDiagnostics!.holdActions = 99;
       evaluation.survivalDiagnostics.pieceCapGames = 0;
     }
     qualification.shouldSave = false;
@@ -156,16 +167,19 @@ describe('buildReevaluationLogEntry', () => {
     expect(event.publishedBaseline).toMatchObject({
       meanClearCounts: { singles: 16 },
       strategyDiagnostics: { meanCleanWellDepth: 3 },
+      searchDiagnostics: { holdActions: 4 },
       survivalDiagnostics: { pieceCapGames: 30 },
     });
     expect(event.currentQualified).toMatchObject({
       meanClearCounts: { singles: 12 },
       strategyDiagnostics: { meanCleanWellDepth: 3 },
+      searchDiagnostics: { holdActions: 4 },
       survivalDiagnostics: { pieceCapGames: 30 },
     });
     expect(event.candidate).toMatchObject({
       meanClearCounts: { singles: 12 },
       strategyDiagnostics: { meanCleanWellDepth: 3 },
+      searchDiagnostics: { holdActions: 4 },
       survivalDiagnostics: { pieceCapGames: 30 },
     });
     expect(event.publishedBaseline.weights[0]).toBe(0.1);

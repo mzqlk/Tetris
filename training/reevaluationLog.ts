@@ -59,6 +59,9 @@ const snapshot = (evaluation: LoggedReevaluation): LoggedReevaluation => ({
   weights: evaluation.weights.slice(),
   meanClearCounts: { ...evaluation.meanClearCounts },
   strategyDiagnostics: { ...evaluation.strategyDiagnostics },
+  searchDiagnostics: evaluation.searchDiagnostics === undefined
+    ? undefined
+    : { ...evaluation.searchDiagnostics },
   survivalDiagnostics: { ...evaluation.survivalDiagnostics },
 });
 
