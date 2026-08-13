@@ -34,3 +34,22 @@ outside this Task 8 commit.
 ## Commit
 
 `f013aff` (`feat(training): propagate fixed-search diagnostics`)
+
+## Fix round 1
+
+Review finding I-1 identified a mutable alias: reevaluation `snapshot()` did
+not copy `searchDiagnostics`. The actual repair is commit `f87786b`
+(`fix(training): snapshot reevaluation search diagnostics`): its mutation
+regression changes each input evaluation's `searchDiagnostics.holdActions`
+after entry construction and asserts the baseline, current-qualified, and
+candidate snapshots retain their original value. `snapshot()` now copies the
+diagnostics object field-for-field through object spread.
+
+Fresh verification after review:
+
+- `npx vitest run --maxWorkers=1 training/reevaluationLog.test.ts training/cem.test.ts training/train-cli.test.ts src/training/dashboard/useTrainingLog.test.ts` -> 4 files, 97 passed, 2 skipped.
+- `npm run typecheck:train` -> passed.
+- `git diff --check` -> passed.
+
+No train, bench, paired benchmark, runtime/browser, artifact, or weight action
+was run in this fix round.
