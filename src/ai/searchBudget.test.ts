@@ -27,6 +27,25 @@ describe('deterministic search budget', () => {
     });
   });
 
+  it('returns fresh frozen snapshots that preserve prior ledger state', () => {
+    const ledger = new WorkBudgetLedger(2);
+    const initial = ledger.snapshot();
+    const repeated = ledger.snapshot();
+
+    expect(repeated).not.toBe(initial);
+    expect(Object.isFrozen(initial)).toBe(true);
+
+    expect(ledger.tryConsume('cacheHit')).toBe(true);
+    expect(initial).toEqual({
+      limit: 2,
+      used: 0,
+      placementEvaluationUnits: 0,
+      chanceExpansionUnits: 0,
+      cacheHitUnits: 0,
+      exhausted: false,
+    });
+  });
+
   it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
     'rejects invalid work-unit limit %s',
     (limit) => expect(() => new WorkBudgetLedger(limit)).toThrow(/positive safe integer/i),
