@@ -14,6 +14,14 @@ import {
   type PendingPreviewState,
   type PublicSearchState,
 } from './publicState';
+import {
+  CappedCache,
+  decisionStateKey,
+  materializePending,
+  MAX_TRANSPOSITION_ENTRIES,
+  PlacementPrototypeCache,
+  pendingStateKey,
+} from './searchCache';
 
 export type SearchAction =
   | { kind: 'place'; placement: Placement }
@@ -29,6 +37,9 @@ export interface SearchDiagnostics {
   expandedDecisionNodes: number;
   expandedChanceNodes: number;
   cacheHits: number;
+  placementCacheHits: number;
+  placementCacheEntries: number;
+  transpositionEntries: number;
   aborted: boolean;
 }
 
@@ -66,10 +77,10 @@ const TERMINAL_VALUE: SearchValue = Object.freeze({
 });
 
 interface SearchContext {
-  weights: number[];
   budget: SearchBudget;
   diagnostics: SearchDiagnostics;
-  cache: Map<string, SearchValue>;
+  cache: CappedCache<SearchValue>;
+  placementCache: PlacementPrototypeCache;
 }
 
 interface NodeResult {
@@ -129,44 +140,14 @@ function validateBudget(budget: SearchBudget): void {
   }
 }
 
-function stateKey(
-  kind: 'decision' | 'chance' | 'pending-leaf',
-  state: PublicSearchState | PendingPreviewState,
-  remainingDepth: number,
-  root: boolean,
-  budget: SearchBudget,
-): string {
-  const board = state.board.map((row) => row.join(',')).join(';');
-  const current = state.current;
-  const next = 'next' in state ? state.next : '-';
-  return [
-    kind,
-    board,
-    current.type,
-    current.rotation,
-    current.position.x,
-    current.position.y,
-    next,
-    state.hold ?? '-',
-    state.holdAvailable ? 1 : 0,
-    state.unseenBagMask,
-    remainingDepth,
-    root ? 1 : 0,
-    budget.maxRootPlacements,
-    budget.maxChildPlacements,
-  ].join('|');
-}
-
 function cachedResult(context: SearchContext, key: string): NodeResult | null {
-  if (context.budget.cacheEnabled === false) return null;
   const value = context.cache.get(key);
   if (value === undefined) return null;
-  context.diagnostics.cacheHits++;
   return { value, completed: true, action: null };
 }
 
 function cacheComplete(context: SearchContext, key: string, result: NodeResult): void {
-  if (context.budget.cacheEnabled !== false && result.completed) {
+  if (result.completed) {
     context.cache.set(key, result.value);
   }
 }
@@ -186,17 +167,20 @@ function rankPlacements(
   context: SearchContext,
   root: boolean,
 ): RankedPlacement[] {
-  const entries = enumeratePlacements(state.board, state.current)
-    .map((placement, enumerationIndex) => {
-      const evaluated = evaluatePlacement(state, placement, context.weights);
-      return {
-        placement,
-        immediateHeuristic: evaluated.heuristic,
-        pending: evaluated.pending,
-        enumerationIndex,
-      };
-    });
+  const entries = context.placementCache.get(state).map((prototype) => ({
+    placement: prototype.placement,
+    immediateHeuristic: prototype.immediateHeuristic,
+    pending: materializePending(prototype, state),
+    enumerationIndex: prototype.enumerationIndex,
+  }));
   return selectPlacementBeam(entries, root, context.budget);
+}
+
+function syncCacheDiagnostics(context: SearchContext): void {
+  context.diagnostics.cacheHits = context.cache.hits;
+  context.diagnostics.placementCacheHits = context.placementCache.hits;
+  context.diagnostics.placementCacheEntries = context.placementCache.size;
+  context.diagnostics.transpositionEntries = context.cache.size;
 }
 
 function addImmediate(immediateHeuristic: number, future: SearchValue): SearchValue {
@@ -218,7 +202,7 @@ function searchChance(
   context: SearchContext,
 ): NodeResult {
   if (context.budget.shouldAbort()) return abortResult(context);
-  const key = stateKey('chance', pending, remainingDepth, root, context.budget);
+  const key = `chance|${pendingStateKey(pending, remainingDepth, root)}`;
   const cached = cachedResult(context, key);
   if (cached !== null) return cached;
 
@@ -256,7 +240,7 @@ function searchPendingLeaf(
   context: SearchContext,
 ): NodeResult {
   if (context.budget.shouldAbort()) return abortResult(context);
-  const key = stateKey('pending-leaf', pending, 1, root, context.budget);
+  const key = `pending-leaf|${pendingStateKey(pending, 1, root)}`;
   const cached = cachedResult(context, key);
   if (cached !== null) return cached;
 
@@ -293,7 +277,7 @@ function searchDecision(
   context: SearchContext,
 ): NodeResult {
   if (context.budget.shouldAbort()) return abortResult(context);
-  const key = stateKey('decision', state, remainingDepth, root, context.budget);
+  const key = decisionStateKey(state, remainingDepth, root);
   const cached = cachedResult(context, key);
   if (cached !== null) return cached;
 
@@ -346,6 +330,33 @@ function searchDecision(
   return result;
 }
 
+function emptySearchDiagnostics(): SearchDiagnostics {
+  return {
+    completedDepth: 0,
+    expandedDecisionNodes: 0,
+    expandedChanceNodes: 0,
+    cacheHits: 0,
+    placementCacheHits: 0,
+    placementCacheEntries: 0,
+    transpositionEntries: 0,
+    aborted: false,
+  };
+}
+
+function createSearchContext(
+  weights: number[],
+  budget: SearchBudget,
+  diagnostics: SearchDiagnostics,
+): SearchContext {
+  const cacheEnabled = budget.cacheEnabled !== false;
+  return {
+    budget,
+    diagnostics,
+    cache: new CappedCache(MAX_TRANSPOSITION_ENTRIES, cacheEnabled),
+    placementCache: new PlacementPrototypeCache(weights, cacheEnabled),
+  };
+}
+
 export function searchFixed(
   state: PublicSearchState,
   weights: number[],
@@ -360,42 +371,30 @@ export function searchFixed(
     throw new Error(`search weights must contain exactly ${FEATURE_COUNT} finite values`);
   }
 
-  const diagnostics: SearchDiagnostics = {
-    completedDepth: 0,
-    expandedDecisionNodes: 0,
-    expandedChanceNodes: 0,
-    cacheHits: 0,
-    aborted: false,
-  };
-  const context: SearchContext = {
-    weights,
-    budget,
-    diagnostics,
-    cache: new Map(),
-  };
+  const diagnostics = emptySearchDiagnostics();
+  const context = createSearchContext(weights, budget, diagnostics);
   const result = searchDecision(state, budget.maxLockedDepth, true, context);
+  syncCacheDiagnostics(context);
   if (result.completed) diagnostics.completedDepth = budget.maxLockedDepth;
   if (result.completed && result.action !== null) {
     return { action: result.action, value: result.value, diagnostics };
   }
   if (!result.completed) {
-    const fallbackDiagnostics: SearchDiagnostics = {
-      completedDepth: 0,
-      expandedDecisionNodes: 0,
-      expandedChanceNodes: 0,
-      cacheHits: 0,
-      aborted: false,
+    const fallbackDiagnostics = emptySearchDiagnostics();
+    const fallbackBudget: SearchBudget = {
+      ...budget,
+      maxLockedDepth: 1,
+      shouldAbort: () => false,
     };
-    const fallbackContext: SearchContext = {
-      weights,
-      budget: { ...budget, maxLockedDepth: 1, shouldAbort: () => false },
-      diagnostics: fallbackDiagnostics,
-      cache: new Map(),
-    };
+    const fallbackContext = createSearchContext(weights, fallbackBudget, fallbackDiagnostics);
     const fallback = searchDecision(state, 1, true, fallbackContext);
+    syncCacheDiagnostics(fallbackContext);
     diagnostics.expandedDecisionNodes += fallbackDiagnostics.expandedDecisionNodes;
     diagnostics.expandedChanceNodes += fallbackDiagnostics.expandedChanceNodes;
     diagnostics.cacheHits += fallbackDiagnostics.cacheHits;
+    diagnostics.placementCacheHits += fallbackDiagnostics.placementCacheHits;
+    diagnostics.placementCacheEntries += fallbackDiagnostics.placementCacheEntries;
+    diagnostics.transpositionEntries += fallbackDiagnostics.transpositionEntries;
     diagnostics.completedDepth = fallback.completed ? 1 : 0;
     if (fallback.action !== null) {
       return { action: fallback.action, value: fallback.value, diagnostics };
@@ -440,19 +439,8 @@ export function searchIterative(
     throw new Error(`search weights must contain exactly ${FEATURE_COUNT} finite values`);
   }
 
-  const diagnostics: SearchDiagnostics = {
-    completedDepth: 0,
-    expandedDecisionNodes: 0,
-    expandedChanceNodes: 0,
-    cacheHits: 0,
-    aborted: false,
-  };
-  const context: SearchContext = {
-    weights,
-    budget,
-    diagnostics,
-    cache: new Map(),
-  };
+  const diagnostics = emptySearchDiagnostics();
+  const context = createSearchContext(weights, budget, diagnostics);
   let committed: SearchDecision | null = null;
   let aborted = false;
   for (let depth = 1; depth <= budget.maxLockedDepth; depth++) {
@@ -467,6 +455,7 @@ export function searchIterative(
       committed = { action: result.action, value: result.value, diagnostics };
     }
   }
+  syncCacheDiagnostics(context);
   if (committed !== null) return committed;
 
   diagnostics.aborted = aborted;

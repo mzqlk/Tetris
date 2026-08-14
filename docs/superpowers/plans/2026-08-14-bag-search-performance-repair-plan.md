@@ -30,6 +30,7 @@
 - Create: `src/ai/searchCache.test.ts`
 - Modify: `src/ai/search.ts`
 - Modify: `src/ai/search.test.ts`
+- Modify: `src/hooks/useAiPlayer.test.ts`
 
 **Interfaces:**
 - Consumes: `Board`, `Piece`, `Placement`, `PublicSearchState`, `PendingPreviewState`, `enumeratePlacements`, and `evaluatePlacement`.
@@ -211,6 +212,10 @@ return {
 
 Replace `rankPlacements` in `search.ts` so it selects the existing stable beam from materialized prototypes. Create one `PlacementPrototypeCache` per `searchFixed`/`searchIterative` context. At return, copy its `hits` and `size` into diagnostics. `cacheEnabled: false` disables both transposition insertion and placement-prototype reuse so the existing on/off result test remains a semantic oracle.
 
+Add the three new decision-local diagnostic fields with zero values to the
+handwritten `searchIterative` mocks in `src/hooks/useAiPlayer.test.ts`; do not
+change hook behavior or persisted simulation diagnostics.
+
 - [ ] **Step 7: Verify focused search behavior**
 
 Run:
@@ -228,7 +233,7 @@ Run:
 ```powershell
 git diff --check
 git status --short -- public/ai src/ai/trained-weights.json
-git add -- src/ai/searchCache.ts src/ai/searchCache.test.ts src/ai/search.ts src/ai/search.test.ts src/ai/searchCorpus.test.ts
+git add -- docs/superpowers/plans/2026-08-14-bag-search-performance-repair-plan.md src/ai/searchCache.ts src/ai/searchCache.test.ts src/ai/search.ts src/ai/search.test.ts src/ai/searchCorpus.test.ts src/hooks/useAiPlayer.test.ts
 git diff --cached --check
 git diff --cached
 git commit -m "perf(ai): reuse compact placement prototypes"

@@ -118,9 +118,12 @@ describe('depth-four constrained corpus', () => {
     }
     expect(first!.diagnostics).toEqual({
       completedDepth: 4,
-      expandedDecisionNodes: 1000,
+      expandedDecisionNodes: 311,
       expandedChanceNodes: 102,
-      cacheHits: 48,
+      cacheHits: 425,
+      placementCacheHits: 259,
+      placementCacheEntries: 52,
+      transpositionEntries: 413,
       aborted: false,
     });
     expect(second).toEqual(first);
@@ -143,6 +146,9 @@ describe('depth-four constrained corpus', () => {
       expandedDecisionNodes: 9,
       expandedChanceNodes: 10,
       cacheHits: 0,
+      placementCacheHits: 7,
+      placementCacheEntries: 2,
+      transpositionEntries: 19,
       aborted: false,
     });
     expect(second).toEqual(first);

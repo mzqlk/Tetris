@@ -157,6 +157,9 @@ beforeEach(() => {
         expandedDecisionNodes: 1,
         expandedChanceNodes: 0,
         cacheHits: 0,
+        placementCacheHits: 0,
+        placementCacheEntries: 0,
+        transpositionEntries: 0,
         aborted: false,
       },
     };
@@ -311,6 +314,9 @@ describe('useAiPlayer timer and lifecycle integration', () => {
               expandedDecisionNodes: 1,
               expandedChanceNodes: 0,
               cacheHits: 0,
+              placementCacheHits: 0,
+              placementCacheEntries: 0,
+              transpositionEntries: 0,
               aborted: false,
             },
           }
@@ -322,6 +328,9 @@ describe('useAiPlayer timer and lifecycle integration', () => {
               expandedDecisionNodes: 1,
               expandedChanceNodes: 0,
               cacheHits: 0,
+              placementCacheHits: 0,
+              placementCacheEntries: 0,
+              transpositionEntries: 0,
               aborted: false,
             },
           };
