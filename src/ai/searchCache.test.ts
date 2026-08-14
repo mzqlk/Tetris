@@ -3,13 +3,17 @@ import { createEmptyBoard } from '../engine/board';
 import { createPiece } from '../engine/piece';
 import { TOTAL_ROWS } from '../constants';
 import type { PieceType } from '../types';
-import type { PublicSearchState } from './publicState';
+import type { PendingPreviewState, PublicSearchState } from './publicState';
 import {
+  CappedCache,
   MAX_PLACEMENT_CACHE_ENTRIES,
   PlacementPrototypeCache,
+  chanceSurvivalUpperBound,
+  collapseEquivalentPlacements,
   occupancyBoardKey,
   placementPrototypeKey,
   materializePending,
+  shouldPruneChance,
 } from './searchCache';
 
 const zeros = () => Array(13).fill(0);
@@ -32,6 +36,27 @@ function uniqueBoard(index: number) {
   const column = Math.floor(index / (TOTAL_ROWS - 1)) % 10;
   board[row][column] = 1;
   return board;
+}
+
+function pendingState(
+  overrides: Partial<PendingPreviewState> = {},
+): PendingPreviewState {
+  return {
+    board: createEmptyBoard(),
+    current: createPiece(2),
+    hold: null,
+    holdAvailable: true,
+    unseenBagMask: 0b1111100,
+    ...overrides,
+  };
+}
+
+function entry(
+  pending: PendingPreviewState,
+  immediateHeuristic: number,
+  enumerationIndex: number,
+) {
+  return { pending, immediateHeuristic, enumerationIndex };
 }
 
 describe('search cache primitives', () => {
@@ -87,5 +112,51 @@ describe('search cache primitives', () => {
       cache.get(publicState({ board: uniqueBoard(index) }));
     }
     expect(cache.size).toBeLessThanOrEqual(MAX_PLACEMENT_CACHE_ENTRIES);
+  });
+
+  it('never exceeds a capped cache and preserves exact cached values', () => {
+    const cache = new CappedCache<number>(2, true);
+    cache.set('a', 1);
+    cache.set('b', 2);
+    cache.set('c', 3);
+    expect(cache.size).toBe(2);
+    expect(cache.get('a')).toBe(1);
+    expect(cache.get('b')).toBe(2);
+    expect(cache.get('c')).toBeUndefined();
+    expect(cache.hits).toBe(2);
+  });
+
+  it('does not insert or report hits when a capped cache is disabled', () => {
+    const cache = new CappedCache<number>(2, false);
+    cache.set('a', 1);
+    expect(cache.get('a')).toBeUndefined();
+    expect(cache.size).toBe(0);
+    expect(cache.hits).toBe(0);
+  });
+
+  it('keeps only the dominant placement for an equivalent public future', () => {
+    const shared = pendingState();
+    const reduced = collapseEquivalentPlacements([
+      entry(shared, 3, 4),
+      entry(shared, 5, 7),
+      entry({ ...shared, hold: 2 }, 4, 1),
+    ], 3);
+
+    expect(reduced.map(({ immediateHeuristic, enumerationIndex }) =>
+      [immediateHeuristic, enumerationIndex])).toEqual([[5, 7], [4, 1]]);
+  });
+
+  it('keeps the earlier enumeration index when equivalent heuristics tie', () => {
+    const shared = pendingState();
+    expect(collapseEquivalentPlacements([
+      entry(shared, 5, 2), entry(shared, 5, 1),
+    ], 3)[0].enumerationIndex).toBe(1);
+  });
+
+  it('prunes only a strictly worse survival upper bound', () => {
+    expect(chanceSurvivalUpperBound(0.25, 0.5)).toBe(0.75);
+    expect(shouldPruneChance(0.75, 0.8)).toBe(true);
+    expect(shouldPruneChance(0.8, 0.8)).toBe(false);
+    expect(shouldPruneChance(0.8 - 5e-13, 0.8)).toBe(false);
   });
 });

@@ -16,12 +16,18 @@ import {
 } from './publicState';
 import {
   CappedCache,
+  chanceSurvivalUpperBound,
+  collapseEquivalentPlacements,
   decisionStateKey,
   materializePending,
   MAX_TRANSPOSITION_ENTRIES,
   PlacementPrototypeCache,
   pendingStateKey,
+  shouldPruneChance,
+  SURVIVAL_EPSILON,
 } from './searchCache';
+
+export { SURVIVAL_EPSILON } from './searchCache';
 
 export type SearchAction =
   | { kind: 'place'; placement: Placement }
@@ -40,6 +46,8 @@ export interface SearchDiagnostics {
   placementCacheHits: number;
   placementCacheEntries: number;
   transpositionEntries: number;
+  equivalentPlacementsRemoved: number;
+  prunedChanceBranches: number;
   aborted: boolean;
 }
 
@@ -69,8 +77,6 @@ export const FIXED_SEARCH_LIMITS = Object.freeze({
  * smallest genuine rational gap is >= 1/840. This 1e-12 tolerance is many
  * orders smaller and only absorbs IEEE-754 accumulation noise.
  */
-export const SURVIVAL_EPSILON = 1e-12;
-
 const TERMINAL_VALUE: SearchValue = Object.freeze({
   survivalProbability: 0,
   expectedHeuristicValue: 0,
@@ -87,6 +93,7 @@ interface NodeResult {
   value: SearchValue;
   completed: boolean;
   action: SearchAction | null;
+  dominated?: boolean;
 }
 
 interface RankedPlacement {
@@ -147,7 +154,7 @@ function cachedResult(context: SearchContext, key: string): NodeResult | null {
 }
 
 function cacheComplete(context: SearchContext, key: string, result: NodeResult): void {
-  if (result.completed) {
+  if (result.completed && result.dominated !== true) {
     context.cache.set(key, result.value);
   }
 }
@@ -166,6 +173,7 @@ function rankPlacements(
   state: PublicSearchState,
   context: SearchContext,
   root: boolean,
+  remainingDepth: number,
 ): RankedPlacement[] {
   const entries = context.placementCache.get(state).map((prototype) => ({
     placement: prototype.placement,
@@ -173,7 +181,21 @@ function rankPlacements(
     pending: materializePending(prototype, state),
     enumerationIndex: prototype.enumerationIndex,
   }));
-  return selectPlacementBeam(entries, root, context.budget);
+  const beam = selectPlacementBeam(entries, root, context.budget);
+  if (context.budget.cacheEnabled === false) return beam;
+  const reduced = collapseEquivalentPlacements(beam, remainingDepth);
+  context.diagnostics.equivalentPlacementsRemoved += beam.length - reduced.length;
+  return reduced;
+}
+
+function dominatedResult(context: SearchContext): NodeResult {
+  context.diagnostics.prunedChanceBranches++;
+  return {
+    value: TERMINAL_VALUE,
+    action: null,
+    completed: true,
+    dominated: true,
+  };
 }
 
 function syncCacheDiagnostics(context: SearchContext): void {
@@ -200,6 +222,7 @@ function searchChance(
   remainingDepth: number,
   root: boolean,
   context: SearchContext,
+  incumbentSurvival: number | null = null,
 ): NodeResult {
   if (context.budget.shouldAbort()) return abortResult(context);
   const key = `chance|${pendingStateKey(pending, remainingDepth, root)}`;
@@ -209,6 +232,7 @@ function searchChance(
   context.diagnostics.expandedChanceNodes++;
   let survivalProbability = 0;
   let expectedHeuristicValue = 0;
+  let remainingProbability = 1;
   for (const outcome of enumerateBagOutcomes(pending.unseenBagMask)) {
     if (context.budget.shouldAbort()) return abortResult(context);
     const revealed = revealPreview(pending, outcome.piece);
@@ -218,6 +242,13 @@ function searchChance(
     if (!child.completed) return abortResult(context);
     survivalProbability += outcome.probability * child.value.survivalProbability;
     expectedHeuristicValue += outcome.probability * child.value.expectedHeuristicValue;
+    remainingProbability -= outcome.probability;
+    if (context.budget.cacheEnabled !== false && incumbentSurvival !== null && shouldPruneChance(
+      chanceSurvivalUpperBound(survivalProbability, remainingProbability),
+      incumbentSurvival,
+    )) {
+      return dominatedResult(context);
+    }
   }
 
   const result: NodeResult = {
@@ -252,7 +283,7 @@ function searchPendingLeaf(
     next: pending.current.type,
   };
   let best: NodeResult | null = null;
-  for (const ranked of rankPlacements(syntheticState, context, root)) {
+  for (const ranked of rankPlacements(syntheticState, context, root, 1)) {
     if (context.budget.shouldAbort()) return abortResult(context, best);
     const candidate: NodeResult = {
       value: {
@@ -283,7 +314,7 @@ function searchDecision(
 
   context.diagnostics.expandedDecisionNodes++;
   let best: NodeResult | null = null;
-  for (const ranked of rankPlacements(state, context, root)) {
+  for (const ranked of rankPlacements(state, context, root, remainingDepth)) {
     if (context.budget.shouldAbort()) return abortResult(context, best);
     let future: NodeResult;
     if (remainingDepth === 1) {
@@ -293,9 +324,16 @@ function searchDecision(
         action: null,
       };
     } else {
-      future = searchChance(ranked.pending, remainingDepth - 1, false, context);
+      future = searchChance(
+        ranked.pending,
+        remainingDepth - 1,
+        false,
+        context,
+        best?.value.survivalProbability ?? null,
+      );
     }
     if (!future.completed) return abortResult(context, best);
+    if (future.dominated === true) continue;
 
     const candidate: NodeResult = {
       value: addImmediate(ranked.immediateHeuristic, future.value),
@@ -314,9 +352,20 @@ function searchDecision(
     } else if (remainingDepth === 1) {
       held = searchPendingLeaf(hold.state, root, context);
     } else {
-      held = searchChance(hold.state, remainingDepth, root, context);
+      held = searchChance(
+        hold.state,
+        remainingDepth,
+        root,
+        context,
+        best?.value.survivalProbability ?? null,
+      );
     }
     if (!held.completed) return abortResult(context, best);
+    if (held.dominated === true) {
+      const result = best ?? { value: TERMINAL_VALUE, completed: true, action: null };
+      cacheComplete(context, key, result);
+      return result;
+    }
     const candidate: NodeResult = {
       value: held.value,
       completed: true,
@@ -339,6 +388,8 @@ function emptySearchDiagnostics(): SearchDiagnostics {
     placementCacheHits: 0,
     placementCacheEntries: 0,
     transpositionEntries: 0,
+    equivalentPlacementsRemoved: 0,
+    prunedChanceBranches: 0,
     aborted: false,
   };
 }

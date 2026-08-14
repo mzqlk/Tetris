@@ -242,11 +242,19 @@ describe('fixed expectimax search', () => {
       maxRootPlacements: 1,
       maxChildPlacements: 1,
     });
+    const oracle = searchFixed(twoFuturePieces, zeros(), {
+      ...fixedBudget(3, false),
+      maxRootPlacements: 1,
+      maxChildPlacements: 1,
+    });
 
     expect(result).not.toBeNull();
+    expect(stripDiagnostics(result)).toEqual(stripDiagnostics(oracle));
     expect(result!.value.survivalProbability).toBeGreaterThan(0);
     expect(result!.value.survivalProbability).toBeLessThan(1);
     expect(Number.isFinite(result!.value.expectedHeuristicValue)).toBe(true);
+    expect(result!.diagnostics.prunedChanceBranches).toBeGreaterThan(0);
+    expect(oracle!.diagnostics.prunedChanceBranches).toBe(0);
   });
 
   it('does not reveal a preview after the leaf placement', () => {

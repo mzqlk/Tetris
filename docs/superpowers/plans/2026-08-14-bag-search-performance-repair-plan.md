@@ -249,6 +249,7 @@ Expected: protected-path status is empty and the commit contains only the five l
 - Modify: `src/ai/search.ts`
 - Modify: `src/ai/search.test.ts`
 - Modify: `src/ai/searchCorpus.test.ts`
+- Modify: `src/hooks/useAiPlayer.test.ts`
 
 **Interfaces:**
 - Consumes: Task 1 compact keys, placement prototypes, stable `selectPlacementBeam`, and `SURVIVAL_EPSILON`.
@@ -415,7 +416,7 @@ Expected: all tests and both typechecks PASS with unchanged fixed-search action/
 
 ```powershell
 git status --short -- public/ai src/ai/trained-weights.json
-git add -- src/ai/searchCache.ts src/ai/searchCache.test.ts src/ai/search.ts src/ai/search.test.ts src/ai/searchCorpus.test.ts
+git add -- docs/superpowers/plans/2026-08-14-bag-search-performance-repair-plan.md src/ai/searchCache.ts src/ai/searchCache.test.ts src/ai/search.ts src/ai/search.test.ts src/ai/searchCorpus.test.ts src/hooks/useAiPlayer.test.ts
 git diff --cached --check
 git diff --cached
 git commit -m "perf(ai): bound exact expectimax expansion"

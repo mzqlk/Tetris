@@ -9,6 +9,7 @@ import type { PendingPreviewState, PublicSearchState } from './publicState';
 
 export const MAX_TRANSPOSITION_ENTRIES = 65_536;
 export const MAX_PLACEMENT_CACHE_ENTRIES = 16_384;
+export const SURVIVAL_EPSILON = 1e-12;
 
 export interface PlacementPrototype {
   placement: Placement;
@@ -118,6 +119,41 @@ export function pendingStateKey(
     // relevant even when the revealed preview is not later consumed by Hold.
     state.unseenBagMask,
   ].join('|');
+}
+
+export function collapseEquivalentPlacements<T extends {
+  pending: PendingPreviewState;
+  immediateHeuristic: number;
+  enumerationIndex: number;
+}>(entries: readonly T[], remainingDepth: number): T[] {
+  const dominant = new Map<string, T>();
+  for (const entry of entries) {
+    const key = pendingStateKey(entry.pending, remainingDepth, false);
+    const existing = dominant.get(key);
+    if (existing === undefined
+      || entry.immediateHeuristic > existing.immediateHeuristic
+      || (entry.immediateHeuristic === existing.immediateHeuristic
+        && entry.enumerationIndex < existing.enumerationIndex)) {
+      dominant.set(key, entry);
+    }
+  }
+  return [...dominant.values()].sort((left, right) =>
+    right.immediateHeuristic - left.immediateHeuristic
+    || left.enumerationIndex - right.enumerationIndex);
+}
+
+export function chanceSurvivalUpperBound(
+  accumulatedSurvival: number,
+  remainingProbability: number,
+): number {
+  return accumulatedSurvival + Math.max(0, remainingProbability);
+}
+
+export function shouldPruneChance(
+  survivalUpperBound: number,
+  incumbentSurvival: number,
+): boolean {
+  return survivalUpperBound < incumbentSurvival - SURVIVAL_EPSILON;
 }
 
 export class PlacementPrototypeCache {

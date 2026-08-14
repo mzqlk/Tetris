@@ -124,6 +124,8 @@ describe('depth-four constrained corpus', () => {
       placementCacheHits: 259,
       placementCacheEntries: 52,
       transpositionEntries: 413,
+      equivalentPlacementsRemoved: 0,
+      prunedChanceBranches: 0,
       aborted: false,
     });
     expect(second).toEqual(first);
@@ -149,6 +151,8 @@ describe('depth-four constrained corpus', () => {
       placementCacheHits: 7,
       placementCacheEntries: 2,
       transpositionEntries: 19,
+      equivalentPlacementsRemoved: 0,
+      prunedChanceBranches: 0,
       aborted: false,
     });
     expect(second).toEqual(first);

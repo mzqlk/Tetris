@@ -160,6 +160,8 @@ beforeEach(() => {
         placementCacheHits: 0,
         placementCacheEntries: 0,
         transpositionEntries: 0,
+        equivalentPlacementsRemoved: 0,
+        prunedChanceBranches: 0,
         aborted: false,
       },
     };
@@ -317,6 +319,8 @@ describe('useAiPlayer timer and lifecycle integration', () => {
               placementCacheHits: 0,
               placementCacheEntries: 0,
               transpositionEntries: 0,
+              equivalentPlacementsRemoved: 0,
+              prunedChanceBranches: 0,
               aborted: false,
             },
           }
@@ -331,6 +335,8 @@ describe('useAiPlayer timer and lifecycle integration', () => {
               placementCacheHits: 0,
               placementCacheEntries: 0,
               transpositionEntries: 0,
+              equivalentPlacementsRemoved: 0,
+              prunedChanceBranches: 0,
               aborted: false,
             },
           };
