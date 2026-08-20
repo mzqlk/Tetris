@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { DEFAULT_CONFIG, resolveWorkers } from './config';
+import { describe, it, expect, expectTypeOf } from 'vitest';
+import { DEFAULT_CONFIG, resolveWorkers, type TrainConfig } from './config';
 
 describe('resolveWorkers', () => {
   it('leaves a core free for the rest of the machine by default', () => {
@@ -50,12 +50,19 @@ describe('DEFAULT_CONFIG', () => {
     expect(DEFAULT_CONFIG.reevalMaxPieces).toBe(5000);
   });
 
-  it('uses the exact bag-expectimax search contract', () => {
-    expect(DEFAULT_CONFIG).toMatchObject({
-      searchDepth: 4,
-      rootBeamWidth: 64,
-      childBeamWidth: 32,
-    });
-    expect(DEFAULT_CONFIG).not.toHaveProperty('depth');
+  it('serializes only evolution, schedule, and worker settings', () => {
+    expect(Object.keys(DEFAULT_CONFIG).sort()).toEqual([
+      'baseSeed', 'eliteFrac', 'gamesPerCandidate', 'initialMaxPieces',
+      'initialNoise', 'maxPiecesCap', 'noiseDecay', 'noiseFloor', 'population',
+      'reevalEvery', 'reevalGames', 'reevalMaxPieces', 'workers',
+    ]);
+  });
+
+  it('excludes fixed search settings from the TrainConfig type boundary', () => {
+    type SearchConfigKeys = Extract<
+      keyof TrainConfig,
+      'searchDepth' | 'rootBeamWidth' | 'childBeamWidth'
+    >;
+    expectTypeOf<SearchConfigKeys>().toEqualTypeOf<never>();
   });
 });

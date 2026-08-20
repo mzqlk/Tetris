@@ -1,11 +1,15 @@
 import { useEffect, useState } from 'react';
 import { FEATURE_COUNT } from '../../ai/features';
-import { SCORE_RATE_OBJECTIVE } from '../../ai/trainingObjective';
+import {
+  SCORE_RATE_OBJECTIVE,
+  SEARCH_METADATA,
+  hasSearchMetadata,
+} from '../../ai/trainingObjective';
 import type { StrategyDiagnostics } from '../../ai/tetrisStrategy';
-import type { SearchDiagnostics } from '../../ai/weights';
+import { parseSearchDiagnostics } from '../../ai/weights';
 import type { LogEntry } from './types';
 
-export const LOG_URL = '/ai/score-rate-v4/training-log.jsonl';
+export const LOG_URL = '/ai/score-rate-v5/training-log.jsonl';
 
 /** Without these a line is meaningless, so it is dropped. */
 const NUMBER_FIELDS = [
@@ -33,15 +37,6 @@ const strategy = (value: unknown): StrategyDiagnostics => {
     meanCleanWellDepth: num(raw.meanCleanWellDepth, 0),
     meanTetrisSetupProgress: num(raw.meanTetrisSetupProgress, 0),
     meanTetrisReadyRows: num(raw.meanTetrisReadyRows, 0),
-  };
-};
-const search = (value: unknown): SearchDiagnostics => {
-  const raw = typeof value === 'object' && value !== null ? value as Record<string, unknown> : {};
-  return {
-    holdActions: num(raw.holdActions, 0), holdRate: num(raw.holdRate, 0),
-    meanCompletedDepth: num(raw.meanCompletedDepth, 0), minCompletedDepth: num(raw.minCompletedDepth, 0),
-    expandedDecisionNodes: num(raw.expandedDecisionNodes, 0), expandedChanceNodes: num(raw.expandedChanceNodes, 0),
-    cacheHits: num(raw.cacheHits, 0), abortedSearches: num(raw.abortedSearches, 0),
   };
 };
 
@@ -75,7 +70,24 @@ export function parseLog(text: string): LogEntry[] {
     const e = value as Record<string, unknown>;
     if (NUMBER_FIELDS.some((f) => typeof e[f] !== 'number' || !Number.isFinite(e[f]))) continue;
     if (ARRAY_FIELDS.some((f) => !weightVector(e[f]))) continue;
-    if (e.objective !== SCORE_RATE_OBJECTIVE) continue;
+    if (e.objective !== SCORE_RATE_OBJECTIVE || !hasSearchMetadata(e)) continue;
+    const bestSearchDiagnostics = parseSearchDiagnostics(
+      e.bestSearchDiagnostics,
+      SEARCH_METADATA.maxWorkUnits,
+    );
+    const medianSearchDiagnostics = parseSearchDiagnostics(
+      e.medianSearchDiagnostics,
+      SEARCH_METADATA.maxWorkUnits,
+    );
+    const eliteSearchDiagnostics = parseSearchDiagnostics(
+      e.eliteSearchDiagnostics,
+      SEARCH_METADATA.maxWorkUnits,
+    );
+    if (
+      bestSearchDiagnostics === null ||
+      medianSearchDiagnostics === null ||
+      eliteSearchDiagnostics === null
+    ) continue;
 
     entries.push({
       ...(value as LogEntry),
@@ -96,9 +108,9 @@ export function parseLog(text: string): LogEntry[] {
       bestStrategyDiagnostics: strategy(e.bestStrategyDiagnostics),
       medianStrategyDiagnostics: strategy(e.medianStrategyDiagnostics),
       eliteStrategyDiagnostics: strategy(e.eliteStrategyDiagnostics),
-      bestSearchDiagnostics: search(e.bestSearchDiagnostics),
-      medianSearchDiagnostics: search(e.medianSearchDiagnostics),
-      eliteSearchDiagnostics: search(e.eliteSearchDiagnostics),
+      bestSearchDiagnostics,
+      medianSearchDiagnostics,
+      eliteSearchDiagnostics,
       gamesPerCandidate: num(e.gamesPerCandidate, 0),
       elapsedMs: num(e.elapsedMs, 0),
     });

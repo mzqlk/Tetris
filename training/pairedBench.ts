@@ -1,11 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { hashSeed } from '../src/ai/rng';
-import { FIXED_SEARCH_LIMITS } from '../src/ai/search';
 import { simulateGame } from '../src/ai/simulate';
 import { tetrisLineShare } from '../src/ai/lineClears';
 import { parseWeightsFile, toVector, type WeightsFile } from '../src/ai/weights';
 import { parseCandidateWeights } from './candidateWeights';
+import { SEARCH_METADATA, type SearchMetadata } from './objective';
 import {
   evaluatePairedAcceptance,
   type PairedGameResult,
@@ -16,8 +16,9 @@ const MAX_PIECES = 5000;
 
 export interface PairedSimulationPlan {
   seeds: number[];
-  baseline: { weights: number[]; search: typeof FIXED_SEARCH_LIMITS };
-  candidate: { weights: number[]; search: typeof FIXED_SEARCH_LIMITS };
+  baseline: { weights: number[] };
+  candidate: { weights: number[] };
+  searchMetadata: SearchMetadata;
   maxPieces: 5000;
 }
 
@@ -121,12 +122,13 @@ export function buildPairedPlan(
     gen: 40,
   });
   if (parseCandidateWeights(candidate) === null) {
-    throw new Error('candidate must match the exact version 5 score-rate-v4 search contract 4/64/32');
+    throw new Error('candidate must match the exact version 6 score-rate-v5 search metadata');
   }
   return {
     seeds: Array.from({ length: GAMES }, (_, gameIndex) => hashSeed(seed, gameIndex)),
-    baseline: { weights: toVector(baseline.weights), search: FIXED_SEARCH_LIMITS },
-    candidate: { weights: toVector(candidate.weights), search: FIXED_SEARCH_LIMITS },
+    baseline: { weights: toVector(baseline.weights) },
+    candidate: { weights: toVector(candidate.weights) },
+    searchMetadata: SEARCH_METADATA,
     maxPieces: MAX_PIECES,
   };
 }
@@ -158,13 +160,11 @@ async function main(): Promise<void> {
       weights: plan.baseline.weights,
       seed,
       maxPieces: plan.maxPieces,
-      search: plan.baseline.search,
     }));
     const candidate = toPairedGame(simulateGame({
       weights: plan.candidate.weights,
       seed,
       maxPieces: plan.maxPieces,
-      search: plan.candidate.search,
     }));
     baselineGames.push(baseline);
     candidateGames.push(candidate);

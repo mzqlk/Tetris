@@ -1,13 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { FEATURE_COUNT } from '../../ai/features';
+import { SEARCH_METADATA, SEARCH_METADATA_KEYS } from '../../ai/trainingObjective';
 import { LOG_URL, parseLog } from './useTrainingLog';
 
 const line = (gen: number) => JSON.stringify({
-  objective: 'score-rate-v4',
-  searchContract: 'bag-expectimax-hold-v1',
-  searchDepth: 4,
-  rootBeamWidth: 64,
-  childBeamWidth: 32,
+  objective: 'score-rate-v5',
+  ...SEARCH_METADATA,
   gen,
   ts: 1785000000000 + gen,
   bestScoreRate: 125.5 + gen,
@@ -44,16 +42,16 @@ const line = (gen: number) => JSON.stringify({
     meanTetrisSetupProgress: 4,
     meanTetrisReadyRows: 3,
   },
-  bestSearchDiagnostics: { holdActions: 1, holdRate: 0.1, meanCompletedDepth: 4, minCompletedDepth: 4, expandedDecisionNodes: 10, expandedChanceNodes: 20, cacheHits: 3, abortedSearches: 0 },
-  medianSearchDiagnostics: { holdActions: 1, holdRate: 0.1, meanCompletedDepth: 4, minCompletedDepth: 4, expandedDecisionNodes: 10, expandedChanceNodes: 20, cacheHits: 3, abortedSearches: 0 },
-  eliteSearchDiagnostics: { holdActions: 1, holdRate: 0.1, meanCompletedDepth: 4, minCompletedDepth: 4, expandedDecisionNodes: 10, expandedChanceNodes: 20, cacheHits: 3, abortedSearches: 0 },
+  bestSearchDiagnostics: { searchCalls: 10, holdActions: 1, holdRate: 0.1, meanCompletedDepth: 4, minCompletedDepth: 4, completedDepthHistogram: [0, 0, 0, 0, 10], totalWorkUnitsUsed: 100, meanWorkUnitsUsed: 10, maxWorkUnitsUsed: 10, budgetExhaustedSearches: 1, budgetExhaustionRate: 0.1, placementEvaluationUnits: 50, chanceExpansionUnits: 25, cacheHitUnits: 25, expandedDecisionNodes: 10, expandedChanceNodes: 20, cacheHits: 3 },
+  medianSearchDiagnostics: { searchCalls: 10, holdActions: 1, holdRate: 0.1, meanCompletedDepth: 4, minCompletedDepth: 4, completedDepthHistogram: [0, 0, 0, 0, 10], totalWorkUnitsUsed: 100, meanWorkUnitsUsed: 10, maxWorkUnitsUsed: 10, budgetExhaustedSearches: 1, budgetExhaustionRate: 0.1, placementEvaluationUnits: 50, chanceExpansionUnits: 25, cacheHitUnits: 25, expandedDecisionNodes: 10, expandedChanceNodes: 20, cacheHits: 3 },
+  eliteSearchDiagnostics: { searchCalls: 10, holdActions: 1, holdRate: 0.1, meanCompletedDepth: 4, minCompletedDepth: 4, completedDepthHistogram: [0, 0, 0, 0, 10], totalWorkUnitsUsed: 100, meanWorkUnitsUsed: 10, maxWorkUnitsUsed: 10, budgetExhaustedSearches: 1, budgetExhaustionRate: 0.1, placementEvaluationUnits: 50, chanceExpansionUnits: 25, cacheHitUnits: 25, expandedDecisionNodes: 10, expandedChanceNodes: 20, cacheHits: 3 },
   gamesPerCandidate: 5,
   elapsedMs: 1000,
 });
 
 describe('parseLog', () => {
-  it('uses the score-rate-v4 log URL', () => {
-    expect(LOG_URL).toBe('/ai/score-rate-v4/training-log.jsonl');
+  it('uses the score-rate-v5 log URL', () => {
+    expect(LOG_URL).toBe('/ai/score-rate-v5/training-log.jsonl');
   });
 
   it('parses one entry per line', () => {
@@ -66,7 +64,7 @@ describe('parseLog', () => {
   it('parses score-rate fields used by the dashboard', () => {
     const [entry] = parseLog(line(0));
     expect(entry).toMatchObject({
-      objective: 'score-rate-v4',
+      objective: 'score-rate-v5',
       bestScoreRate: 125.5,
       medianScoreRate: 75,
       medianScore: 22500,
@@ -90,14 +88,39 @@ describe('parseLog', () => {
         meanTetrisSetupProgress: 4,
         meanTetrisReadyRows: 3,
       },
+      bestSearchDiagnostics: {
+        completedDepthHistogram: [0, 0, 0, 0, 10],
+        meanWorkUnitsUsed: 10,
+        maxWorkUnitsUsed: 10,
+        budgetExhaustionRate: 0.1,
+      },
     });
   });
 
-  it('ignores a score-rate-v2 generation line', () => {
-    const legacy = JSON.parse(line(0));
-    legacy.objective = 'score-rate-v3';
-    expect(parseLog(`${JSON.stringify(legacy)}\n${line(1)}`)).toHaveLength(1);
-    expect(parseLog(`${JSON.stringify(legacy)}\n${line(1)}`)[0].gen).toBe(1);
+  it.each(['score-rate-v1', 'score-rate-v2', 'score-rate-v3', 'score-rate-v4'])(
+    'ignores a %s generation line',
+    (objective) => {
+      const legacy = JSON.parse(line(0));
+      legacy.objective = objective;
+      expect(parseLog(`${JSON.stringify(legacy)}\n${line(1)}`)).toHaveLength(1);
+      expect(parseLog(`${JSON.stringify(legacy)}\n${line(1)}`)[0].gen).toBe(1);
+    },
+  );
+
+  it.each(SEARCH_METADATA_KEYS)(
+    'ignores a v5 line with wrong %s metadata before normalizing diagnostics',
+    (field) => {
+      const invalid = JSON.parse(line(0));
+      invalid[field] = field === 'budgetCorpus' ? 'wrong-corpus' : -1;
+      delete invalid.bestSearchDiagnostics.completedDepthHistogram;
+      expect(parseLog(JSON.stringify(invalid))).toEqual([]);
+    },
+  );
+
+  it('ignores a v5 line whose exact diagnostics are malformed', () => {
+    const invalid = JSON.parse(line(0));
+    invalid.bestSearchDiagnostics.budgetExhaustionRate = 0.2;
+    expect(parseLog(JSON.stringify(invalid))).toEqual([]);
   });
 
   it('returns an empty array for empty input', () => {
@@ -117,7 +140,7 @@ describe('parseLog', () => {
 
   it('ignores reevaluation events between generation records', () => {
     const reevaluation = JSON.stringify({
-      objective: 'score-rate-v3',
+      objective: 'score-rate-v5',
       kind: 'reevaluation',
       gen: 10,
       ts: 1785000000010,

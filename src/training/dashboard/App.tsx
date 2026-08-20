@@ -16,7 +16,7 @@ export default function App() {
     return (
       <div className={styles.page}>
         <h1 className={styles.title}>Tetris AI — Training</h1>
-        <p className={styles.subtitle}>public/ai/score-rate-v4/training-log.jsonl</p>
+        <p className={styles.subtitle}>public/ai/score-rate-v5/training-log.jsonl</p>
         <div className={styles.empty}>No training data yet — run <code>npm run train</code> and the charts will appear automatically</div>
       </div>
     );
@@ -39,6 +39,10 @@ export default function App() {
     ['Best clean well', latest.bestStrategyDiagnostics.meanCleanWellDepth.toFixed(2)],
     ['Elite setup progress', latest.eliteStrategyDiagnostics.meanTetrisSetupProgress.toFixed(2)],
     ['Elite ready rows', latest.eliteStrategyDiagnostics.meanTetrisReadyRows.toFixed(2)],
+    ['Best depth histogram', latest.bestSearchDiagnostics.completedDepthHistogram.join('/')],
+    ['Best mean work units', latest.bestSearchDiagnostics.meanWorkUnitsUsed.toFixed(1)],
+    ['Best max work units', latest.bestSearchDiagnostics.maxWorkUnitsUsed.toLocaleString()],
+    ['Best budget exhaustion', `${(100 * latest.bestSearchDiagnostics.budgetExhaustionRate).toFixed(1)}%`],
     ['Piece cap', latest.maxPieces.toLocaleString()],
     ['Elapsed', formatDuration(totalMs)],
   ];
@@ -46,7 +50,7 @@ export default function App() {
   return (
     <div className={styles.page}>
       <h1 className={styles.title}>Tetris AI — Training</h1>
-      <p className={styles.subtitle}>{entries.length} generations · live from public/ai/score-rate-v4/training-log.jsonl</p>
+      <p className={styles.subtitle}>{entries.length} generations · live from public/ai/score-rate-v5/training-log.jsonl</p>
 
       <div className={styles.metrics}>
         {metrics.map(([label, value]) => (

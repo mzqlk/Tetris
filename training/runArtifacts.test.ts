@@ -10,6 +10,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { SEARCH_METADATA, SEARCH_METADATA_KEYS } from './objective';
 import {
   assertFreshRun,
   readCompatibleCheckpoint,
@@ -19,7 +20,7 @@ import {
 
 const dirs: string[] = [];
 const temp = () => {
-  const dir = mkdtempSync(join(tmpdir(), 'tetris-score-rate-v4-'));
+  const dir = mkdtempSync(join(tmpdir(), 'tetris-score-rate-v5-'));
   dirs.push(dir);
   return dir;
 };
@@ -37,23 +38,28 @@ const STRATEGY = {
 };
 const SURVIVAL = { pieceCapGames: 30, gameoverGames: 0 };
 const SEARCH = {
+  searchCalls: 6_000,
   holdActions: 900,
   holdRate: 0.15,
   meanCompletedDepth: 3.9,
   minCompletedDepth: 3,
+  completedDepthHistogram: [0, 0, 0, 600, 5_400] as [number, number, number, number, number],
+  totalWorkUnitsUsed: 600_000,
+  meanWorkUnitsUsed: 100,
+  maxWorkUnitsUsed: 100,
+  budgetExhaustedSearches: 1,
+  budgetExhaustionRate: 1 / 6_000,
+  placementEvaluationUnits: 300_000,
+  chanceExpansionUnits: 200_000,
+  cacheHitUnits: 100_000,
   expandedDecisionNodes: 12_000,
   expandedChanceNodes: 8_000,
   cacheHits: 2_000,
-  abortedSearches: 1,
 };
-const ROOT = resolve(__dirname, '..');
 const CONFIG = {
   population: 100,
   eliteFrac: 0.1,
   gamesPerCandidate: 5,
-  searchDepth: 4 as const,
-  rootBeamWidth: 64 as const,
-  childBeamWidth: 32 as const,
   initialMaxPieces: 300,
   maxPiecesCap: 2_000,
   initialNoise: 0.5,
@@ -96,7 +102,7 @@ const CANDIDATE_2 = {
     meanTetrisReadyRows: 1.1,
   },
   survivalDiagnostics: SURVIVAL,
-  searchDiagnostics: { ...SEARCH, holdActions: 950, holdRate: 0.16 },
+  searchDiagnostics: { ...SEARCH, holdActions: 950, holdRate: 950 / 6_000 },
   gen: 2,
   evalGames: 30,
   evalMaxPieces: 5_000,
@@ -116,15 +122,15 @@ const CANDIDATE_4_KEEP = {
     meanTetrisReadyRows: 1.2,
   },
   survivalDiagnostics: SURVIVAL,
-  searchDiagnostics: { ...SEARCH, holdActions: 875, holdRate: 0.14 },
+  searchDiagnostics: { ...SEARCH, holdActions: 875, holdRate: 875 / 6_000 },
   gen: 4,
   evalGames: 30,
   evalMaxPieces: 5_000,
 };
 
 const CHECKPOINT = {
-  version: 5,
-  objective: 'score-rate-v4',
+  version: 6,
+  objective: 'score-rate-v5',
   gen: 2,
   mu: AXIS_0,
   sigma: SIGMA,
@@ -133,18 +139,12 @@ const CHECKPOINT = {
   config: CONFIG,
   publishedBaseline: BASELINE,
   bestQualifiedCandidate: CANDIDATE_2,
-  searchContract: 'bag-expectimax-hold-v1',
-  searchDepth: 4,
-  rootBeamWidth: 64,
-  childBeamWidth: 32,
+  ...SEARCH_METADATA,
 };
 
 const GEN_0 = {
-  objective: 'score-rate-v4',
-  searchContract: 'bag-expectimax-hold-v1',
-  searchDepth: 4,
-  rootBeamWidth: 64,
-  childBeamWidth: 32,
+  objective: 'score-rate-v5',
+  ...SEARCH_METADATA,
   gen: 0,
   ts: 1_000,
   bestScoreRate: 5,
@@ -169,9 +169,9 @@ const GEN_0 = {
   bestStrategyDiagnostics: { ...STRATEGY },
   medianStrategyDiagnostics: { ...STRATEGY },
   eliteStrategyDiagnostics: { ...STRATEGY },
-  bestSearchDiagnostics: { holdActions: 1, holdRate: 0.1, meanCompletedDepth: 4, minCompletedDepth: 4, expandedDecisionNodes: 10, expandedChanceNodes: 20, cacheHits: 3, abortedSearches: 0 },
-  medianSearchDiagnostics: { holdActions: 1, holdRate: 0.1, meanCompletedDepth: 4, minCompletedDepth: 4, expandedDecisionNodes: 10, expandedChanceNodes: 20, cacheHits: 3, abortedSearches: 0 },
-  eliteSearchDiagnostics: { holdActions: 1, holdRate: 0.1, meanCompletedDepth: 4, minCompletedDepth: 4, expandedDecisionNodes: 10, expandedChanceNodes: 20, cacheHits: 3, abortedSearches: 0 },
+  bestSearchDiagnostics: { searchCalls: 10, holdActions: 1, holdRate: 0.1, meanCompletedDepth: 4, minCompletedDepth: 4, completedDepthHistogram: [0, 0, 0, 0, 10], totalWorkUnitsUsed: 100, meanWorkUnitsUsed: 10, maxWorkUnitsUsed: 10, budgetExhaustedSearches: 0, budgetExhaustionRate: 0, placementEvaluationUnits: 50, chanceExpansionUnits: 25, cacheHitUnits: 25, expandedDecisionNodes: 10, expandedChanceNodes: 20, cacheHits: 3 },
+  medianSearchDiagnostics: { searchCalls: 10, holdActions: 1, holdRate: 0.1, meanCompletedDepth: 4, minCompletedDepth: 4, completedDepthHistogram: [0, 0, 0, 0, 10], totalWorkUnitsUsed: 100, meanWorkUnitsUsed: 10, maxWorkUnitsUsed: 10, budgetExhaustedSearches: 0, budgetExhaustionRate: 0, placementEvaluationUnits: 50, chanceExpansionUnits: 25, cacheHitUnits: 25, expandedDecisionNodes: 10, expandedChanceNodes: 20, cacheHits: 3 },
+  eliteSearchDiagnostics: { searchCalls: 10, holdActions: 1, holdRate: 0.1, meanCompletedDepth: 4, minCompletedDepth: 4, completedDepthHistogram: [0, 0, 0, 0, 10], totalWorkUnitsUsed: 100, meanWorkUnitsUsed: 10, maxWorkUnitsUsed: 10, budgetExhaustedSearches: 0, budgetExhaustionRate: 0, placementEvaluationUnits: 50, chanceExpansionUnits: 25, cacheHitUnits: 25, expandedDecisionNodes: 10, expandedChanceNodes: 20, cacheHits: 3 },
   gamesPerCandidate: 5,
   elapsedMs: 100,
 };
@@ -208,21 +208,15 @@ const logged = <T extends typeof BASELINE>(evaluation: T) => {
 };
 
 const REEVALUATION_2 = {
-  objective: 'score-rate-v4',
-  searchContract: 'bag-expectimax-hold-v1',
-  searchDepth: 4,
-  rootBeamWidth: 64,
-  childBeamWidth: 32,
+  objective: 'score-rate-v5',
+  ...SEARCH_METADATA,
   kind: 'reevaluation',
   gen: 2,
   ts: 2_002,
   schedule: {
     games: 30,
     maxPieces: 5_000,
-    searchContract: 'bag-expectimax-hold-v1',
-    searchDepth: 4,
-    rootBeamWidth: 64,
-    childBeamWidth: 32,
+    ...SEARCH_METADATA,
     baseSeed: 20_260_727,
     seedStrategy: 'fixed-reevaluation-v1',
   },
@@ -246,11 +240,8 @@ const REEVALUATION_2 = {
 };
 
 const REEVALUATION_4_KEEP = {
-  objective: 'score-rate-v4',
-  searchContract: 'bag-expectimax-hold-v1',
-  searchDepth: 4,
-  rootBeamWidth: 64,
-  childBeamWidth: 32,
+  objective: 'score-rate-v5',
+  ...SEARCH_METADATA,
   kind: 'reevaluation',
   gen: 4,
   ts: 2_004,
@@ -275,7 +266,7 @@ const REEVALUATION_4_KEEP = {
 };
 
 const CANDIDATE_FILE = {
-  version: 5,
+  version: 6,
   weights: {
     aggregateHeight: 0,
     holes: 1,
@@ -291,7 +282,7 @@ const CANDIDATE_FILE = {
     tetrisSetupProgress: 0,
     tetrisReadyRows: 0,
   },
-  objective: 'score-rate-v4',
+  objective: 'score-rate-v5',
   meanScore: 30_000,
   evalMaxPieces: 5_000,
   meanLines: 1_950,
@@ -303,10 +294,7 @@ const CANDIDATE_FILE = {
   searchDiagnostics: CANDIDATE_2.searchDiagnostics,
   evalGames: 30,
   gen: 2,
-  searchContract: 'bag-expectimax-hold-v1',
-  searchDepth: 4,
-  rootBeamWidth: 64,
-  childBeamWidth: 32,
+  ...SEARCH_METADATA,
   trainedAt: '2026-08-11T00:00:00.000Z',
 };
 
@@ -330,13 +318,13 @@ afterEach(() => {
 });
 
 describe('resolveRunPaths', () => {
-  it('returns isolated score-rate-v4 path strings', () => {
+  it('returns isolated score-rate-v5 path strings', () => {
     const root = 'D:/repo';
     expect(resolveRunPaths(root, null)).toEqual({
-      outputDir: resolve(root, 'public/ai/score-rate-v4'),
-      checkpoint: resolve(root, 'public/ai/score-rate-v4/checkpoint.json'),
-      log: resolve(root, 'public/ai/score-rate-v4/training-log.jsonl'),
-      candidate: resolve(root, 'public/ai/score-rate-v4/candidate-weights.json'),
+      outputDir: resolve(root, 'public/ai/score-rate-v5'),
+      checkpoint: resolve(root, 'public/ai/score-rate-v5/checkpoint.json'),
+      log: resolve(root, 'public/ai/score-rate-v5/training-log.jsonl'),
+      candidate: resolve(root, 'public/ai/score-rate-v5/candidate-weights.json'),
     });
   });
 
@@ -346,29 +334,21 @@ describe('resolveRunPaths', () => {
     expect(readdirSync(root)).toEqual([]);
   });
 
-  it('keeps v4 defaults isolated from legacy artifacts and documents the gate', () => {
-    expect(resolveRunPaths(ROOT, null).outputDir).toBe(resolve(ROOT, 'public/ai/score-rate-v4'));
-    expect(readFileSync(resolve(ROOT, 'src/ai/trained-weights.json'), 'utf8'))
-      .toContain('"objective": "score-rate-v2"');
-    expect(readFileSync(resolve(ROOT, 'README.md'), 'utf8')).toContain('score-rate-v4');
-    expect(readFileSync(resolve(ROOT, 'docs/ai-training-handoff.md'), 'utf8')).toContain('score-rate-v4');
-    expect(readFileSync(resolve(ROOT, 'docs/superpowers/specs/2026-08-12-bag-aware-tetris-search-design.md'), 'utf8'))
-      .toContain('public/ai/score-rate-v3/');
-  });
 });
 
 describe('readCompatibleCheckpoint', () => {
-  it('accepts the exact version-5 score-rate-v4 checkpoint schema', () => {
+  it('accepts the exact version-6 score-rate-v5 checkpoint schema', () => {
     const path = join(temp(), 'checkpoint.json');
     writeFileSync(path, JSON.stringify(CHECKPOINT));
     expect(readCompatibleCheckpoint(path)).toMatchObject(CHECKPOINT);
   });
 
   it.each([
-    [{ version: 1 }, /score-rate-v4|version 5/],
-    [{ version: 2, objective: 'score-rate-v1' }, /score-rate-v4|version 5/],
-    [{ ...CHECKPOINT, version: 3, objective: 'score-rate-v2' }, /score-rate-v4|version 5/],
-    [{ ...CHECKPOINT, version: 4, objective: 'score-rate-v3' }, /score-rate-v4|version 5/],
+    [{ version: 1 }, /score-rate-v5|version 6/],
+    [{ version: 2, objective: 'score-rate-v1' }, /score-rate-v5|version 6/],
+    [{ ...CHECKPOINT, version: 3, objective: 'score-rate-v2' }, /score-rate-v5|version 6/],
+    [{ ...CHECKPOINT, version: 4, objective: 'score-rate-v3' }, /score-rate-v5|version 6/],
+    [{ ...CHECKPOINT, version: 5, objective: 'score-rate-v4' }, /score-rate-v5|version 6/],
   ])('rejects a legacy checkpoint: %j', (checkpoint, error) => {
     const path = join(temp(), 'checkpoint.json');
     writeFileSync(path, JSON.stringify(checkpoint));
@@ -383,7 +363,7 @@ describe('readCompatibleCheckpoint', () => {
     );
     const before = snapshot();
 
-    expect(() => readCompatibleRunArtifacts(paths)).toThrow(/score-rate-v4|version 5/i);
+    expect(() => readCompatibleRunArtifacts(paths)).toThrow(/score-rate-v5|version 6/i);
     expect(snapshot()).toEqual(before);
   });
 
@@ -422,6 +402,28 @@ describe('readCompatibleCheckpoint', () => {
     expect(() => readCompatibleCheckpoint(path)).toThrow(/checkpoint/i);
   });
 
+  it.each(SEARCH_METADATA_KEYS)(
+    'rejects a checkpoint missing %s',
+    (field) => {
+      const checkpoint = copy(CHECKPOINT) as Record<string, unknown>;
+      delete checkpoint[field];
+      const path = join(temp(), 'checkpoint.json');
+      writeFileSync(path, JSON.stringify(checkpoint));
+      expect(() => readCompatibleCheckpoint(path)).toThrow(/checkpoint.*schema/i);
+    },
+  );
+
+  it.each(SEARCH_METADATA_KEYS)(
+    'rejects a checkpoint with wrong %s',
+    (field) => {
+      const checkpoint = copy(CHECKPOINT) as Record<string, unknown>;
+      checkpoint[field] = field === 'budgetCorpus' ? 'wrong-corpus' : -1;
+      const path = join(temp(), 'checkpoint.json');
+      writeFileSync(path, JSON.stringify(checkpoint));
+      expect(() => readCompatibleCheckpoint(path)).toThrow(/search metadata|score-rate-v5/i);
+    },
+  );
+
   it.each([
     ['published baseline generation', (checkpoint: typeof CHECKPOINT) => {
       checkpoint.publishedBaseline.gen = 0;
@@ -451,6 +453,14 @@ describe('readCompatibleCheckpoint', () => {
 });
 
 describe('readCompatibleRunArtifacts', () => {
+  it('rejects a score-rate-v4 generation before accepting log append history', () => {
+    const legacy = { ...GEN_0, objective: 'score-rate-v4' };
+    expect(() => readCompatibleRunArtifacts(
+      writeRun({ ...CHECKPOINT, gen: 1, maxPieces: 600, publishedBaseline: null,
+        bestQualifiedCandidate: null }, [legacy]),
+    )).toThrow(/score-rate-v4.*score-rate-v5/i);
+  });
+
   it('replays continuous generations, the immutable baseline, and save-candidate', () => {
     const result = readCompatibleRunArtifacts(
       writeRun(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2], CANDIDATE_FILE),
@@ -493,7 +503,7 @@ describe('readCompatibleRunArtifacts', () => {
     )).toThrow(/generation.*schema/i);
   });
 
-  it.each(['searchContract', 'searchDepth', 'rootBeamWidth', 'childBeamWidth'] as const)(
+  it.each(SEARCH_METADATA_KEYS)(
     'rejects a generation missing %s',
     (field) => {
       const bad = copy(GEN_0) as Record<string, unknown>;
@@ -504,13 +514,8 @@ describe('readCompatibleRunArtifacts', () => {
     },
   );
 
-  it.each([
-    ['searchContract', 'legacy-search'],
-    ['searchDepth', 3],
-    ['rootBeamWidth', 32],
-    ['childBeamWidth', 16],
-  ] as const)('rejects a generation with wrong %s', (field, value) => {
-    const bad = { ...GEN_0, [field]: value };
+  it.each(SEARCH_METADATA_KEYS)('rejects a generation with wrong %s', (field) => {
+    const bad = { ...GEN_0, [field]: field === 'budgetCorpus' ? 'wrong-corpus' : -1 };
     expect(() => readCompatibleRunArtifacts(
       writeRun(CHECKPOINT, [bad, GEN_1, REEVALUATION_2]),
     )).toThrow(/generation.*search|generation.*contract/i);
@@ -601,7 +606,7 @@ describe('readCompatibleRunArtifacts', () => {
     )).toThrow(/schema/i);
   });
 
-  it.each(['searchContract', 'searchDepth', 'rootBeamWidth', 'childBeamWidth'] as const)(
+  it.each(SEARCH_METADATA_KEYS)(
     'rejects a reevaluation missing top-level %s',
     (field) => {
       const event = copy(REEVALUATION_2) as unknown as Record<string, unknown>;
@@ -612,19 +617,14 @@ describe('readCompatibleRunArtifacts', () => {
     },
   );
 
-  it.each([
-    ['searchContract', 'legacy-search'],
-    ['searchDepth', 3],
-    ['rootBeamWidth', 32],
-    ['childBeamWidth', 16],
-  ] as const)('rejects a reevaluation with wrong top-level %s', (field, value) => {
-    const event = { ...copy(REEVALUATION_2), [field]: value };
+  it.each(SEARCH_METADATA_KEYS)('rejects a reevaluation with wrong top-level %s', (field) => {
+    const event = { ...copy(REEVALUATION_2), [field]: field === 'budgetCorpus' ? 'wrong-corpus' : -1 };
     expect(() => readCompatibleRunArtifacts(
       writeRun(CHECKPOINT, [GEN_0, GEN_1, event]),
-    )).toThrow(/reevaluation search contract/i);
+    )).toThrow(/reevaluation search metadata/i);
   });
 
-  it.each(['searchContract', 'searchDepth', 'rootBeamWidth', 'childBeamWidth'] as const)(
+  it.each(SEARCH_METADATA_KEYS)(
     'rejects a reevaluation schedule missing %s',
     (field) => {
       const event = copy(REEVALUATION_2);
@@ -635,14 +635,10 @@ describe('readCompatibleRunArtifacts', () => {
     },
   );
 
-  it.each([
-    ['searchContract', 'legacy-search'],
-    ['searchDepth', 3],
-    ['rootBeamWidth', 32],
-    ['childBeamWidth', 16],
-  ] as const)('rejects a reevaluation schedule with wrong %s', (field, value) => {
+  it.each(SEARCH_METADATA_KEYS)('rejects a reevaluation schedule with wrong %s', (field) => {
     const event = copy(REEVALUATION_2);
-    (event.schedule as unknown as Record<string, unknown>)[field] = value;
+    (event.schedule as unknown as Record<string, unknown>)[field] =
+      field === 'budgetCorpus' ? 'wrong-corpus' : -1;
     expect(() => readCompatibleRunArtifacts(
       writeRun(CHECKPOINT, [GEN_0, GEN_1, event]),
     )).toThrow(/reevaluation schedule.*checkpoint|reevaluation schedule.*search/i);
@@ -672,7 +668,7 @@ describe('readCompatibleRunArtifacts', () => {
     )).toThrow(/checkpoint sigma.*final logged optimizer state/i);
   });
 
-  it('accepts a version-5 candidate file exactly matching bestQualifiedCandidate', () => {
+  it('accepts a version-6 candidate file exactly matching bestQualifiedCandidate', () => {
     expect(() => readCompatibleRunArtifacts(
       writeRun(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2], CANDIDATE_FILE),
     )).not.toThrow();
@@ -698,7 +694,7 @@ describe('readCompatibleRunArtifacts', () => {
     const legacy = { ...CANDIDATE_FILE, version: 3, objective: 'score-rate-v2' };
     expect(() => readCompatibleRunArtifacts(
       writeRun(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2], legacy),
-    )).toThrow(/candidate.*version 5/i);
+    )).toThrow(/candidate.*version 6/i);
   });
 
   it('rejects a candidate file that differs from bestQualifiedCandidate', () => {
@@ -715,11 +711,11 @@ describe('readCompatibleRunArtifacts', () => {
     )).toThrow(/candidate.*schema|extra/i);
   });
 
-  it('rejects candidate searchDepth outside the exact version-5 schema', () => {
+  it('rejects candidate searchDepth outside the exact version-6 schema', () => {
     const candidate = { ...CANDIDATE_FILE, searchDepth: 1 };
     expect(() => readCompatibleRunArtifacts(
       writeRun(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2], candidate),
-    )).toThrow(/candidate.*version 5 schema/i);
+    )).toThrow(/candidate.*version 6 schema/i);
   });
 
   it('forbids a candidate file before any candidate qualifies', () => {

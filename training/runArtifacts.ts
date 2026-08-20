@@ -11,7 +11,11 @@ import {
 } from 'node:fs';
 import { resolve } from 'node:path';
 import { FEATURE_COUNT } from '../src/ai/features';
-import { toVector } from '../src/ai/weights';
+import {
+  parseSearchDiagnostics,
+  toVector,
+  type SearchDiagnostics,
+} from '../src/ai/weights';
 import {
   totalLinesFromCounts,
   tetrisLineShare,
@@ -25,8 +29,11 @@ import {
   PUBLICATION_GAMES,
   PUBLICATION_MAX_PIECES,
   SCORE_RATE_OBJECTIVE,
-  SEARCH_CONTRACT,
+  SEARCH_METADATA,
+  SEARCH_METADATA_KEYS,
   SEARCH_SCHEMA_VERSION,
+  hasSearchMetadata,
+  type SearchMetadata,
 } from './objective';
 import {
   evaluateTetrisCandidate,
@@ -39,11 +46,11 @@ export interface ScoreRateEvaluation extends ReevaluationSummary {
   gen: number;
   evalGames: number;
   evalMaxPieces: number;
-  searchDiagnostics?: import('../src/ai/weights').SearchDiagnostics;
+  searchDiagnostics?: SearchDiagnostics;
 }
 
-export interface ScoreRateCheckpoint {
-  version: 4 | 5;
+export interface ScoreRateCheckpoint extends SearchMetadata {
+  version: typeof SEARCH_SCHEMA_VERSION;
   objective: typeof SCORE_RATE_OBJECTIVE;
   gen: number;
   mu: number[];
@@ -53,10 +60,6 @@ export interface ScoreRateCheckpoint {
   config: TrainConfig;
   publishedBaseline: ScoreRateEvaluation | null;
   bestQualifiedCandidate: ScoreRateEvaluation | null;
-  searchContract?: typeof SEARCH_CONTRACT;
-  searchDepth?: 4;
-  rootBeamWidth?: 64;
-  childBeamWidth?: 32;
 }
 
 export interface RunPaths {
@@ -67,7 +70,7 @@ export interface RunPaths {
 }
 
 export function resolveRunPaths(root: string, requested: string | null): RunPaths {
-  const outputDir = resolve(root, requested ?? 'public/ai/score-rate-v4');
+  const outputDir = resolve(root, requested ?? 'public/ai/score-rate-v5');
   return {
     outputDir,
     checkpoint: resolve(outputDir, 'checkpoint.json'),
@@ -202,11 +205,10 @@ function nonNegative(value: unknown, label: string): number {
 
 const CHECKPOINT_KEYS = [
   'version', 'objective', 'gen', 'mu', 'sigma', 'baseSeed', 'maxPieces', 'config',
-  'publishedBaseline', 'bestQualifiedCandidate', 'searchContract', 'searchDepth',
-  'rootBeamWidth', 'childBeamWidth',
+  'publishedBaseline', 'bestQualifiedCandidate', ...SEARCH_METADATA_KEYS,
 ] as const;
 const CONFIG_KEYS = [
-  'population', 'eliteFrac', 'gamesPerCandidate', 'searchDepth', 'rootBeamWidth', 'childBeamWidth', 'initialMaxPieces',
+  'population', 'eliteFrac', 'gamesPerCandidate', 'initialMaxPieces',
   'maxPiecesCap', 'initialNoise', 'noiseDecay', 'noiseFloor', 'baseSeed', 'workers',
   'reevalEvery', 'reevalGames', 'reevalMaxPieces',
 ] as const;
@@ -216,8 +218,11 @@ const STRATEGY_KEYS = [
 ] as const;
 const SURVIVAL_KEYS = ['pieceCapGames', 'gameoverGames'] as const;
 const SEARCH_DIAGNOSTICS_KEYS = [
-  'holdActions', 'holdRate', 'meanCompletedDepth', 'minCompletedDepth',
-  'expandedDecisionNodes', 'expandedChanceNodes', 'cacheHits', 'abortedSearches',
+  'searchCalls', 'holdActions', 'holdRate', 'meanCompletedDepth',
+  'minCompletedDepth', 'completedDepthHistogram', 'totalWorkUnitsUsed',
+  'meanWorkUnitsUsed', 'maxWorkUnitsUsed', 'budgetExhaustedSearches',
+  'budgetExhaustionRate', 'placementEvaluationUnits', 'chanceExpansionUnits',
+  'cacheHitUnits', 'expandedDecisionNodes', 'expandedChanceNodes', 'cacheHits',
 ] as const;
 const EVALUATION_KEYS = [
   'gen', 'weights', 'meanScore', 'scoreRate', 'meanLines', 'meanHeight',
@@ -246,17 +251,11 @@ function assertClose(actual: number, expected: number, label: string): void {
 function trainConfig(value: unknown): TrainConfig {
   const raw = record(value, 'config');
   exactKeys(raw, CONFIG_KEYS, null, 'config');
-  if (raw.searchDepth !== 4 || raw.rootBeamWidth !== 64 || raw.childBeamWidth !== 32) {
-    throw new Error('checkpoint search configuration must be 4/64/32');
-  }
 
   const config: TrainConfig = {
     population: positiveInteger(raw.population, 'config.population'),
     eliteFrac: fraction(raw.eliteFrac, 'config.eliteFrac'),
     gamesPerCandidate: positiveInteger(raw.gamesPerCandidate, 'config.gamesPerCandidate'),
-    searchDepth: 4,
-    rootBeamWidth: 64,
-    childBeamWidth: 32,
     initialMaxPieces: positiveInteger(raw.initialMaxPieces, 'config.initialMaxPieces'),
     maxPiecesCap: positiveInteger(raw.maxPiecesCap, 'config.maxPiecesCap'),
     initialNoise: nonNegative(raw.initialNoise, 'config.initialNoise'),
@@ -326,23 +325,12 @@ const CHECKPOINT_EVALUATION_KEYS = [
   ...EVALUATION_KEYS, 'evalGames', 'evalMaxPieces',
 ] as const;
 
-function searchDiagnostics(value: unknown, label: string) {
-  const raw = record(value, label);
-  exactKeys(raw, SEARCH_DIAGNOSTICS_KEYS, null, label);
-  const result = {
-    holdActions: nonNegative(raw.holdActions, `${label}.holdActions`),
-    holdRate: nonNegative(raw.holdRate, `${label}.holdRate`),
-    meanCompletedDepth: nonNegative(raw.meanCompletedDepth, `${label}.meanCompletedDepth`),
-    minCompletedDepth: nonNegative(raw.minCompletedDepth, `${label}.minCompletedDepth`),
-    expandedDecisionNodes: nonNegative(raw.expandedDecisionNodes, `${label}.expandedDecisionNodes`),
-    expandedChanceNodes: nonNegative(raw.expandedChanceNodes, `${label}.expandedChanceNodes`),
-    cacheHits: nonNegative(raw.cacheHits, `${label}.cacheHits`),
-    abortedSearches: nonNegative(raw.abortedSearches, `${label}.abortedSearches`),
-  };
-  if (result.holdRate > 1 || result.meanCompletedDepth > 4 || result.minCompletedDepth > 4) {
-    throw new Error(`checkpoint ${label} search diagnostics are out of range`);
+function searchDiagnostics(value: unknown, label: string): SearchDiagnostics {
+  const parsed = parseSearchDiagnostics(value, SEARCH_METADATA.maxWorkUnits);
+  if (parsed === null) {
+    throw new Error(`checkpoint ${label} must match the exact search diagnostics schema`);
   }
-  return result;
+  return parsed;
 }
 
 function scoreRateEvaluation(
@@ -408,11 +396,11 @@ export function readCompatibleCheckpoint(path: string): ScoreRateCheckpoint {
     throw new Error(`checkpoint objective ${objective} is incompatible with ${SCORE_RATE_OBJECTIVE}`);
   }
   if (checkpoint.version !== SEARCH_SCHEMA_VERSION) {
-    throw new Error(`checkpoint schema ${String(checkpoint.version)} is incompatible with version 5`);
+    throw new Error(`checkpoint schema ${String(checkpoint.version)} is incompatible with version 6`);
   }
   exactKeys(checkpoint, CHECKPOINT_KEYS, null, 'checkpoint');
-  if (checkpoint.searchContract !== SEARCH_CONTRACT || checkpoint.searchDepth !== 4 || checkpoint.rootBeamWidth !== 64 || checkpoint.childBeamWidth !== 32) {
-    throw new Error('checkpoint search metadata is incompatible with score-rate-v4');
+  if (!hasSearchMetadata(checkpoint)) {
+    throw new Error('checkpoint search metadata is incompatible with score-rate-v5');
   }
 
   const config = trainConfig(checkpoint.config);
@@ -445,7 +433,7 @@ export function readCompatibleCheckpoint(path: string): ScoreRateCheckpoint {
   }
 
   return {
-    version: 5,
+    version: SEARCH_SCHEMA_VERSION,
     objective: SCORE_RATE_OBJECTIVE,
     gen,
     mu,
@@ -455,19 +443,13 @@ export function readCompatibleCheckpoint(path: string): ScoreRateCheckpoint {
     config,
     publishedBaseline,
     bestQualifiedCandidate,
-    searchContract: SEARCH_CONTRACT,
-    searchDepth: 4,
-    rootBeamWidth: 64,
-    childBeamWidth: 32,
+    ...SEARCH_METADATA,
   };
 }
 
 const GENERATION_KEYS = [
   'objective',
-  'searchContract',
-  'searchDepth',
-  'rootBeamWidth',
-  'childBeamWidth',
+  ...SEARCH_METADATA_KEYS,
   'gen',
   'ts',
   'bestScoreRate',
@@ -500,13 +482,12 @@ const GENERATION_KEYS = [
 ] as const;
 
 const REEVALUATION_KEYS = [
-  'objective', 'searchContract', 'searchDepth', 'rootBeamWidth', 'childBeamWidth',
+  'objective', ...SEARCH_METADATA_KEYS,
   'kind', 'gen', 'ts', 'schedule', 'publishedBaseline', 'currentQualified',
   'candidate', 'qualification',
 ] as const;
 const SCHEDULE_KEYS = [
-  'games', 'maxPieces', 'searchContract', 'searchDepth', 'rootBeamWidth',
-  'childBeamWidth', 'baseSeed', 'seedStrategy',
+  'games', 'maxPieces', ...SEARCH_METADATA_KEYS, 'baseSeed', 'seedStrategy',
 ] as const;
 const QUALIFICATION_KEYS = [
   'shouldSave', 'reason', 'scoreTolerance', 'scoreQualified', 'tetrisQualified',
@@ -668,32 +649,11 @@ function logSearchDiagnostics(
   line: number,
   label: string,
 ): NonNullable<ScoreRateEvaluation['searchDiagnostics']> {
-  const raw = logRecord(value, line, label);
-  exactKeys(raw, SEARCH_DIAGNOSTICS_KEYS, line, label);
-  const result = {
-    holdActions: logNonNegative(raw.holdActions, line, `${label}.holdActions`),
-    holdRate: logProportion(raw.holdRate, line, `${label}.holdRate`),
-    meanCompletedDepth: logNonNegative(
-      raw.meanCompletedDepth, line, `${label}.meanCompletedDepth`,
-    ),
-    minCompletedDepth: logNonNegative(
-      raw.minCompletedDepth, line, `${label}.minCompletedDepth`,
-    ),
-    expandedDecisionNodes: logNonNegative(
-      raw.expandedDecisionNodes, line, `${label}.expandedDecisionNodes`,
-    ),
-    expandedChanceNodes: logNonNegative(
-      raw.expandedChanceNodes, line, `${label}.expandedChanceNodes`,
-    ),
-    cacheHits: logNonNegative(raw.cacheHits, line, `${label}.cacheHits`),
-    abortedSearches: logNonNegative(
-      raw.abortedSearches, line, `${label}.abortedSearches`,
-    ),
-  };
-  if (result.meanCompletedDepth > 4 || result.minCompletedDepth > 4) {
-    throw logError(line, `${label} search diagnostics are out of range`);
+  const parsed = parseSearchDiagnostics(value, SEARCH_METADATA.maxWorkUnits);
+  if (parsed === null) {
+    throw logError(line, `${label} must match the exact search diagnostics schema`);
   }
-  return result;
+  return parsed;
 }
 
 function assertLogClose(
@@ -715,13 +675,8 @@ function validateGeneration(
   expectedMaxPieces: number,
 ): { gen: number; mu: number[]; sigma: number[]; nextMaxPieces: number } {
   exactKeys(raw, GENERATION_KEYS, line, 'generation record');
-  if (
-    raw.searchContract !== SEARCH_CONTRACT ||
-    raw.searchDepth !== 4 ||
-    raw.rootBeamWidth !== 64 ||
-    raw.childBeamWidth !== 32
-  ) {
-    throw logError(line, 'generation search contract must be bag-expectimax-hold-v1/4/64/32');
+  if (!hasSearchMetadata(raw)) {
+    throw logError(line, 'generation search metadata must match score-rate-v5');
   }
   const gen = logInteger(raw.gen, line, 'generation gen');
   logInteger(raw.ts, line, 'generation ts');
@@ -868,13 +823,8 @@ function validateReevaluation(
   checkpoint: ScoreRateCheckpoint,
 ): ValidatedReevaluation {
   exactKeys(raw, REEVALUATION_KEYS, line, 'reevaluation record');
-  if (
-    raw.searchContract !== SEARCH_CONTRACT ||
-    raw.searchDepth !== 4 ||
-    raw.rootBeamWidth !== 64 ||
-    raw.childBeamWidth !== 32
-  ) {
-    throw logError(line, 'reevaluation search contract must be bag-expectimax-hold-v1/4/64/32');
+  if (!hasSearchMetadata(raw)) {
+    throw logError(line, 'reevaluation search metadata must match score-rate-v5');
   }
   if (raw.kind !== 'reevaluation') throw logError(line, 'reevaluation kind is invalid');
   const gen = logInteger(raw.gen, line, 'reevaluation gen', 1);
@@ -888,10 +838,7 @@ function validateReevaluation(
   if (
     games !== checkpoint.config.reevalGames ||
     maxPieces !== checkpoint.config.reevalMaxPieces ||
-    schedule.searchContract !== SEARCH_CONTRACT ||
-    schedule.searchDepth !== checkpoint.config.searchDepth ||
-    schedule.rootBeamWidth !== checkpoint.config.rootBeamWidth ||
-    schedule.childBeamWidth !== checkpoint.config.childBeamWidth ||
+    !hasSearchMetadata(schedule) ||
     baseSeed !== checkpoint.baseSeed ||
     schedule.seedStrategy !== 'fixed-reevaluation-v1'
   ) {
@@ -1037,7 +984,9 @@ function sameSearchDiagnostics(
   left: NonNullable<ScoreRateEvaluation['searchDiagnostics']>,
   right: NonNullable<ScoreRateEvaluation['searchDiagnostics']>,
 ): boolean {
-  return SEARCH_DIAGNOSTICS_KEYS.every((key) => left[key] === right[key]);
+  return SEARCH_DIAGNOSTICS_KEYS.every((key) => key === 'completedDepthHistogram'
+    ? sameVector(left.completedDepthHistogram, right.completedDepthHistogram)
+    : left[key] === right[key]);
 }
 
 function sameEvaluation(
@@ -1072,7 +1021,10 @@ function cloneEvaluation(evaluation: ScoreRateEvaluation): ScoreRateEvaluation {
     survivalDiagnostics: { ...evaluation.survivalDiagnostics },
     searchDiagnostics: evaluation.searchDiagnostics === undefined
       ? (() => { throw new Error('evaluation search diagnostics are required'); })()
-      : { ...evaluation.searchDiagnostics },
+      : {
+        ...evaluation.searchDiagnostics,
+        completedDepthHistogram: [...evaluation.searchDiagnostics.completedDepthHistogram],
+      },
   };
 }
 
@@ -1088,7 +1040,6 @@ function pathEntryExists(path: string): boolean {
 
 function readCandidateEvaluation(
   path: string,
-  checkpoint: ScoreRateCheckpoint,
 ): ScoreRateEvaluation {
   let value: unknown;
   try {
@@ -1101,10 +1052,7 @@ function readCandidateEvaluation(
   }
   const parsed = parseCandidateWeights(value);
   if (parsed === null) {
-    throw new Error('candidate weights must match the exact score-rate-v4 version 5 schema');
-  }
-  if (parsed.searchDepth !== checkpoint.config.searchDepth) {
-    throw new Error('candidate weights searchDepth disagrees with checkpoint config');
+    throw new Error('candidate weights must match the exact score-rate-v5 version 6 schema');
   }
   return {
     weights: toVector(parsed.weights),
@@ -1116,7 +1064,10 @@ function readCandidateEvaluation(
     tetrisLineShare: parsed.tetrisLineShare,
     strategyDiagnostics: { ...parsed.strategyDiagnostics },
     survivalDiagnostics: { ...parsed.survivalDiagnostics },
-    searchDiagnostics: { ...parsed.searchDiagnostics },
+    searchDiagnostics: {
+      ...parsed.searchDiagnostics,
+      completedDepthHistogram: [...parsed.searchDiagnostics.completedDepthHistogram],
+    },
     evalGames: parsed.evalGames,
     evalMaxPieces: parsed.evalMaxPieces,
     gen: parsed.gen,
@@ -1257,7 +1208,7 @@ export function readCompatibleRunArtifacts(paths: RunPaths): ScoreRateCheckpoint
     throw new Error('candidate weights file is required for a qualified candidate');
   }
   if (candidateExists && checkpoint.bestQualifiedCandidate !== null) {
-    const candidate = readCandidateEvaluation(paths.candidate, checkpoint);
+    const candidate = readCandidateEvaluation(paths.candidate);
     if (!sameEvaluation(candidate, checkpoint.bestQualifiedCandidate)) {
       throw new Error('candidate weights file does not match bestQualifiedCandidate');
     }

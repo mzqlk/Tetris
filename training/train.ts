@@ -18,15 +18,17 @@ import {
   type CemState,
 } from './cem';
 import { hashSeed, mulberry32 } from '../src/ai/rng';
-import { FIXED_SEARCH_LIMITS } from '../src/ai/search';
 import type { SearchDiagnostics } from '../src/ai/weights';
 import {
   DEFAULT_WEIGHTS,
-  fromVector,
   normalize,
   toVector,
 } from '../src/ai/weights';
-import { SCORE_RATE_OBJECTIVE, SEARCH_CONTRACT } from './objective';
+import {
+  SCORE_RATE_OBJECTIVE,
+  SEARCH_METADATA,
+  SEARCH_SCHEMA_VERSION,
+} from './objective';
 import {
   evaluateTetrisCandidate,
   fixedReevaluationSeeds,
@@ -37,7 +39,7 @@ import {
   buildReevaluationLogEntry,
   type LoggedReevaluation,
 } from './reevaluationLog';
-import { writeCandidateWeights } from './candidateWeights';
+import { buildCandidateWeights, writeCandidateWeights } from './candidateWeights';
 import {
   assertFreshRun,
   readCompatibleRunArtifacts,
@@ -191,13 +193,13 @@ try {
 console.log(
   `training with ${cfg.workers} workers of ${cpus().length} cores` +
   `${args.workers === null ? '' : ' (--workers)'}` +
-    `, depth ${cfg.searchDepth}, root beam ${cfg.rootBeamWidth}, ` +
-    `child beam ${cfg.childBeamWidth}, population ${cfg.population}`,
+    `, population ${cfg.population}`,
 );
+console.log(`search metadata ${JSON.stringify(SEARCH_METADATA)}`);
 
 function saveCheckpoint() {
   const cp: ScoreRateCheckpoint = {
-    version: 5,
+    version: SEARCH_SCHEMA_VERSION,
     objective: SCORE_RATE_OBJECTIVE,
     gen: state.gen,
     mu: state.mu,
@@ -207,10 +209,7 @@ function saveCheckpoint() {
     config: cfg,
     publishedBaseline,
     bestQualifiedCandidate,
-    searchContract: 'bag-expectimax-hold-v1',
-    searchDepth: cfg.searchDepth,
-    rootBeamWidth: cfg.rootBeamWidth,
-    childBeamWidth: cfg.childBeamWidth,
+    ...SEARCH_METADATA,
   };
   writeFileSync(paths.checkpoint, JSON.stringify(cp, null, 2));
 }
@@ -248,7 +247,6 @@ async function runGeneration(): Promise<void> {
         weights,
         seed,
         maxPieces,
-        search: FIXED_SEARCH_LIMITS,
       });
     });
   });
@@ -287,7 +285,7 @@ async function runGeneration(): Promise<void> {
       tetrisLineShare: tetrisLineShares[index],
       strategy: meanStrategyDiagnostics[index],
       survival: survivalDiagnostics[index],
-      search: meanSearchDiagnostics[index],
+      searchDiagnostics: meanSearchDiagnostics[index],
     }))
     .sort((a, b) => b.fit - a.fit)
     .slice(0, eliteCount(cfg.eliteFrac, candidates.length));
@@ -300,18 +298,21 @@ async function runGeneration(): Promise<void> {
     eliteFrac: cfg.eliteFrac,
     noise: noiseAt(gen, cfg),
   });
+  const medianScoreRateValue = median(scoreRates);
+  const medianIndex = scoreRates.reduce((closest, value, index) =>
+    Math.abs(value - medianScoreRateValue) < Math.abs(scoreRates[closest] - medianScoreRateValue)
+      ? index
+      : closest, 0);
+  const eliteSearchDiagnostics = elites[Math.floor((elites.length - 1) / 2)].searchDiagnostics;
 
   appendFileSync(paths.log, JSON.stringify({
     objective: SCORE_RATE_OBJECTIVE,
-    searchContract: SEARCH_CONTRACT,
-    searchDepth: cfg.searchDepth,
-    rootBeamWidth: cfg.rootBeamWidth,
-    childBeamWidth: cfg.childBeamWidth,
+    ...SEARCH_METADATA,
     gen,
     ts: Date.now(),
     bestScoreRate,
     meanScoreRate,
-    medianScoreRate: median(scoreRates),
+    medianScoreRate: medianScoreRateValue,
     worstScoreRate,
     scoreRateStd,
     mu: nextState.mu,
@@ -352,26 +353,8 @@ async function runGeneration(): Promise<void> {
       ),
     },
     bestSearchDiagnostics: meanSearchDiagnostics[bestIndex],
-    medianSearchDiagnostics: {
-      holdActions: median(meanSearchDiagnostics.map((d) => d.holdActions)),
-      holdRate: median(meanSearchDiagnostics.map((d) => d.holdRate)),
-      meanCompletedDepth: median(meanSearchDiagnostics.map((d) => d.meanCompletedDepth)),
-      minCompletedDepth: median(meanSearchDiagnostics.map((d) => d.minCompletedDepth)),
-      expandedDecisionNodes: median(meanSearchDiagnostics.map((d) => d.expandedDecisionNodes)),
-      expandedChanceNodes: median(meanSearchDiagnostics.map((d) => d.expandedChanceNodes)),
-      cacheHits: median(meanSearchDiagnostics.map((d) => d.cacheHits)),
-      abortedSearches: median(meanSearchDiagnostics.map((d) => d.abortedSearches)),
-    },
-    eliteSearchDiagnostics: {
-      holdActions: median(elites.map((elite) => elite.search.holdActions)),
-      holdRate: median(elites.map((elite) => elite.search.holdRate)),
-      meanCompletedDepth: median(elites.map((elite) => elite.search.meanCompletedDepth)),
-      minCompletedDepth: median(elites.map((elite) => elite.search.minCompletedDepth)),
-      expandedDecisionNodes: median(elites.map((elite) => elite.search.expandedDecisionNodes)),
-      expandedChanceNodes: median(elites.map((elite) => elite.search.expandedChanceNodes)),
-      cacheHits: median(elites.map((elite) => elite.search.cacheHits)),
-      abortedSearches: median(elites.map((elite) => elite.search.abortedSearches)),
-    },
+    medianSearchDiagnostics: meanSearchDiagnostics[medianIndex],
+    eliteSearchDiagnostics,
     gamesPerCandidate: cfg.gamesPerCandidate,
     elapsedMs,
   }) + '\n');
@@ -412,7 +395,6 @@ async function runGeneration(): Promise<void> {
           weights,
           seed,
           maxPieces: cfg.reevalMaxPieces,
-          search: FIXED_SEARCH_LIMITS,
         });
       });
     });
@@ -459,27 +441,14 @@ async function runGeneration(): Promise<void> {
     );
     if (qualification.shouldSave) {
       bestQualifiedCandidate = candidate;
-      writeCandidateWeights(paths.candidate, {
-        version: 5,
-        weights: fromVector(candidate.weights),
-        objective: SCORE_RATE_OBJECTIVE,
-        meanScore: candidate.meanScore,
-        evalMaxPieces: candidate.evalMaxPieces,
-        meanLines: candidate.meanLines,
-        meanHeight: candidate.meanHeight,
-        meanClearCounts: candidate.meanClearCounts,
-        tetrisLineShare: candidate.tetrisLineShare,
-        strategyDiagnostics: candidate.strategyDiagnostics,
-        survivalDiagnostics: candidate.survivalDiagnostics,
-        searchDiagnostics: candidate.searchDiagnostics,
-        evalGames: candidate.evalGames,
-        gen: candidate.gen,
-        searchContract: 'bag-expectimax-hold-v1',
-        searchDepth: cfg.searchDepth,
-        rootBeamWidth: cfg.rootBeamWidth,
-        childBeamWidth: cfg.childBeamWidth,
-        trainedAt: new Date().toISOString(),
-      });
+      writeCandidateWeights(
+        paths.candidate,
+        buildCandidateWeights(
+          candidate,
+          SEARCH_METADATA.searchDepth,
+          new Date().toISOString(),
+        ),
+      );
       console.log(
         `  saved qualified candidate at gen ${candidate.gen}: ` +
         `score rate ${candidate.scoreRate.toFixed(3)}`,
@@ -489,17 +458,11 @@ async function runGeneration(): Promise<void> {
     const reevaluationEvent = buildReevaluationLogEntry({
       gen: state.gen,
       ts: Date.now(),
-      searchContract: SEARCH_CONTRACT,
-      searchDepth: cfg.searchDepth,
-      rootBeamWidth: cfg.rootBeamWidth,
-      childBeamWidth: cfg.childBeamWidth,
+      ...SEARCH_METADATA,
       schedule: {
         games: cfg.reevalGames,
         maxPieces: cfg.reevalMaxPieces,
-        searchContract: 'bag-expectimax-hold-v1',
-        searchDepth: cfg.searchDepth,
-        rootBeamWidth: cfg.rootBeamWidth,
-        childBeamWidth: cfg.childBeamWidth,
+        ...SEARCH_METADATA,
         baseSeed,
       },
       publishedBaseline: loggedReevaluation(publishedBaseline),

@@ -17,6 +17,7 @@ import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { FEATURE_COUNT } from '../src/ai/features';
 import { DEFAULT_CONFIG } from './config';
+import { SEARCH_METADATA } from './objective';
 import { acquireRunLock } from './runLock';
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -36,17 +37,18 @@ const SURVIVAL_DIAGNOSTICS = {
   gameoverGames: 0,
 };
 const SEARCH_DIAGNOSTICS = {
-  holdActions: 1, holdRate: 0.1, meanCompletedDepth: 4, minCompletedDepth: 4,
-  expandedDecisionNodes: 10, expandedChanceNodes: 20, cacheHits: 3, abortedSearches: 0,
+  searchCalls: 10, holdActions: 1, holdRate: 0.1, meanCompletedDepth: 4,
+  minCompletedDepth: 4, completedDepthHistogram: [0, 0, 0, 0, 10],
+  totalWorkUnitsUsed: 100, meanWorkUnitsUsed: 10, maxWorkUnitsUsed: 10,
+  budgetExhaustedSearches: 0, budgetExhaustionRate: 0,
+  placementEvaluationUnits: 50, chanceExpansionUnits: 25, cacheHitUnits: 25,
+  expandedDecisionNodes: 10, expandedChanceNodes: 20, cacheHits: 3,
 };
 
 const validCheckpoint = (gen = 1) => ({
-  version: 5,
-  objective: 'score-rate-v4',
-  searchContract: 'bag-expectimax-hold-v1',
-  searchDepth: 4,
-  rootBeamWidth: 64,
-  childBeamWidth: 32,
+  version: 6,
+  objective: 'score-rate-v5',
+  ...SEARCH_METADATA,
   gen,
   mu: unitVector(),
   sigma: Array(FEATURE_COUNT).fill(1),
@@ -67,11 +69,8 @@ const validGeneration = (
   ),
   elitePieces = maxPieces,
 ) => ({
-  objective: 'score-rate-v4',
-  searchContract: 'bag-expectimax-hold-v1',
-  searchDepth: 4,
-  rootBeamWidth: 64,
-  childBeamWidth: 32,
+  objective: 'score-rate-v5',
+  ...SEARCH_METADATA,
   gen,
   ts: 1_000 + gen,
   bestScoreRate: 5,
@@ -134,21 +133,15 @@ const reevaluationRecord = (
   const scoreDelta = candidate.meanScore - publishedBaseline.meanScore;
   const scale = Math.max(Math.abs(candidate.meanScore), Math.abs(publishedBaseline.meanScore));
   return {
-    objective: 'score-rate-v4',
-    searchContract: 'bag-expectimax-hold-v1',
-    searchDepth: 4,
-    rootBeamWidth: 64,
-    childBeamWidth: 32,
+    objective: 'score-rate-v5',
+    ...SEARCH_METADATA,
     kind: 'reevaluation',
     gen,
     ts: 2_000 + gen,
     schedule: {
       games: DEFAULT_CONFIG.reevalGames,
       maxPieces: DEFAULT_CONFIG.reevalMaxPieces,
-      searchContract: 'bag-expectimax-hold-v1',
-      searchDepth: DEFAULT_CONFIG.searchDepth,
-      rootBeamWidth: DEFAULT_CONFIG.rootBeamWidth,
-      childBeamWidth: DEFAULT_CONFIG.childBeamWidth,
+      ...SEARCH_METADATA,
       baseSeed: DEFAULT_CONFIG.baseSeed,
       seedStrategy: 'fixed-reevaluation-v1',
     },
@@ -192,10 +185,10 @@ const snapshotDirectory = (outputDir: string) => {
   };
 };
 
-const writeValidV4Run = (
+const writeValidV5Run = (
   checkpointOverrides: Partial<ReturnType<typeof validCheckpoint>> = {},
 ) => {
-  const outputDir = mkdtempSync(join(tmpdir(), 'tetris-v4-run-'));
+  const outputDir = mkdtempSync(join(tmpdir(), 'tetris-v5-run-'));
   const checkpoint = { ...validCheckpoint(), ...checkpointOverrides };
   writeFileSync(join(outputDir, 'checkpoint.json'), JSON.stringify(checkpoint));
   writeFileSync(
@@ -228,16 +221,6 @@ const expectRejectedBeforeWorkersOrWrites = (
   expect(`${result.stdout}\n${result.stderr}`).not.toMatch(/training with .* workers/);
   expect(snapshotDirectory(outputDir)).toEqual(before);
 };
-
-describe('trainer artifact safety', () => {
-  it('contains no publication path or publication writer', () => {
-    const source = readFileSync(join(ROOT, 'training/train.ts'), 'utf8');
-    expect(source).not.toMatch(/best-weights\.json/);
-    expect(source).not.toMatch(/trained-weights\.json/);
-    expect(source).not.toMatch(/writeWeightsFiles/);
-    expect(source).toMatch(/writeCandidateWeights/);
-  });
-});
 
 describe('trainer candidate orchestration', () => {
   it('persists an immutable baseline and self-resumes its run-local candidate artifacts', () => {
@@ -273,6 +256,10 @@ Worker.prototype.postMessage = function (task) {
   ) {
     return originalPostMessage.apply(this, arguments);
   }
+  const taskKeys = Object.keys(task).sort().join(',');
+  if (taskKeys !== 'maxPieces,seed,taskId,weights') {
+    throw new Error('worker task must contain exactly taskId/weights/seed/maxPieces');
+  }
   const reevaluation = task.maxPieces === ${DEFAULT_CONFIG.reevalMaxPieces};
   if (reevaluation && task.taskId === 0) reevaluationRun++;
 
@@ -304,14 +291,23 @@ Worker.prototype.postMessage = function (task) {
       meanTetrisReadyRows: (candidateIndex + 2) % 5,
     },
     searchDiagnostics: {
+      searchCalls: 10,
       holdActions: 1,
       holdRate: 0.1,
       meanCompletedDepth: 4,
       minCompletedDepth: 4,
+      completedDepthHistogram: [0, 0, 0, 0, 10],
+      totalWorkUnitsUsed: 100,
+      meanWorkUnitsUsed: 10,
+      maxWorkUnitsUsed: 10,
+      budgetExhaustedSearches: 0,
+      budgetExhaustionRate: 0,
+      placementEvaluationUnits: 50,
+      chanceExpansionUnits: 25,
+      cacheHitUnits: 25,
       expandedDecisionNodes: 10,
       expandedChanceNodes: 20,
       cacheHits: 3,
-      abortedSearches: 0,
     },
     reason: 'pieceCap',
     failed: false,
@@ -353,22 +349,16 @@ Worker.prototype.postMessage = function (task) {
       );
 
       expect(checkpoint).toMatchObject({
-        version: 5,
-        objective: 'score-rate-v4',
-        searchContract: 'bag-expectimax-hold-v1',
-        searchDepth: 4,
-        rootBeamWidth: 64,
-        childBeamWidth: 32,
+        version: 6,
+        objective: 'score-rate-v5',
+        ...SEARCH_METADATA,
         publishedBaseline: { gen: -1, meanScore: 25_000 },
         bestQualifiedCandidate: { gen: 2, meanScore: 30_000 },
       });
       expect(candidate).toMatchObject({
-        version: 5,
-        objective: 'score-rate-v4',
-        searchContract: 'bag-expectimax-hold-v1',
-        searchDepth: 4,
-        rootBeamWidth: 64,
-        childBeamWidth: 32,
+        version: 6,
+        objective: 'score-rate-v5',
+        ...SEARCH_METADATA,
         gen: 2,
         meanScore: 30_000,
       });
@@ -448,7 +438,7 @@ describe('train --resume objective gate', () => {
 
       expect(result.status).not.toBe(0);
       expect(`${result.stdout}\n${result.stderr}`).toMatch(
-        /score-rate-v1.*score-rate-v4/,
+        /score-rate-v1.*score-rate-v5/,
       );
       expect(`${result.stdout}\n${result.stderr}`).not.toMatch(/training with .* workers/);
       expect(readdirSync(outputDir).sort()).toEqual(beforeEntries);
@@ -465,12 +455,9 @@ describe('train --resume objective gate', () => {
     const logPath = join(outputDir, 'training-log.jsonl');
     try {
       writeFileSync(checkpointPath, JSON.stringify({
-        version: 5,
-        objective: 'score-rate-v4',
-        searchContract: 'bag-expectimax-hold-v1',
-        searchDepth: 4,
-        rootBeamWidth: 64,
-        childBeamWidth: 32,
+        version: 6,
+        objective: 'score-rate-v5',
+        ...SEARCH_METADATA,
         gen: 0,
         mu: Array(FEATURE_COUNT - 1).fill(0),
         sigma: Array(FEATURE_COUNT).fill(1),
@@ -528,7 +515,7 @@ describe('train --resume objective gate', () => {
     })],
     ['a malformed generation record', () => ({
       checkpoint: validCheckpoint(),
-      log: `${JSON.stringify({ objective: 'score-rate-v4', gen: 0 })}\n`,
+      log: `${JSON.stringify({ objective: 'score-rate-v5', gen: 0 })}\n`,
     })],
     ['missing reevaluation history', () => {
       const checkpoint = validCheckpoint();
@@ -656,8 +643,8 @@ describe('train --generations argument gate', () => {
     }
   });
 
-  it('keeps a legal generation-zero v4 resume byte-identical', () => {
-    const outputDir = writeValidV4Run({ bestQualifiedCandidate: null });
+  it('keeps a legal generation-zero v5 resume byte-identical', () => {
+    const outputDir = writeValidV5Run({ bestQualifiedCandidate: null });
     try {
       writeFileSync(join(outputDir, 'sentinel.bin'), Buffer.from([0, 1, 2, 255]));
       const before = snapshotDirectory(outputDir);

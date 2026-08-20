@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import { FIXED_SEARCH_LIMITS } from '../src/ai/search';
 import { HANDCRAFTED_WEIGHTS, type WeightsFile } from '../src/ai/weights';
+import { SEARCH_METADATA } from './objective';
 import { buildPairedPlan, parsePairedBenchArgs } from './pairedBench';
 
 function validBaseline(): WeightsFile {
@@ -26,9 +26,9 @@ function validBaseline(): WeightsFile {
 
 function validCandidate(): WeightsFile {
   return {
-    version: 5,
+    version: 6,
     weights: { ...HANDCRAFTED_WEIGHTS },
-    objective: 'score-rate-v4',
+    objective: 'score-rate-v5',
     meanScore: 3_500_000,
     evalMaxPieces: 5000,
     meanLines: 2360,
@@ -37,19 +37,25 @@ function validCandidate(): WeightsFile {
     tetrisLineShare: 840 / 2360,
     evalGames: 30,
     gen: 10,
-    searchContract: 'bag-expectimax-hold-v1',
-    searchDepth: 4,
-    rootBeamWidth: 64,
-    childBeamWidth: 32,
+    ...SEARCH_METADATA,
     searchDiagnostics: {
+      searchCalls: 1500,
       holdActions: 100,
-      holdRate: 1 / 1500,
+      holdRate: 1 / 15,
       meanCompletedDepth: 4,
       minCompletedDepth: 4,
+      completedDepthHistogram: [0, 0, 0, 0, 1500],
+      totalWorkUnitsUsed: 150_000,
+      meanWorkUnitsUsed: 100,
+      maxWorkUnitsUsed: 100,
+      budgetExhaustedSearches: 0,
+      budgetExhaustionRate: 0,
+      placementEvaluationUnits: 75_000,
+      chanceExpansionUnits: 50_000,
+      cacheHitUnits: 25_000,
       expandedDecisionNodes: 1000,
       expandedChanceNodes: 500,
       cacheHits: 50,
-      abortedSearches: 0,
     },
     trainedAt: '2026-08-12T00:00:00.000Z',
     strategyDiagnostics: {
@@ -118,21 +124,22 @@ describe('parsePairedBenchArgs', () => {
 });
 
 describe('pairedBench module', () => {
-  it('uses one fixed search contract for both paired sides', () => {
+  it('uses one implicit shared search contract for both paired sides', () => {
     const plan = buildPairedPlan(validBaseline(), validCandidate(), 20260812);
 
     expect(plan).toMatchObject({ maxPieces: 5000 });
     expect(plan.seeds).toHaveLength(30);
     expect(new Set(plan.seeds)).toHaveLength(30);
-    expect(plan.baseline.search).toEqual(FIXED_SEARCH_LIMITS);
-    expect(plan.candidate.search).toEqual(FIXED_SEARCH_LIMITS);
+    expect(plan.searchMetadata).toBe(SEARCH_METADATA);
+    expect(plan.baseline).not.toHaveProperty('search');
+    expect(plan.candidate).not.toHaveProperty('search');
   });
 
   it('rejects a candidate with mismatched search metadata', () => {
     expect(() => buildPairedPlan(validBaseline(), {
       ...validCandidate(),
       childBeamWidth: 16,
-    } as unknown as WeightsFile, 20260812)).toThrow(/search contract|beam/i);
+    } as unknown as WeightsFile, 20260812)).toThrow(/search metadata|version 6/i);
   });
 
   it('rejects baseline metadata other than the historical v3 gen-40 model', () => {

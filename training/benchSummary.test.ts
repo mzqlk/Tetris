@@ -1,26 +1,21 @@
 import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { SEARCH_METADATA } from './objective';
 import { buildBenchPlan, parseBenchArgs } from './bench';
 import { formatLineClearCounts, formatSearchDiagnostics, summarizeBench, type BenchResult } from './benchSummary';
 
 describe('bench CLI contract', () => {
-  it('keeps current documented bench commands parseable without --depth', () => {
-    for (const file of ['AGENTS.md', 'README.md', 'docs/ai-training-handoff.md']) {
-      const source = readFileSync(resolve(process.cwd(), file), 'utf8');
-      for (const line of source.split(/\r?\n/).filter((entry) => entry.includes('npm run bench --') && !entry.includes('no user-selectable'))) {
-        expect(line).not.toMatch(/--depth/);
-        const command = line.match(/npm run bench --\s+(.+?)(?:\s+#|\s*`|\s*\)|$)/)?.[1]?.trim() ?? '';
-        if (command) expect(() => parseBenchArgs(command.split(/\s+/))).not.toThrow();
-      }
-    }
+  it('parses the supported benchmark schedule without a search flag', () => {
+    expect(parseBenchArgs(['--games', '30', '--max-pieces', '2000'])).toMatchObject({
+      games: 30,
+      maxPieces: 2000,
+    });
   });
   it('rejects the removed user-selectable depth flag', () => {
     expect(() => parseBenchArgs(['--depth', '2'])).toThrow(/unknown flag.*--depth/i);
   });
 
-  it('builds every game with the fixed search contract', () => {
+  it('publishes the shared search metadata while simulation stays implicit', () => {
     const weights = [1, 2, 3];
     const plan = buildBenchPlan(weights, {
       weights: null,
@@ -32,7 +27,8 @@ describe('bench CLI contract', () => {
     expect(plan).toMatchObject({ weights, maxPieces: 5000 });
     expect(plan.seeds).toHaveLength(2);
     expect(new Set(plan.seeds)).toHaveLength(2);
-    expect(plan.search).toBeDefined();
+    expect(plan.searchMetadata).toBe(SEARCH_METADATA);
+    expect(plan).not.toHaveProperty('search');
   });
 
   it('does not execute the CLI when imported', () => {

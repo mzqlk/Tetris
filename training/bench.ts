@@ -2,8 +2,8 @@ import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { simulateGame } from '../src/ai/simulate';
 import { hashSeed } from '../src/ai/rng';
-import { FIXED_SEARCH_LIMITS } from '../src/ai/search';
 import { parseWeightsFile, toVector, HANDCRAFTED_WEIGHTS } from '../src/ai/weights';
+import { SEARCH_METADATA, type SearchMetadata } from './objective';
 import {
   formatLineClearCounts,
   formatSearchDiagnostics,
@@ -22,7 +22,7 @@ export interface BenchSimulationPlan {
   weights: number[];
   seeds: number[];
   maxPieces: number;
-  search: typeof FIXED_SEARCH_LIMITS;
+  searchMetadata: SearchMetadata;
 }
 
 export function parseBenchArgs(argv: string[]): BenchArgs {
@@ -63,7 +63,7 @@ export function buildBenchPlan(
     weights,
     seeds: Array.from({ length: args.games }, (_, index) => hashSeed(args.seed, index)),
     maxPieces: args.maxPieces,
-    search: FIXED_SEARCH_LIMITS,
+    searchMetadata: SEARCH_METADATA,
   };
 }
 
@@ -84,7 +84,8 @@ async function main(): Promise<void> {
   const plan = buildBenchPlan(loadWeights(args.weights), args);
   console.log(
     `games=${plan.seeds.length}` +
-    ` search=bag-expectimax-hold-v1/4/64/32` +
+    ` search=${plan.searchMetadata.searchContract}` +
+    ` workBudget=${plan.searchMetadata.maxWorkUnits}` +
     ` maxPieces=${plan.maxPieces}\n`,
   );
 
@@ -96,7 +97,6 @@ async function main(): Promise<void> {
       weights: plan.weights,
       seed: plan.seeds[index],
       maxPieces: plan.maxPieces,
-      search: plan.search,
     });
     results.push(result);
     const scoreRate = result.score / plan.maxPieces;
