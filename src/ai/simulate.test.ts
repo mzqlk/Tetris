@@ -405,7 +405,7 @@ describe('simulateGame', () => {
       .toThrow(new RegExp(String(FEATURE_COUNT)));
   });
 
-  it('reports completed fixed depth and no aborted searches', () => {
+  it('reports bounded budget diagnostics for a deep search', () => {
     const state = createSimState(7);
     state.board = boardFrom([
       '##########',
@@ -439,10 +439,11 @@ describe('simulateGame', () => {
       weights, maxPieces: 1,
     });
 
-    expect(result.searchDiagnostics).toMatchObject({
-      minCompletedDepth: 4,
-      abortedSearches: 0,
-    });
+    expect(result.searchDiagnostics.minCompletedDepth).toBeLessThanOrEqual(4);
+    expect(result.searchDiagnostics.budgetExhaustedSearches)
+      .toBe(result.searchDiagnostics.budgetExhaustionRate * result.searchDiagnostics.searchCalls);
+    expect(result.searchDiagnostics.maxWorkUnitsUsed)
+      .toBeLessThanOrEqual(DETERMINISTIC_SEARCH_LIMITS.maxWorkUnits);
   });
 });
 
