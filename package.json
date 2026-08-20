@@ -13,6 +13,7 @@
     "typecheck:train": "tsc -p tsconfig.train.json",
     "bench": "tsx training/bench.ts",
     "bench:paired": "tsx training/pairedBench.ts",
+    "calibrate:search": "tsx training/calibrateSearchBudget.ts",
     "train": "tsx training/train.ts"
   },
   "dependencies": {

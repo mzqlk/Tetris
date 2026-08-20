@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEPTH_ONE_REQUIRED_WORK_UNITS,
+  DETERMINISTIC_SEARCH_LIMITS,
   legalPlacementPoseUpperBound,
   WorkBudgetLedger,
 } from './searchBudget';
@@ -9,6 +10,10 @@ describe('deterministic search budget', () => {
   it('derives the finite legal-pose upper bound from all four rotations', () => {
     expect(legalPlacementPoseUpperBound()).toBe(756);
     expect(DEPTH_ONE_REQUIRED_WORK_UNITS).toBe(1512);
+  });
+
+  it('freezes the verified staircase budget integer', () => {
+    expect(DETERMINISTIC_SEARCH_LIMITS.maxWorkUnits).toBe(3584);
   });
 
   it('charges exactly once before refusing work at the limit', () => {

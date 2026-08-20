@@ -87,7 +87,7 @@ export const DETERMINISTIC_SEARCH_LIMITS: Readonly<SearchLimits> = Object.freeze
   maxRootPlacements: 64,
   maxChildPlacements: 32,
   maxLockedDepth: 4,
-  maxWorkUnits: DEPTH_ONE_REQUIRED_WORK_UNITS,
+  maxWorkUnits: 3584,
   transpositionCacheEntries: MAX_TRANSPOSITION_ENTRIES,
   placementCacheEntries: MAX_PLACEMENT_CACHE_ENTRIES,
 });
