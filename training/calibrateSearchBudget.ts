@@ -113,8 +113,8 @@ interface CliRunResult {
   output: CalibrationOutput;
 }
 
-interface SelectionCoreOutput extends Omit<SelectionOutput, 'environment'> {}
-interface VerificationCoreOutput extends Omit<VerificationOutput, 'environment'> {}
+type SelectionCoreOutput = Omit<SelectionOutput, 'environment'>;
+type VerificationCoreOutput = Omit<VerificationOutput, 'environment'>;
 
 function finiteNonNegative(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;

@@ -337,7 +337,8 @@ describe('buildReevaluationLogEntry', () => {
 
   it('rejects inconsistent qualification input before building an event', () => {
     const valid = validEvent();
-    const { seedStrategy: _seedStrategy, ...schedule } = valid.schedule;
+    const schedule = { ...valid.schedule };
+    Reflect.deleteProperty(schedule, 'seedStrategy');
 
     expect(() => buildReevaluationLogEntry({
       gen: valid.gen,
