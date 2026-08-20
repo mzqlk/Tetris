@@ -156,7 +156,7 @@ export function summarizeBench(
     search: {
       searchCalls,
       holdActions,
-      holdRate: totalPieces === 0 ? 0 : holdActions / totalPieces,
+      holdRate: searchCalls === 0 ? 0 : holdActions / searchCalls,
       completedDepth: distribution(
         results.map((result) => result.searchDiagnostics.meanCompletedDepth),
       ),

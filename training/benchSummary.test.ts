@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { SEARCH_METADATA } from './objective';
 import { buildBenchPlan, parseBenchArgs } from './bench';
 import { formatLineClearCounts, formatSearchDiagnostics, summarizeBench, type BenchResult } from './benchSummary';
+import { parseSearchDiagnostics } from '../src/ai/weights';
 
 const EXPECTED_SEARCH_METADATA = {
   searchContract: 'bag-expectimax-hold-v2',
@@ -91,7 +92,7 @@ describe('summarizeBench', () => {
         meanTetrisReadyRows: 2,
       },
       searchDiagnostics: search({
-        holdActions: 30, holdRate: 0.1, meanCompletedDepth: 4, minCompletedDepth: 4,
+        holdActions: 3, holdRate: 0.3, meanCompletedDepth: 4, minCompletedDepth: 4,
         completedDepthHistogram: [0, 0, 0, 0, 10],
         expandedDecisionNodes: 100, expandedChanceNodes: 40, cacheHits: 10,
       }),
@@ -105,7 +106,7 @@ describe('summarizeBench', () => {
         meanTetrisReadyRows: 0,
       },
       searchDiagnostics: search({
-        holdActions: 4, holdRate: 0.2, meanCompletedDepth: 3, minCompletedDepth: 2,
+        holdActions: 4, holdRate: 0.4, meanCompletedDepth: 3, minCompletedDepth: 2,
         completedDepthHistogram: [0, 0, 2, 0, 8],
         totalWorkUnitsUsed: 80, meanWorkUnitsUsed: 4, maxWorkUnitsUsed: 8,
         budgetExhaustedSearches: 1, budgetExhaustionRate: 0.1,
@@ -152,8 +153,8 @@ describe('summarizeBench', () => {
     const summary = summarizeBench(games, 300);
     expect(summary.search).toEqual({
       searchCalls: 20,
-      holdActions: 34,
-      holdRate: 34 / 320,
+      holdActions: 7,
+      holdRate: 7 / 20,
       completedDepth: { mean: 3.5, median: 3.5, min: 3, max: 4 },
       minCompletedDepth: 2,
       completedDepthHistogram: [0, 0, 2, 0, 18],
@@ -169,6 +170,54 @@ describe('summarizeBench', () => {
       expandedChanceNodes: 60,
       cacheHits: 18,
     });
+  });
+
+  it('derives aggregate hold rate from cumulative holds and search calls', () => {
+    const unevenGames: BenchResult[] = [
+      {
+        ...games[0],
+        searchDiagnostics: search({
+          searchCalls: 2,
+          holdActions: 1,
+          holdRate: 0.5,
+          meanCompletedDepth: 4,
+          minCompletedDepth: 4,
+          completedDepthHistogram: [0, 0, 0, 0, 2],
+          totalWorkUnitsUsed: 20,
+          meanWorkUnitsUsed: 10,
+          maxWorkUnitsUsed: 10,
+          placementEvaluationUnits: 10,
+          chanceExpansionUnits: 6,
+          cacheHitUnits: 4,
+        }),
+      },
+      {
+        ...games[1],
+        searchDiagnostics: search({
+          searchCalls: 8,
+          holdActions: 4,
+          holdRate: 0.5,
+          meanCompletedDepth: 4,
+          minCompletedDepth: 4,
+          completedDepthHistogram: [0, 0, 0, 0, 8],
+          totalWorkUnitsUsed: 80,
+          meanWorkUnitsUsed: 10,
+          maxWorkUnitsUsed: 10,
+          placementEvaluationUnits: 40,
+          chanceExpansionUnits: 24,
+          cacheHitUnits: 16,
+        }),
+      },
+    ];
+
+    const summary = summarizeBench(unevenGames, 300);
+
+    expect(summary.search.holdRate).toBe(0.5);
+    const { completedDepth, ...diagnostics } = summary.search;
+    expect(parseSearchDiagnostics({
+      ...diagnostics,
+      meanCompletedDepth: completedDepth.mean,
+    })).not.toBeNull();
   });
 
   it('rejects a game whose total work units do not equal its category units', () => {
@@ -195,8 +244,8 @@ describe('summarizeBench', () => {
 
   it('formats all aggregated search diagnostics for CLI output', () => {
     const summary = summarizeBench(games, 300);
-    expect(formatSearchDiagnostics(summary.search)).toContain('hold actions 34');
-    expect(formatSearchDiagnostics(summary.search)).toContain('hold rate 10.63%');
+    expect(formatSearchDiagnostics(summary.search)).toContain('hold actions 7');
+    expect(formatSearchDiagnostics(summary.search)).toContain('hold rate 35.00%');
     expect(formatSearchDiagnostics(summary.search)).toContain('completed depth mean/median/min/max 3.50/3.50/3/4');
     expect(formatSearchDiagnostics(summary.search)).toContain('search min completed depth 2');
     expect(formatSearchDiagnostics(summary.search)).toContain('decision nodes 160');

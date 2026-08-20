@@ -252,7 +252,6 @@ export function aggregateFitness(
       const rSearch = normalizeSearchDiagnostics(r.searchDiagnostics);
       searchDiagnostics.holdActions += rSearch.holdActions;
       searchDiagnostics.searchCalls! += rSearch.searchCalls!;
-      searchDiagnostics.holdRate += rSearch.holdRate;
       for (let depth = 0; depth < 5; depth++) {
         searchDiagnostics.completedDepthHistogram[depth] += rSearch.completedDepthHistogram![depth];
       }
@@ -287,7 +286,9 @@ export function aggregateFitness(
     meanStrategyDiagnostics.push(divideStrategyDiagnostics(strategyDiagnostics, gamesPerCandidate));
     meanSearchDiagnostics.push({
       ...searchDiagnostics,
-      holdRate: searchDiagnostics.holdRate / gamesPerCandidate,
+      holdRate: searchDiagnostics.searchCalls === 0
+        ? 0
+        : searchDiagnostics.holdActions / searchDiagnostics.searchCalls,
       meanCompletedDepth: searchDiagnostics.searchCalls === 0
         ? 0
         : searchDiagnostics.completedDepthHistogram.reduce(

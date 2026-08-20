@@ -788,13 +788,67 @@ Worker.prototype.postMessage = function (task) {
     }
   }, 20_000);
 
+  it.each([
+    [
+      'publishedBaseline',
+      { publishedBaseline: checkpointEvaluationFrom(evaluated(-1, 25_000)) },
+      /publishedBaseline|published baseline/i,
+    ],
+    [
+      'mu',
+      { mu: [0.25, ...Array(FEATURE_COUNT - 1).fill(0)] },
+      /\bmu\b/i,
+    ],
+    [
+      'sigma',
+      { sigma: [2, ...Array(FEATURE_COUNT - 1).fill(1)] },
+      /\bsigma\b/i,
+    ],
+    [
+      'maxPieces',
+      { maxPieces: DEFAULT_CONFIG.initialMaxPieces + 1 },
+      /maxPieces/i,
+    ],
+  ])('rejects stale %s at a gen-0 no-log boundary before workers or writes', (
+    _label,
+    checkpointOverrides,
+    expectedError,
+  ) => {
+    const parent = mkdtempSync(join(tmpdir(), 'tetris-sigint-stale-gen0-'));
+    const outputDir = join(parent, 'output');
+    mkdirSync(outputDir);
+    writeFileSync(join(outputDir, 'checkpoint.json'), JSON.stringify({
+      ...validCheckpoint(0),
+      mu: Array(FEATURE_COUNT).fill(0),
+      ...checkpointOverrides,
+    }));
+    writeFileSync(join(outputDir, 'sentinel.bin'), Buffer.from([0, 1, 2, 255]));
+    const before = snapshotDirectory(outputDir);
+
+    try {
+      const result = runTrain(outputDir, true);
+
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toMatch(expectedError);
+      expect(`${result.stdout}\n${result.stderr}`).not.toMatch(/training with .* workers/);
+      expect(snapshotDirectory(outputDir)).toEqual(before);
+      const nextOwner = acquireRunLock(TEMP_REPO_ROOT);
+      nextOwner.release();
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
   it('rejects a stale candidate beside a gen-0 no-log boundary without rewriting artifacts', () => {
     const parent = mkdtempSync(join(tmpdir(), 'tetris-sigint-stale-candidate-'));
     const outputDir = join(parent, 'output');
     const checkpointPath = join(outputDir, 'checkpoint.json');
     const candidatePath = join(outputDir, 'candidate-weights.json');
     mkdirSync(outputDir);
-    writeFileSync(checkpointPath, JSON.stringify(validCheckpoint(0)));
+    writeFileSync(checkpointPath, JSON.stringify({
+      ...validCheckpoint(0),
+      mu: Array(FEATURE_COUNT).fill(0),
+    }));
     writeFileSync(candidatePath, '{"stale":true}\n');
     const before = snapshotDirectory(outputDir);
 

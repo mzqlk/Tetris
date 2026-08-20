@@ -174,6 +174,18 @@ if (args.resume) {
     if (pathEntryExists(paths.candidate)) {
       throw new Error('gen-0 checkpoint without a log cannot contain a candidate artifact');
     }
+    if (boundaryCheckpoint.publishedBaseline !== null) {
+      throw new Error('gen-0 checkpoint without a log cannot contain a publishedBaseline');
+    }
+    if (boundaryCheckpoint.maxPieces !== boundaryCheckpoint.config.initialMaxPieces) {
+      throw new Error('gen-0 checkpoint without a log must use config.initialMaxPieces');
+    }
+    if (boundaryCheckpoint.mu.some((value) => value !== 0)) {
+      throw new Error('gen-0 checkpoint without a log must have an all-zero mu');
+    }
+    if (boundaryCheckpoint.sigma.some((value) => value !== 1)) {
+      throw new Error('gen-0 checkpoint without a log must have an all-one sigma');
+    }
     checkpoint = boundaryCheckpoint;
   } else {
     checkpoint = readCompatibleRunArtifacts(paths);

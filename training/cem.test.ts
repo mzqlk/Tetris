@@ -344,6 +344,36 @@ describe('aggregateFitness', () => {
     });
   });
 
+  it('derives aggregate hold rate from cumulative holds and search calls', () => {
+    const make = (searchCalls: number, holdActions: number) => result({
+      searchDiagnostics: {
+        searchCalls,
+        holdActions,
+        holdRate: searchCalls === 0 ? 0 : holdActions / searchCalls,
+        meanCompletedDepth: 4,
+        minCompletedDepth: 4,
+        completedDepthHistogram: [0, 0, 0, 0, searchCalls],
+        totalWorkUnitsUsed: searchCalls * 10,
+        meanWorkUnitsUsed: 10,
+        maxWorkUnitsUsed: 10,
+        budgetExhaustedSearches: 0,
+        budgetExhaustionRate: 0,
+        placementEvaluationUnits: searchCalls * 5,
+        chanceExpansionUnits: searchCalls * 3,
+        cacheHitUnits: searchCalls * 2,
+        expandedDecisionNodes: 0,
+        expandedChanceNodes: 0,
+        cacheHits: 0,
+      },
+    });
+
+    const stats = aggregateFitness([make(2, 1), make(8, 1)], 1, 2, 100);
+
+    expect(stats.meanSearchDiagnostics[0].searchCalls).toBe(10);
+    expect(stats.meanSearchDiagnostics[0].holdActions).toBe(2);
+    expect(stats.meanSearchDiagnostics[0].holdRate).toBe(0.2);
+  });
+
   it('derives mean completed depth from the aggregated histogram and search calls', () => {
     const withSearch = (searchCalls: number, histogram: [number, number, number, number, number]) =>
       result({
