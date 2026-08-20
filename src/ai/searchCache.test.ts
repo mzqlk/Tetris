@@ -4,9 +4,9 @@ import { createPiece } from '../engine/piece';
 import { TOTAL_ROWS } from '../constants';
 import type { PieceType } from '../types';
 import type { PendingPreviewState, PublicSearchState } from './publicState';
+import { WorkBudgetLedger } from './searchBudget';
 import {
   CappedCache,
-  MAX_PLACEMENT_CACHE_ENTRIES,
   PlacementPrototypeCache,
   chanceSurvivalUpperBound,
   collapseEquivalentPlacements,
@@ -94,44 +94,88 @@ describe('search cache primitives', () => {
       hold: 7 as PieceType,
     };
 
-    const first = cache.get(firstState);
-    const second = cache.get(secondState);
+    const first = cache.get(firstState, new WorkBudgetLedger(17));
+    expect(first.kind).toBe('complete');
+    if (first.kind !== 'complete') throw new Error('expected complete prototypes');
+    const second = cache.get(secondState, new WorkBudgetLedger(1));
+    expect(second.kind).toBe('complete');
+    if (second.kind !== 'complete') throw new Error('expected complete prototypes');
 
-    expect(second).toBe(first);
+    expect(second.prototypes).toBe(first.prototypes);
     expect(cache.hits).toBe(1);
-    const pending = materializePending(second[0], secondState);
+    const pending = materializePending(second.prototypes[0], secondState);
     expect(pending.current).toEqual(createPiece(3));
     expect(pending.hold).toBe(7);
     expect(pending.unseenBagMask).toBe(secondState.unseenBagMask);
     expect(pending.holdAvailable).toBe(true);
   });
 
-  it('does not retain more than the production placement cache cap', () => {
-    const cache = new PlacementPrototypeCache(zeros(), true);
-    for (let index = 0; index < MAX_PLACEMENT_CACHE_ENTRIES + 1; index++) {
-      cache.get(publicState({ board: uniqueBoard(index) }));
+  it('does not retain more than its configured placement cache cap', () => {
+    const cache = new PlacementPrototypeCache(zeros(), true, 2);
+    for (let index = 0; index < 3; index++) {
+      cache.get(
+        publicState({ board: uniqueBoard(index) }),
+        new WorkBudgetLedger(Number.MAX_SAFE_INTEGER),
+      );
     }
-    expect(cache.size).toBeLessThanOrEqual(MAX_PLACEMENT_CACHE_ENTRIES);
+    expect(cache.size).toBe(2);
   });
 
-  it('never exceeds a capped cache and preserves exact cached values', () => {
+  it('never exceeds a capped cache and charges exactly one unit for a hit', () => {
     const cache = new CappedCache<number>(2, true);
     cache.set('a', 1);
     cache.set('b', 2);
     cache.set('c', 3);
     expect(cache.size).toBe(2);
-    expect(cache.get('a')).toBe(1);
-    expect(cache.get('b')).toBe(2);
-    expect(cache.get('c')).toBeUndefined();
+    const ledger = new WorkBudgetLedger(1);
+    expect(cache.get('a', ledger)).toEqual({ kind: 'hit', value: 1 });
+    expect(cache.get('b', new WorkBudgetLedger(1))).toEqual({ kind: 'hit', value: 2 });
+    expect(cache.get('c', new WorkBudgetLedger(1))).toEqual({ kind: 'miss' });
     expect(cache.hits).toBe(2);
+    expect(ledger.snapshot()).toMatchObject({
+      used: 1,
+      cacheHitUnits: 1,
+    });
   });
 
   it('does not insert or report hits when a capped cache is disabled', () => {
     const cache = new CappedCache<number>(2, false);
     cache.set('a', 1);
-    expect(cache.get('a')).toBeUndefined();
+    expect(cache.get('a', new WorkBudgetLedger(1))).toEqual({ kind: 'miss' });
     expect(cache.size).toBe(0);
     expect(cache.hits).toBe(0);
+  });
+
+  it('does not publish a partial placement prototype cache entry', () => {
+    const cache = new PlacementPrototypeCache(zeros(), true);
+    const searchState = publicState({ current: createPiece(1) });
+    const exhaustedLedger = new WorkBudgetLedger(16);
+
+    expect(cache.get(searchState, exhaustedLedger)).toEqual({ kind: 'exhausted' });
+    expect(cache.size).toBe(0);
+    expect(cache.hits).toBe(0);
+    expect(exhaustedLedger.snapshot()).toMatchObject({
+      placementEvaluationUnits: 16,
+      cacheHitUnits: 0,
+    });
+
+    const completeLedger = new WorkBudgetLedger(17);
+    const rebuilt = cache.get(searchState, completeLedger);
+    expect(rebuilt.kind).toBe('complete');
+    if (rebuilt.kind !== 'complete') throw new Error('expected complete prototypes');
+    expect(rebuilt.prototypes).toHaveLength(17);
+    expect(cache.size).toBe(1);
+    expect(completeLedger.snapshot()).toMatchObject({
+      placementEvaluationUnits: 17,
+      cacheHitUnits: 0,
+    });
+
+    const hitLedger = new WorkBudgetLedger(1);
+    expect(cache.get(searchState, hitLedger).kind).toBe('complete');
+    expect(hitLedger.snapshot()).toMatchObject({
+      placementEvaluationUnits: 0,
+      cacheHitUnits: 1,
+    });
   });
 
   it('keeps only the dominant placement for an equivalent public future', () => {

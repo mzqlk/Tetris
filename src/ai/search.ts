@@ -26,8 +26,19 @@ import {
   shouldPruneChance,
   SURVIVAL_EPSILON,
 } from './searchCache';
+import {
+  DEPTH_ONE_REQUIRED_WORK_UNITS,
+  DETERMINISTIC_SEARCH_LIMITS,
+  WorkBudgetLedger,
+  type SearchLimits,
+} from './searchBudget';
 
 export { SURVIVAL_EPSILON } from './searchCache';
+/** @deprecated Protected v1 probe compatibility only. */
+export {
+  MAX_PLACEMENT_CACHE_ENTRIES,
+  MAX_TRANSPOSITION_ENTRIES,
+} from './searchCache';
 
 export type SearchAction =
   | { kind: 'place'; placement: Placement }
@@ -39,6 +50,46 @@ export interface SearchValue {
 }
 
 export interface SearchDiagnostics {
+  completedDepth: 0 | 1 | 2 | 3 | 4;
+  attemptedDepth: 1 | 2 | 3 | 4;
+  workUnitsUsed: number;
+  workUnitsLimit: number;
+  placementEvaluationUnits: number;
+  chanceExpansionUnits: number;
+  cacheHitUnits: number;
+  budgetExhausted: boolean;
+  expandedDecisionNodes: number;
+  expandedChanceNodes: number;
+  cacheHits: number;
+  placementCacheHits: number;
+  placementCacheEntries: number;
+  transpositionEntries: number;
+  equivalentPlacementsRemoved: number;
+  prunedChanceBranches: number;
+  /** @deprecated Protected probe compile compatibility only. */
+  aborted: boolean;
+}
+
+/** @deprecated Protected v1 probe compatibility only. */
+export interface LegacyFixedSearchBudget {
+  maxRootPlacements: number;
+  maxChildPlacements: number;
+  maxLockedDepth: 1 | 2 | 3 | 4;
+  shouldAbort: () => boolean;
+  cacheEnabled?: boolean;
+}
+
+/** @deprecated Protected v1 probe compatibility only. */
+export type SearchBudget = LegacyFixedSearchBudget;
+
+export interface SearchDecision {
+  action: SearchAction;
+  value: SearchValue;
+  diagnostics: SearchDiagnostics;
+}
+
+/** @deprecated Protected v1 caller compatibility only. */
+export interface LegacySearchDiagnostics {
   completedDepth: number;
   expandedDecisionNodes: number;
   expandedChanceNodes: number;
@@ -51,20 +102,14 @@ export interface SearchDiagnostics {
   aborted: boolean;
 }
 
-export interface SearchBudget {
-  maxRootPlacements: number;
-  maxChildPlacements: number;
-  maxLockedDepth: 1 | 2 | 3 | 4;
-  shouldAbort: () => boolean;
-  cacheEnabled?: boolean;
-}
-
-export interface SearchDecision {
+/** @deprecated Protected v1 caller compatibility only. */
+export interface LegacySearchDecision {
   action: SearchAction;
   value: SearchValue;
-  diagnostics: SearchDiagnostics;
+  diagnostics: LegacySearchDiagnostics;
 }
 
+/** @deprecated Protected v1 probe compatibility only. */
 export const FIXED_SEARCH_LIMITS = Object.freeze({
   maxRootPlacements: 64,
   maxChildPlacements: 32,
@@ -83,10 +128,20 @@ const TERMINAL_VALUE: SearchValue = Object.freeze({
 });
 
 interface SearchContext {
-  budget: SearchBudget;
+  budget: InternalSearchBudget;
   diagnostics: SearchDiagnostics;
+  ledger: WorkBudgetLedger;
   cache: CappedCache<SearchValue>;
   placementCache: PlacementPrototypeCache;
+}
+
+interface InternalSearchBudget {
+  maxRootPlacements: number;
+  maxChildPlacements: number;
+  maxLockedDepth: 1 | 2 | 3 | 4;
+  transpositionCacheEntries: number;
+  placementCacheEntries: number;
+  cacheEnabled: boolean;
 }
 
 interface NodeResult {
@@ -111,7 +166,7 @@ export interface PlacementBeamEntry {
 export function selectPlacementBeam<T extends PlacementBeamEntry>(
   entries: T[],
   root: boolean,
-  budget: SearchBudget,
+  budget: Pick<SearchLimits, 'maxRootPlacements' | 'maxChildPlacements'>,
 ): T[] {
   const limit = root ? budget.maxRootPlacements : budget.maxChildPlacements;
   return [...entries]
@@ -132,7 +187,7 @@ export function compareSearchValues(a: SearchValue, b: SearchValue): number {
   return a.expectedHeuristicValue - b.expectedHeuristicValue;
 }
 
-function validateBudget(budget: SearchBudget): void {
+function validateLimits(budget: SearchLimits): void {
   if (!Number.isInteger(budget.maxRootPlacements) || budget.maxRootPlacements < 1) {
     throw new Error('maxRootPlacements must be a positive integer');
   }
@@ -142,15 +197,27 @@ function validateBudget(budget: SearchBudget): void {
   if (![1, 2, 3, 4].includes(budget.maxLockedDepth)) {
     throw new Error('maxLockedDepth must be between 1 and 4');
   }
-  if (typeof budget.shouldAbort !== 'function') {
-    throw new Error('shouldAbort must be a function');
+  if (!Number.isSafeInteger(budget.maxWorkUnits) || budget.maxWorkUnits < 1) {
+    throw new Error('maxWorkUnits must be a positive safe integer');
+  }
+  if (budget.maxWorkUnits < DEPTH_ONE_REQUIRED_WORK_UNITS) {
+    throw new Error('work budget must cover depth one');
+  }
+  for (const [name, value] of [
+    ['transpositionCacheEntries', budget.transpositionCacheEntries],
+    ['placementCacheEntries', budget.placementCacheEntries],
+  ] as const) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new Error(`${name} must be a non-negative safe integer`);
+    }
   }
 }
 
 function cachedResult(context: SearchContext, key: string): NodeResult | null {
-  const value = context.cache.get(key);
-  if (value === undefined) return null;
-  return { value, completed: true, action: null };
+  const lookup = context.cache.get(key, context.ledger);
+  if (lookup.kind === 'miss') return null;
+  if (lookup.kind === 'exhausted') return budgetExhaustedResult(context);
+  return { value: lookup.value, completed: true, action: null };
 }
 
 function cacheComplete(context: SearchContext, key: string, result: NodeResult): void {
@@ -159,9 +226,8 @@ function cacheComplete(context: SearchContext, key: string, result: NodeResult):
   }
 }
 
-function abortResult(context: SearchContext, best: NodeResult | null = null): NodeResult {
-  void best;
-  context.diagnostics.aborted = true;
+function budgetExhaustedResult(context: SearchContext): NodeResult {
+  context.diagnostics.budgetExhausted = true;
   return {
     value: TERMINAL_VALUE,
     action: null,
@@ -174,8 +240,10 @@ function rankPlacements(
   context: SearchContext,
   root: boolean,
   remainingDepth: number,
-): RankedPlacement[] {
-  const entries = context.placementCache.get(state).map((prototype) => ({
+): RankedPlacement[] | null {
+  const lookup = context.placementCache.get(state, context.ledger);
+  if (lookup.kind === 'exhausted') return null;
+  const entries = lookup.prototypes.map((prototype) => ({
     placement: prototype.placement,
     immediateHeuristic: prototype.immediateHeuristic,
     pending: materializePending(prototype, state),
@@ -224,7 +292,6 @@ function searchChance(
   context: SearchContext,
   incumbentSurvival: number | null = null,
 ): NodeResult {
-  if (context.budget.shouldAbort()) return abortResult(context);
   const key = `chance|${pendingStateKey(pending, remainingDepth, root)}`;
   const cached = cachedResult(context, key);
   if (cached !== null) return cached;
@@ -234,12 +301,12 @@ function searchChance(
   let expectedHeuristicValue = 0;
   let remainingProbability = 1;
   for (const outcome of enumerateBagOutcomes(pending.unseenBagMask)) {
-    if (context.budget.shouldAbort()) return abortResult(context);
+    if (!context.ledger.tryConsume('chanceExpansion')) return budgetExhaustedResult(context);
     const revealed = revealPreview(pending, outcome.piece);
     const child = revealed === null
       ? { value: TERMINAL_VALUE, completed: true, action: null }
       : searchDecision(revealed, remainingDepth, root, context);
-    if (!child.completed) return abortResult(context);
+    if (!child.completed) return child;
     survivalProbability += outcome.probability * child.value.survivalProbability;
     expectedHeuristicValue += outcome.probability * child.value.expectedHeuristicValue;
     remainingProbability -= outcome.probability;
@@ -270,7 +337,6 @@ function searchPendingLeaf(
   root: boolean,
   context: SearchContext,
 ): NodeResult {
-  if (context.budget.shouldAbort()) return abortResult(context);
   const key = `pending-leaf|${pendingStateKey(pending, 1, root)}`;
   const cached = cachedResult(context, key);
   if (cached !== null) return cached;
@@ -283,8 +349,9 @@ function searchPendingLeaf(
     next: pending.current.type,
   };
   let best: NodeResult | null = null;
-  for (const ranked of rankPlacements(syntheticState, context, root, 1)) {
-    if (context.budget.shouldAbort()) return abortResult(context, best);
+  const rankedPlacements = rankPlacements(syntheticState, context, root, 1);
+  if (rankedPlacements === null) return budgetExhaustedResult(context);
+  for (const ranked of rankedPlacements) {
     const candidate: NodeResult = {
       value: {
         survivalProbability: 1,
@@ -307,15 +374,15 @@ function searchDecision(
   root: boolean,
   context: SearchContext,
 ): NodeResult {
-  if (context.budget.shouldAbort()) return abortResult(context);
   const key = decisionStateKey(state, remainingDepth, root);
   const cached = cachedResult(context, key);
   if (cached !== null) return cached;
 
   context.diagnostics.expandedDecisionNodes++;
   let best: NodeResult | null = null;
-  for (const ranked of rankPlacements(state, context, root, remainingDepth)) {
-    if (context.budget.shouldAbort()) return abortResult(context, best);
+  const rankedPlacements = rankPlacements(state, context, root, remainingDepth);
+  if (rankedPlacements === null) return budgetExhaustedResult(context);
+  for (const ranked of rankedPlacements) {
     let future: NodeResult;
     if (remainingDepth === 1) {
       future = {
@@ -332,7 +399,7 @@ function searchDecision(
         best?.value.survivalProbability ?? null,
       );
     }
-    if (!future.completed) return abortResult(context, best);
+    if (!future.completed) return future;
     if (future.dominated === true) continue;
 
     const candidate: NodeResult = {
@@ -345,7 +412,6 @@ function searchDecision(
 
   const hold = applyHold(state);
   if (hold.kind !== 'unavailable') {
-    if (context.budget.shouldAbort()) return abortResult(context, best);
     let held: NodeResult;
     if (hold.kind === 'ready') {
       held = searchDecision(hold.state, remainingDepth, root, context);
@@ -360,7 +426,7 @@ function searchDecision(
         best?.value.survivalProbability ?? null,
       );
     }
-    if (!held.completed) return abortResult(context, best);
+    if (!held.completed) return held;
     if (held.dominated === true) {
       const result = best ?? { value: TERMINAL_VALUE, completed: true, action: null };
       cacheComplete(context, key, result);
@@ -382,6 +448,13 @@ function searchDecision(
 function emptySearchDiagnostics(): SearchDiagnostics {
   return {
     completedDepth: 0,
+    attemptedDepth: 1,
+    workUnitsUsed: 0,
+    workUnitsLimit: 0,
+    placementEvaluationUnits: 0,
+    chanceExpansionUnits: 0,
+    cacheHitUnits: 0,
+    budgetExhausted: false,
     expandedDecisionNodes: 0,
     expandedChanceNodes: 0,
     cacheHits: 0,
@@ -396,123 +469,117 @@ function emptySearchDiagnostics(): SearchDiagnostics {
 
 function createSearchContext(
   weights: number[],
-  budget: SearchBudget,
+  budget: InternalSearchBudget,
+  ledger: WorkBudgetLedger,
   diagnostics: SearchDiagnostics,
 ): SearchContext {
-  const cacheEnabled = budget.cacheEnabled !== false;
   return {
     budget,
+    ledger,
     diagnostics,
-    cache: new CappedCache(MAX_TRANSPOSITION_ENTRIES, cacheEnabled),
-    placementCache: new PlacementPrototypeCache(weights, cacheEnabled),
+    cache: new CappedCache(budget.transpositionCacheEntries, budget.cacheEnabled),
+    placementCache: new PlacementPrototypeCache(
+      weights,
+      budget.cacheEnabled,
+      budget.placementCacheEntries,
+    ),
   };
 }
 
+function finishDiagnostics(context: SearchContext): void {
+  syncCacheDiagnostics(context);
+  const snapshot = context.ledger.snapshot();
+  context.diagnostics.workUnitsUsed = snapshot.used;
+  context.diagnostics.workUnitsLimit = snapshot.limit;
+  context.diagnostics.placementEvaluationUnits = snapshot.placementEvaluationUnits;
+  context.diagnostics.chanceExpansionUnits = snapshot.chanceExpansionUnits;
+  context.diagnostics.cacheHitUnits = snapshot.cacheHitUnits;
+  context.diagnostics.budgetExhausted ||= snapshot.exhausted;
+  context.diagnostics.aborted = context.diagnostics.budgetExhausted;
+}
+
+function validateWeights(weights: number[]): void {
+  if (weights.length !== FEATURE_COUNT || weights.some((weight) => !Number.isFinite(weight))) {
+    throw new Error(`search weights must contain exactly ${FEATURE_COUNT} finite values`);
+  }
+}
+
+function legacyLimits(budget: LegacyFixedSearchBudget): SearchLimits {
+  return {
+    maxRootPlacements: budget.maxRootPlacements,
+    maxChildPlacements: budget.maxChildPlacements,
+    maxLockedDepth: budget.maxLockedDepth,
+    maxWorkUnits: Number.MAX_SAFE_INTEGER,
+    transpositionCacheEntries: MAX_TRANSPOSITION_ENTRIES,
+    placementCacheEntries: 16_384,
+  };
+}
+
+/** @deprecated Never import from production consumers or execute in verification. */
 export function searchFixed(
   state: PublicSearchState,
   weights: number[],
-  budget: SearchBudget = {
+  budget: LegacyFixedSearchBudget = {
     ...FIXED_SEARCH_LIMITS,
     shouldAbort: () => false,
   },
 ): SearchDecision | null {
-  assertPublicSearchState(state);
-  validateBudget(budget);
-  if (weights.length !== FEATURE_COUNT || weights.some((weight) => !Number.isFinite(weight))) {
-    throw new Error(`search weights must contain exactly ${FEATURE_COUNT} finite values`);
-  }
-
-  const diagnostics = emptySearchDiagnostics();
-  const context = createSearchContext(weights, budget, diagnostics);
-  const result = searchDecision(state, budget.maxLockedDepth, true, context);
-  syncCacheDiagnostics(context);
-  if (result.completed) diagnostics.completedDepth = budget.maxLockedDepth;
-  if (result.completed && result.action !== null) {
-    return { action: result.action, value: result.value, diagnostics };
-  }
-  if (!result.completed) {
-    const fallbackDiagnostics = emptySearchDiagnostics();
-    const fallbackBudget: SearchBudget = {
-      ...budget,
-      maxLockedDepth: 1,
-      shouldAbort: () => false,
-    };
-    const fallbackContext = createSearchContext(weights, fallbackBudget, fallbackDiagnostics);
-    const fallback = searchDecision(state, 1, true, fallbackContext);
-    syncCacheDiagnostics(fallbackContext);
-    diagnostics.expandedDecisionNodes += fallbackDiagnostics.expandedDecisionNodes;
-    diagnostics.expandedChanceNodes += fallbackDiagnostics.expandedChanceNodes;
-    diagnostics.cacheHits += fallbackDiagnostics.cacheHits;
-    diagnostics.placementCacheHits += fallbackDiagnostics.placementCacheHits;
-    diagnostics.placementCacheEntries += fallbackDiagnostics.placementCacheEntries;
-    diagnostics.transpositionEntries += fallbackDiagnostics.transpositionEntries;
-    diagnostics.completedDepth = fallback.completed ? 1 : 0;
-    if (fallback.action !== null) {
-      return { action: fallback.action, value: fallback.value, diagnostics };
-    }
-  }
-  return null;
-}
-
-function completePlacementFallback(
-  state: PublicSearchState,
-  weights: number[],
-): { action: SearchAction; value: SearchValue } | null {
-  const placements = enumeratePlacements(state.board, state.current);
-  let best: { action: SearchAction; value: SearchValue; index: number } | null = null;
-  placements.forEach((placement, index) => {
-    const evaluated = evaluatePlacement(state, placement, weights);
-    const candidate = {
-      action: { kind: 'place' as const, placement },
-      value: { survivalProbability: 1, expectedHeuristicValue: evaluated.heuristic },
-      index,
-    };
-    if (best === null
-      || compareSearchValues(candidate.value, best.value) > 0
-      || (compareSearchValues(candidate.value, best.value) === 0 && index < best.index)) {
-      best = candidate;
-    }
-  });
-  if (best === null) return null;
-  const selected = best as { action: SearchAction; value: SearchValue; index: number };
-  return { action: selected.action, value: selected.value };
+  return runBudgeted(state, weights, legacyLimits(budget), budget.cacheEnabled !== false);
 }
 
 /** Browser entry point: progressively deepen and publish only complete depths. */
-export function searchIterative(
+export function searchBudgeted(
   state: PublicSearchState,
   weights: number[],
-  budget: SearchBudget,
+  limits: SearchLimits = DETERMINISTIC_SEARCH_LIMITS,
+): SearchDecision | null {
+  return runBudgeted(state, weights, limits, true);
+}
+
+function runBudgeted(
+  state: PublicSearchState,
+  weights: number[],
+  limits: SearchLimits,
+  cacheEnabled: boolean,
 ): SearchDecision | null {
   assertPublicSearchState(state);
-  validateBudget(budget);
-  if (weights.length !== FEATURE_COUNT || weights.some((weight) => !Number.isFinite(weight))) {
-    throw new Error(`search weights must contain exactly ${FEATURE_COUNT} finite values`);
-  }
+  validateLimits(limits);
+  validateWeights(weights);
 
   const diagnostics = emptySearchDiagnostics();
-  const context = createSearchContext(weights, budget, diagnostics);
+  const context = createSearchContext(weights, {
+    maxRootPlacements: limits.maxRootPlacements,
+    maxChildPlacements: limits.maxChildPlacements,
+    maxLockedDepth: limits.maxLockedDepth,
+    transpositionCacheEntries: limits.transpositionCacheEntries,
+    placementCacheEntries: limits.placementCacheEntries,
+    cacheEnabled,
+  }, new WorkBudgetLedger(limits.maxWorkUnits), diagnostics);
   let committed: SearchDecision | null = null;
-  let aborted = false;
-  for (let depth = 1; depth <= budget.maxLockedDepth; depth++) {
+  for (let depth = 1; depth <= limits.maxLockedDepth; depth++) {
+    diagnostics.attemptedDepth = depth as 1 | 2 | 3 | 4;
     const result = searchDecision(state, depth, true, context);
     if (!result.completed) {
-      aborted = true;
-      diagnostics.aborted = true;
+      diagnostics.budgetExhausted = true;
+      if (depth === 1) throw new Error('depth-one work budget invariant violated');
       break;
     }
+    diagnostics.completedDepth = depth as 1 | 2 | 3 | 4;
     if (result.action !== null) {
-      diagnostics.completedDepth = depth;
       committed = { action: result.action, value: result.value, diagnostics };
     }
   }
-  syncCacheDiagnostics(context);
-  if (committed !== null) return committed;
+  finishDiagnostics(context);
+  return committed;
+}
 
-  diagnostics.aborted = aborted;
-  const fallback = completePlacementFallback(state, weights);
-  if (fallback === null) return null;
-  return { ...fallback, diagnostics };
+/** @deprecated Protected v1 caller compatibility only. */
+export function searchIterative(
+  state: PublicSearchState,
+  weights: number[],
+  budget: LegacyFixedSearchBudget,
+): LegacySearchDecision | null {
+  return searchFixed(state, weights, budget);
 }
 
 export interface EvalResult {

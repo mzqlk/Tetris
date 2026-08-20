@@ -6,10 +6,22 @@ import {
   evaluatePlacement,
 } from './stateTransitions';
 import type { PendingPreviewState, PublicSearchState } from './publicState';
+import type { WorkBudgetLedger } from './searchBudget';
 
+/** @deprecated Protected v1 probe compatibility only. */
 export const MAX_TRANSPOSITION_ENTRIES = 65_536;
+/** @deprecated Protected v1 probe compatibility only. */
 export const MAX_PLACEMENT_CACHE_ENTRIES = 16_384;
 export const SURVIVAL_EPSILON = 1e-12;
+
+export type CacheLookup<V> =
+  | { kind: 'hit'; value: V }
+  | { kind: 'miss' }
+  | { kind: 'exhausted' };
+
+export type PlacementPrototypeLookup =
+  | { kind: 'complete'; prototypes: readonly PlacementPrototype[] }
+  | { kind: 'exhausted' };
 
 export interface PlacementPrototype {
   placement: Placement;
@@ -36,11 +48,15 @@ export class CappedCache<V> {
     }
   }
 
-  get(key: string): V | undefined {
-    if (!this.enabled) return undefined;
+  get(key: string, ledger?: WorkBudgetLedger): CacheLookup<V> {
+    if (!this.enabled) return { kind: 'miss' };
     const value = this.values.get(key);
-    if (value !== undefined) this.hitCount++;
-    return value;
+    if (value === undefined) return { kind: 'miss' };
+    if (ledger !== undefined && !ledger.tryConsume('cacheHit')) {
+      return { kind: 'exhausted' };
+    }
+    this.hitCount++;
+    return { kind: 'hit', value };
   }
 
   set(key: string, value: V): void {
@@ -162,29 +178,37 @@ export class PlacementPrototypeCache {
   constructor(
     private readonly weights: number[],
     enabled: boolean,
+    placementCacheEntries = MAX_PLACEMENT_CACHE_ENTRIES,
   ) {
     if (weights.length !== FEATURE_COUNT || weights.some((weight) => !Number.isFinite(weight))) {
       throw new Error(`placement cache weights must contain exactly ${FEATURE_COUNT} finite values`);
     }
-    this.values = new CappedCache(MAX_PLACEMENT_CACHE_ENTRIES, enabled);
+    this.values = new CappedCache(placementCacheEntries, enabled);
   }
 
-  get(state: PublicSearchState): readonly PlacementPrototype[] {
+  get(
+    state: PublicSearchState,
+    ledger: WorkBudgetLedger,
+  ): PlacementPrototypeLookup {
     const key = placementPrototypeKey(state.board, state.current);
-    const cached = this.values.get(key);
-    if (cached !== undefined) return cached;
+    const cached = this.values.get(key, ledger);
+    if (cached.kind === 'hit') return { kind: 'complete', prototypes: cached.value };
+    if (cached.kind === 'exhausted') return cached;
 
-    const prototypes = enumeratePlacements(state.board, state.current).map((placement, enumerationIndex) => {
+    const placements = enumeratePlacements(state.board, state.current);
+    const prototypes: PlacementPrototype[] = [];
+    for (const [enumerationIndex, placement] of placements.entries()) {
+      if (!ledger.tryConsume('placementEvaluation')) return { kind: 'exhausted' };
       const evaluated = evaluatePlacement(state, placement, this.weights);
-      return Object.freeze({
+      prototypes.push(Object.freeze({
         placement,
         enumerationIndex,
         immediateHeuristic: evaluated.heuristic,
         boardAfter: evaluated.boardAfter,
-      });
-    });
+      }));
+    }
     this.values.set(key, prototypes);
-    return prototypes;
+    return { kind: 'complete', prototypes };
   }
 
   get size(): number {
