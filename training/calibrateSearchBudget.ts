@@ -46,6 +46,17 @@ export interface CandidateMeasurement {
   reasons: readonly string[];
 }
 
+export interface MeasurementFailureTrace {
+  status: 'fail';
+  budget: number;
+  attemptKind: 'candidate' | 'block';
+  attemptIndex: number;
+  reason: 'measurement-error';
+  reasons: readonly ['measurement-error'];
+}
+
+export type MeasurementAttempt = CandidateMeasurement | MeasurementFailureTrace;
+
 export interface CalibrationEnvironment {
   nodeVersion: string;
   platform: string;
@@ -70,7 +81,7 @@ export interface SelectionOutput {
   status: 'pass' | 'fail';
   corpus: 'budget-corpus-v1';
   proposedBudget: number | null;
-  candidates: readonly CandidateMeasurement[];
+  candidates: readonly MeasurementAttempt[];
   stopReason: SelectionStopReason | null;
   failureReasons: readonly string[];
   environment: CalibrationEnvironment;
@@ -81,7 +92,7 @@ export interface VerificationOutput {
   status: 'pass' | 'fail';
   corpus: 'budget-corpus-v1';
   frozenBudget: number;
-  blocks: readonly CandidateMeasurement[];
+  blocks: readonly MeasurementAttempt[];
   failureReasons: readonly string[];
   environment: CalibrationEnvironment;
 }
@@ -214,7 +225,7 @@ function annotateMeasurement(
 }
 
 function failedSelection(
-  candidates: readonly CandidateMeasurement[],
+  candidates: readonly MeasurementAttempt[],
   failureReasons: readonly string[],
   stopReason: SelectionStopReason | null,
 ): SelectionCoreOutput {
@@ -238,7 +249,7 @@ export function selectBudgetFromLadder(
   }
   const start = Math.ceil(Math.max(DEPTH_ONE_REQUIRED_WORK_UNITS, minimum)
     / BUDGET_CANDIDATE_STEP) * BUDGET_CANDIDATE_STEP;
-  const candidates: CandidateMeasurement[] = [];
+  const candidates: MeasurementAttempt[] = [];
   const selectable: CandidateMeasurement[] = [];
   const failureReasons: string[] = [];
   let consecutiveAboveVerificationLimit = 0;
@@ -249,8 +260,16 @@ export function selectBudgetFromLadder(
     let raw: CandidateMeasurement;
     try {
       raw = measure(budget);
-    } catch (error) {
-      failureReasons.push(`candidate-${budget}-measurement-error:${error instanceof Error ? error.message : String(error)}`);
+    } catch {
+      candidates.push({
+        status: 'fail',
+        budget,
+        attemptKind: 'candidate',
+        attemptIndex: offset + 1,
+        reason: 'measurement-error',
+        reasons: ['measurement-error'],
+      });
+      failureReasons.push(`candidate-${budget}-measurement-error`);
       break;
     }
     const annotated = annotateMeasurement(budget, raw, 'selection');
@@ -300,7 +319,7 @@ export function verifyFrozenBudget(
   frozenBudget: number,
   measure: MeasurementFunction,
 ): VerificationCoreOutput {
-  const blocks: CandidateMeasurement[] = [];
+  const blocks: MeasurementAttempt[] = [];
   const failureReasons: string[] = [];
   if (!Number.isSafeInteger(frozenBudget) || frozenBudget < 1) {
     failureReasons.push('frozen-budget-must-be-a-positive-safe-integer');
@@ -316,8 +335,16 @@ export function verifyFrozenBudget(
           && annotated.measurement.worstP95Ms > VERIFICATION_P95_LIMIT_MS) {
           failureReasons.push(`block-${block + 1}-above-verification-limit`);
         }
-      } catch (error) {
-        failureReasons.push(`block-${block + 1}-measurement-error:${error instanceof Error ? error.message : String(error)}`);
+      } catch {
+        blocks.push({
+          status: 'fail',
+          budget: frozenBudget,
+          attemptKind: 'block',
+          attemptIndex: block + 1,
+          reason: 'measurement-error',
+          reasons: ['measurement-error'],
+        });
+        failureReasons.push(`block-${block + 1}-measurement-error`);
       }
     }
   }

@@ -171,6 +171,25 @@ describe('search budget selection ladder', () => {
       ['trace-1792', 'structural-invariants-pass', 'selection-p95-at-or-below-limit'],
     ]);
   });
+
+  it('retains an explicit failed candidate attempt when measurement throws', () => {
+    const result = selectBudgetFromLadder((budget) => {
+      if (budget === 1792) throw new Error('sentinel candidate failure');
+      return fakeMeasurement({ budget });
+    });
+
+    expect(result.status).toBe('fail');
+    expect(result.candidates).toHaveLength(2);
+    expect(result.candidates[1]).toEqual({
+      status: 'fail',
+      budget: 1792,
+      attemptKind: 'candidate',
+      attemptIndex: 2,
+      reason: 'measurement-error',
+      reasons: ['measurement-error'],
+    });
+    expect(result.failureReasons).toContain('candidate-1792-measurement-error');
+  });
 });
 
 describe('frozen budget verification', () => {
@@ -183,7 +202,9 @@ describe('frozen budget verification', () => {
 
     expect(result.status).toBe('pass');
     expect(result.blocks).toHaveLength(3);
-    expect(result.blocks.map((measurement) => measurement.worstP95Ms)).toEqual([151, 159, 160]);
+    expect(result.blocks.map((measurement) => 'worstP95Ms' in measurement
+      ? measurement.worstP95Ms
+      : null)).toEqual([151, 159, 160]);
   });
 
   it('fails when any block exceeds the verification line', () => {
@@ -214,6 +235,28 @@ describe('frozen budget verification', () => {
     expect(result.status).toBe('fail');
     expect(result.blocks).toHaveLength(3);
     expect(result.failureReasons.some((reason) => reason.includes('structural-invariants'))).toBe(true);
+  });
+
+  it('retains all three block attempts when the second measurement throws', () => {
+    let block = 0;
+    const result = verifyFrozenBudget(3584, (budget) => {
+      block++;
+      if (block === 2) throw new Error('sentinel block failure');
+      return fakeMeasurement({ budget });
+    });
+
+    expect(block).toBe(3);
+    expect(result.status).toBe('fail');
+    expect(result.blocks).toHaveLength(3);
+    expect(result.blocks[1]).toEqual({
+      status: 'fail',
+      budget: 3584,
+      attemptKind: 'block',
+      attemptIndex: 2,
+      reason: 'measurement-error',
+      reasons: ['measurement-error'],
+    });
+    expect(result.failureReasons).toContain('block-2-measurement-error');
   });
 });
 
