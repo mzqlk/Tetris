@@ -90,7 +90,7 @@ npm run lint
 
 - **Autoplay 开关** — 开启/关闭 AI 自动对战。
 - **Speed** — 出手速度：`instant`（立即落子）、`normal`、`slow`。
-- **Lookahead** — 当前固定的 4-lock bag-aware 搜索（`bag-expectimax-hold-v1`，root/child beams 64/32）；旧的 1/2-ply helpers 仅作兼容保留。
+- **Lookahead** — 当前固定的 4-lock bag-aware 搜索（`bag-expectimax-hold-v2`，root/child beams 64/32，冻结预算 3584）；旧的 v1/1/2-ply helpers 仅作历史兼容保留。
 - **Weights** — 权重来源：
   - `bundled`：打包进构建产物的权重（`src/ai/trained-weights.json`，训练产出，缺省时回退到手工设定的 Dellacherie 式权重）。
   - `trained`：运行时从 `public/ai/best-weights.json` 拉取的最新训练权重，无需重新构建即可生效；训练尚未产出该文件前此选项不可用。
@@ -115,8 +115,12 @@ npm run train -- --generations 200 --output-dir public/ai/<new-run-id>
 # 代价很小：实测 31 → 8 个 worker，单代只慢 16%（一代的耗时由少数长对局的尾巴决定）
 npm run train -- --generations 200 --workers 8 --output-dir public/ai/<new-run-id>
 
-# 从默认 score-rate-v4 checkpoint 继续训练（须先完整核验并获得授权）
+# 从默认 score-rate-v5 checkpoint 继续训练（须先完整核验并获得授权）
 npm run train -- --resume
+
+# 搜索预算校准（只读门；不是训练、benchmark 或浏览器验收）
+npm run calibrate:search -- --select
+npm run calibrate:search -- --verify-frozen
 
 # 对已产出的 qualified candidate 与发布基线做独立逐局配对（命令已实现；仍须单独授权）
 # seed 必须是独立整数，不得复用训练或固定复评 seed，并在本次基线/候选配对中固定使用
@@ -126,14 +130,22 @@ npm run bench:paired -- --baseline <baseline-weights> --candidate <candidate-wei
 npm run typecheck:train
 ```
 
-当前代码与训练器契约是 **`score-rate-v4`、checkpoint schema 5、13 维特征**，搜索契约为 `bag-expectimax-hold-v1`：搜索仅使用公开局面信息，采用标准 Hold、精确 bag chance、depth 4、beams 64/32。标量 fitness 仍严格为 `meanScore / scheduled maxPieces`；clear histogram、`tetrisLineShare`、策略诊断、搜索诊断与存活诊断都不进入 CEM 排序或分布更新。
+当前代码与训练器契约是 **`score-rate-v5`、checkpoint schema 6、13 维特征（FEATURE_NAMES 顺序不变）**，搜索契约为 `bag-expectimax-hold-v2`：搜索仅使用公开局面信息，采用标准 Hold、精确 bag chance、depth 4、beams 64/32、冻结 `maxWorkUnits = 3584`，预算语料为 `budget-corpus-v1`。标量 fitness 仍严格为 `meanScore / scheduled maxPieces`；clear histogram、`tetrisLineShare`、策略诊断、搜索诊断与存活诊断都不进入 CEM 排序或分布更新。
 
-新轮次默认把 checkpoint 和每代统计写入 `public/ai/score-rate-v4/`；目录中只要已有任何条目，新跑就会 fail closed。只有固定复评同时通过得分、四消与存活资格门后，训练器才会在当前 run dir 写入 `candidate-weights.json`，不会自动改写 `public/ai/best-weights.json` 或 `src/ai/trained-weights.json`。当前已经发布的 bundled/runtime 模型仍是 **version 3、`score-rate-v2` gen-40**；加载时只在内存中补齐 v4 特征尾维，不会改写发布文件。`score-rate-v1` / `score-rate-v2` / `score-rate-v3` checkpoint 和日志均不是 schema 5 v4 可恢复产物。
+新轮次默认把 checkpoint 和每代统计写入 `public/ai/score-rate-v5/`；目录中只要已有任何条目，新跑就会 fail closed。只有固定复评同时通过得分、四消与存活资格门后，训练器才会在当前 run dir 写入 `candidate-weights.json`，不会自动改写 `public/ai/best-weights.json` 或 `src/ai/trained-weights.json`。当前已经发布的 bundled/runtime 模型仍是 **version 3、`score-rate-v2` gen-40**；加载时只在内存中补齐 v5 特征尾维，不会改写发布文件。`score-rate-v1` / `score-rate-v2` / `score-rate-v3` / `score-rate-v4` checkpoint 和日志均不是 schema 6 v5 可恢复产物。
 
-访问 `training.html`（开发模式下即 `npm run dev` 后的 `/training.html`）可以打开训练可视化面板，它会持续轮询 `/ai/score-rate-v4/training-log.jsonl`，训练运行时图表随日志增长自动刷新，无需手动刷新页面。
+下一步的一代 smoke 必须由用户在 fresh process/lock/artifact 检查后执行，并先确认 `public/ai/score-rate-v5/` 为空：
+
+```powershell
+npm run train -- --generations 1 --output-dir public/ai/score-rate-v5
+```
+
+助手不得代为运行；一代仅是 signal gate，不是发布、benchmark 或 browser/runtime acceptance 证据。第一次 SIGINT 会取消当前未完成边界、丢弃部分结果、保存最后完整 generation（fresh gen-0 则保存 gen-0 并可用相同 seed 完整 resume）；stale lock 因 PID 复用风险永不自动删除，必须由操作员刷新 PID/process/lock 证据后明确授权。
+
+访问 `training.html`（开发模式下即 `npm run dev` 后的 `/training.html`）可以打开训练可视化面板，它会持续轮询 `/ai/score-rate-v5/training-log.jsonl`，训练运行时图表随日志增长自动刷新，无需手动刷新页面。
 
 > **动手改训练之前，请先读 [`docs/ai-training-handoff.md`](docs/ai-training-handoff.md)。**
-> 它记录了当前进度、几个会浪费数小时的坑，以及最关键的一点：**消行数这个指标会封顶**——称职的候选根本不会死，消行数恒等于 `0.4 × 局长上限`，任何只看消行的基准都区分不出它们。项目曾使用 `平均消行 - heightPenalty × 平均堆叠高度`，但该目标现已退役；当前 `score-rate-v4` 继续在固定调度下优化 `meanScore / maxPieces`，新增建井特征与所有四消指标仍不直接改写 fitness。
+> 它记录了当前进度、几个会浪费数小时的坑，以及最关键的一点：**消行数这个指标会封顶**——称职的候选根本不会死，消行数恒等于 `0.4 × 局长上限`，任何只看消行的基准都区分不出它们。项目曾使用 `平均消行 - heightPenalty × 平均堆叠高度`，但该目标现已退役；当前 `score-rate-v5` 继续在固定调度下优化 `meanScore / maxPieces`，新增建井特征与所有四消指标仍不直接改写 fitness。
 
 当前发布的 gen-40 `score-rate-v2` 权重在固定 `30 × 5000`、depth 2 复评中取得 `meanScore = 3,289,243.33`、`scoreRate = 657.8487`，相对 gen-20 基线 `620.966` 提高约 5.61%。但它每局平均只有 `0.0333` 次四消，`tetrisLineShare = 0.00667%`；得分提升主要来自双消增加，不能描述为已经形成稳定四消。当前可审计产物中未找到 gen-40 相对 gen-20 的独立 paired benchmark，因此固定复评更高分不能替代独立配对验收。
 
@@ -141,9 +153,9 @@ npm run typecheck:train
 
 后续门仍彼此独立：先另行授权两代隔离信号短跑；若两代中的 `bestTetrisLineShare` 与 `eliteTetrisLineShare` 始终都低于 `0.01`，立即停止并另写搜索设计。只有正式训练的固定复评候选达到 `tetrisLineShare >= 0.20`，同时通过得分与存活资格门，才可产出 run-local candidate。随后还必须用已实现但本次未运行的 `bench:paired` CLI 证明逐局 score rate 与 `tetrisLineShare` 的 95% paired 区间下界都大于 `0`，再分别申请发布、push 与浏览器/runtime 验收。
 
-当前实现契约为 **`score-rate-v4` / schema 5 / `bag-expectimax-hold-v1`**：搜索仅使用公开局面信息，采用标准 Hold、精确 bag chance、depth 4、beams 64/32；fitness 严格为 `meanScore / scheduled maxPieces`。默认日志路径为 `public/ai/score-rate-v4/training-log.jsonl`。
+当前实现契约为 **`score-rate-v5` / schema 6 / `bag-expectimax-hold-v2`**：搜索仅使用公开局面信息，采用标准 Hold、精确 bag chance、depth 4、beams 64/32、冻结预算 3584；fitness 严格为 `meanScore / scheduled maxPieces`。默认日志路径为 `public/ai/score-rate-v5/training-log.jsonl`。
 
-已发布模型保持 version 3、`score-rate-v2` gen-40 不变；受保护的 `public/ai/score-rate-v3/` gen-10 产物保持原地未修改。本次交接未执行 search smoke、training、benchmark、paired acceptance、publication、push 或 browser/runtime acceptance，也未生成 v4 checkpoint、log、candidate 或权重文件。
+已发布模型保持 version 3、`score-rate-v2` gen-40 不变；受保护的历史产物保持原地未修改。本次交接未执行 search smoke、training、benchmark、paired acceptance、publication、push 或 browser/runtime acceptance，也未生成 v5 checkpoint、log、candidate 或权重文件。
 
 ## 📁 项目结构
 
@@ -156,7 +168,7 @@ src/
 ├── constants.ts       # 游戏常量和配置
 ├── ai/                # AI 评估引擎（纯函数，无 DOM / 文件系统 / node: 依赖）
 │   ├── features.ts    # 局面特征提取
-│   ├── search.ts      # active searchIterative/searchFixed：公开 bag chance + Hold，固定 4-lock、beams 64/32；旧 evalMove/bestPlacement 为 legacy compatibility
+│   ├── search.ts      # active searchIterative：v2 公开 bag chance + Hold，固定 4-lock、beams 64/32、预算 3584；旧 searchFixed/evalMove/bestPlacement 为 legacy compatibility
 │   ├── weights.ts     # 权重加载、校验与内置默认权重
 │   └── trained-weights.json  # 训练产出的默认权重，构建时打包进 dist
 ├── training/dashboard/  # 训练可视化面板（training.html 的入口）

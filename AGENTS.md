@@ -13,9 +13,9 @@
 
 - Competent candidates can survive to the piece cap, so raw lines cleared saturates near the arithmetic ceiling and cannot rank elites.
 - `meanLines - heightPenalty * meanHeight` was the retired `lines-height-v1` objective. Do not resume its checkpoint or describe it as the current fitness.
-- The active code/trainer contract is `score-rate-v4`: checkpoint schema version 5 and exact 13 `FEATURE_NAMES`, with `bag-expectimax-hold-v1` fixed depth 4 and root/child beams 64/32. Scalar fitness is exactly `meanScore / maxPieces`, using the scheduled piece cap rather than survived pieces. `meanHeight` is diagnostic and only the tie-breaker when fixed-reevaluation scores are within the inclusive 0.1% tolerance.
+- The active code/trainer contract is `score-rate-v5`: checkpoint schema version 6, exact 13 `FEATURE_NAMES` in the unchanged order, and `bag-expectimax-hold-v2` fixed depth 4 with root/child beams 64/32, frozen `maxWorkUnits = 3584`, and `budget-corpus-v1`. Scalar fitness is exactly `meanScore / maxPieces`, using the scheduled piece cap rather than survived pieces. `meanHeight` is diagnostic and only the tie-breaker when fixed-reevaluation scores are within the inclusive 0.1% tolerance.
 - The currently published bundled/runtime model remains the unchanged version 3, `score-rate-v2` gen-40 model. Compatibility loading may extend it only in memory; do not rewrite the published file.
-- `score-rate-v1`/`score-rate-v2`/`score-rate-v3` checkpoints and logs are legacy artifacts. The v4 trainer must never resume or append to them.
+- `score-rate-v1`/`score-rate-v2`/`score-rate-v3`/`score-rate-v4` checkpoints and logs are historical artifacts. The v5 trainer must never resume or append to them.
 - Judge training from the score-rate distribution and sigma, not only a generation's `bestScoreRate`.
 - Do not “fix” saturation by raising the piece cap. Confirm objective behavior with a short run before spending hours on training.
 - A fixed reevaluation can publish against the current best, but it does not prove superiority over a separate baseline. Any such claim requires an independent paired benchmark with identical seeds, depth, and piece cap; see `docs/ai-training-handoff.md` for the gen 20 publication evidence.
@@ -31,7 +31,22 @@ npm run typecheck:train
 npm run bench -- --games 30 --max-pieces 2000
 ```
 
-The benchmark command above uses the built-in handcrafted baseline and does not require a generated weights file. Bench always uses `bag-expectimax-hold-v1` depth 4 with beams 64/32; there is no user-selectable `--depth` flag. Before any training command, inspect the selected output directory (default `public/ai/score-rate-v4/`), its checkpoint and log, the objective/config embedded in the checkpoint, the published weight files, and running processes. The dashboard reads `/ai/score-rate-v4/training-log.jsonl`. Explicitly choose resume, archive-and-restart, or a separate output location. Starting without `--resume` while any output-directory entry exists is rejected; never work around that guard by deleting or moving artifacts without authorization.
+The benchmark command above uses the built-in handcrafted baseline and does not require a generated weights file. Bench uses the active `bag-expectimax-hold-v2` depth 4 with beams 64/32 and frozen budget 3584; there is no user-selectable `--depth` flag. Before any training command, inspect the selected output directory (default `public/ai/score-rate-v5/`), its checkpoint and log, the objective/config embedded in the checkpoint, the published weight files, and running processes. The dashboard reads `/ai/score-rate-v5/training-log.jsonl`. Explicitly choose resume, archive-and-restart, or a separate output location. Starting without `--resume` while any output-directory entry exists is rejected; never work around that guard by deleting or moving artifacts without authorization.
+
+Before the next user-run one-generation smoke, perform a fresh process, lock, and artifact inspection and have the operator confirm that `public/ai/score-rate-v5/` is empty. Only then may the operator run `npm run train -- --generations 1 --output-dir public/ai/score-rate-v5`; the assistant must not execute that smoke. One generation is a signal gate only, not training completion, publication evidence, benchmark evidence, or browser/runtime acceptance.
+
+Calibration is a separate read-only gate and is neither training nor benchmark or browser acceptance:
+
+```powershell
+npm run calibrate:search -- --select
+npm run calibrate:search -- --verify-frozen
+npm test
+npm run lint
+npm run build
+npm run typecheck:train
+```
+
+The first SIGINT marks shutdown and aborts the in-flight generation/reevaluation; partial results are discarded, no CEM/log update is made, and the last complete boundary is checkpointed before the pool and lock are released. A fresh gen-0 interruption saves an initial gen-0 checkpoint; resuming with the same seed reruns the complete gen 0. A stale lock is never deleted automatically because a PID can be reused; removal requires refreshed PID/process/lock evidence and explicit operator authorization.
 
 Use the shortest relevant command first. Do not start a training run, mutate artifacts, archive a checkpoint, or resume an existing run without explicit user authorization.
 
