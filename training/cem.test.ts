@@ -344,6 +344,37 @@ describe('aggregateFitness', () => {
     });
   });
 
+  it('derives mean completed depth from the aggregated histogram and search calls', () => {
+    const withSearch = (searchCalls: number, histogram: [number, number, number, number, number]) =>
+      result({
+        searchDiagnostics: {
+          searchCalls,
+          holdActions: 0,
+          holdRate: 0,
+          meanCompletedDepth: 4,
+          minCompletedDepth: 1,
+          completedDepthHistogram: histogram,
+          totalWorkUnitsUsed: searchCalls,
+          meanWorkUnitsUsed: 1,
+          maxWorkUnitsUsed: 1,
+          budgetExhaustedSearches: 0,
+          budgetExhaustionRate: 0,
+          placementEvaluationUnits: searchCalls,
+          chanceExpansionUnits: 0,
+          cacheHitUnits: 0,
+          expandedDecisionNodes: 0,
+          expandedChanceNodes: 0,
+          cacheHits: 0,
+        },
+      });
+    const stats = aggregateFitness([
+      withSearch(1, [0, 1, 0, 0, 0]),
+      withSearch(9, [0, 0, 0, 0, 9]),
+    ], 1, 2, 1);
+
+    expect(stats.meanSearchDiagnostics[0].meanCompletedDepth).toBe(3.7);
+  });
+
   it('averages strategy diagnostics per game and counts exact end reasons', () => {
     const stats = aggregateFitness([
       result({

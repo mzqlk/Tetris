@@ -95,6 +95,7 @@ describe('summarizeBench', () => {
         completedDepthHistogram: [0, 0, 2, 0, 8],
         totalWorkUnitsUsed: 80, meanWorkUnitsUsed: 4, maxWorkUnitsUsed: 8,
         budgetExhaustedSearches: 1, budgetExhaustionRate: 0.1,
+        placementEvaluationUnits: 40, chanceExpansionUnits: 20, cacheHitUnits: 20,
         expandedDecisionNodes: 60, expandedChanceNodes: 20, cacheHits: 8,
       }),
     },
@@ -147,13 +148,35 @@ describe('summarizeBench', () => {
       maxWorkUnitsUsed: 10,
       budgetExhaustedSearches: 1,
       budgetExhaustionRate: 1 / 20,
-      placementEvaluationUnits: 100,
-      chanceExpansionUnits: 50,
-      cacheHitUnits: 50,
+      placementEvaluationUnits: 90,
+      chanceExpansionUnits: 45,
+      cacheHitUnits: 45,
       expandedDecisionNodes: 160,
       expandedChanceNodes: 60,
       cacheHits: 18,
     });
+  });
+
+  it('rejects a game whose total work units do not equal its category units', () => {
+    const inconsistent = {
+      ...games[0],
+      searchDiagnostics: search({
+        totalWorkUnitsUsed: 101,
+        placementEvaluationUnits: 50,
+        chanceExpansionUnits: 25,
+        cacheHitUnits: 25,
+      }),
+    };
+    expect(() => summarizeBench([inconsistent], 300)).toThrow(/work units.*category/i);
+  });
+
+  it('keeps aggregate total work equal to summed category units', () => {
+    const summary = summarizeBench(games, 300);
+    expect(summary.search.totalWorkUnitsUsed).toBe(
+      summary.search.placementEvaluationUnits
+        + summary.search.chanceExpansionUnits
+        + summary.search.cacheHitUnits,
+    );
   });
 
   it('formats all aggregated search diagnostics for CLI output', () => {

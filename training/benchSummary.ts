@@ -90,6 +90,11 @@ export function summarizeBench(
     if (totalLinesFromCounts(result.clearCounts) !== result.lines) {
       throw new Error('clearCounts must reconstruct lines for every benchmark result');
     }
+    const search = result.searchDiagnostics;
+    if (search.totalWorkUnitsUsed !== search.placementEvaluationUnits
+      + search.chanceExpansionUnits + search.cacheHitUnits) {
+      throw new Error('search work units must equal category units for every benchmark result');
+    }
   }
   const clearCounts = results.reduce(
     (sum, result) => addLineClearCounts(sum, result.clearCounts),
@@ -108,6 +113,21 @@ export function summarizeBench(
   }
   const totalWorkUnitsUsed = results.reduce((sum, result) => sum + result.searchDiagnostics.totalWorkUnitsUsed, 0);
   const budgetExhaustedSearches = results.reduce((sum, result) => sum + result.searchDiagnostics.budgetExhaustedSearches, 0);
+  const placementEvaluationUnits = results.reduce(
+    (sum, result) => sum + result.searchDiagnostics.placementEvaluationUnits,
+    0,
+  );
+  const chanceExpansionUnits = results.reduce(
+    (sum, result) => sum + result.searchDiagnostics.chanceExpansionUnits,
+    0,
+  );
+  const cacheHitUnits = results.reduce(
+    (sum, result) => sum + result.searchDiagnostics.cacheHitUnits,
+    0,
+  );
+  if (totalWorkUnitsUsed !== placementEvaluationUnits + chanceExpansionUnits + cacheHitUnits) {
+    throw new Error('aggregate search work units must equal category units');
+  }
   return {
     score: distribution(results.map((result) => result.score)),
     scorePerScheduledPiece: distribution(
@@ -149,9 +169,9 @@ export function summarizeBench(
       maxWorkUnitsUsed: Math.max(...results.map((result) => result.searchDiagnostics.maxWorkUnitsUsed)),
       budgetExhaustedSearches,
       budgetExhaustionRate: searchCalls === 0 ? 0 : budgetExhaustedSearches / searchCalls,
-      placementEvaluationUnits: results.reduce((sum, result) => sum + result.searchDiagnostics.placementEvaluationUnits, 0),
-      chanceExpansionUnits: results.reduce((sum, result) => sum + result.searchDiagnostics.chanceExpansionUnits, 0),
-      cacheHitUnits: results.reduce((sum, result) => sum + result.searchDiagnostics.cacheHitUnits, 0),
+      placementEvaluationUnits,
+      chanceExpansionUnits,
+      cacheHitUnits,
       expandedDecisionNodes: results.reduce(
         (sum, result) => sum + result.searchDiagnostics.expandedDecisionNodes, 0,
       ),

@@ -253,7 +253,6 @@ export function aggregateFitness(
       searchDiagnostics.holdActions += rSearch.holdActions;
       searchDiagnostics.searchCalls! += rSearch.searchCalls!;
       searchDiagnostics.holdRate += rSearch.holdRate;
-      searchDiagnostics.meanCompletedDepth += rSearch.meanCompletedDepth;
       for (let depth = 0; depth < 5; depth++) {
         searchDiagnostics.completedDepthHistogram[depth] += rSearch.completedDepthHistogram![depth];
       }
@@ -289,7 +288,12 @@ export function aggregateFitness(
     meanSearchDiagnostics.push({
       ...searchDiagnostics,
       holdRate: searchDiagnostics.holdRate / gamesPerCandidate,
-      meanCompletedDepth: searchDiagnostics.meanCompletedDepth / gamesPerCandidate,
+      meanCompletedDepth: searchDiagnostics.searchCalls === 0
+        ? 0
+        : searchDiagnostics.completedDepthHistogram.reduce(
+          (sum, count, depth) => sum + depth * count,
+          0,
+        ) / searchDiagnostics.searchCalls,
       meanWorkUnitsUsed: searchDiagnostics.searchCalls === 0 ? 0 : searchDiagnostics.totalWorkUnitsUsed / searchDiagnostics.searchCalls,
       budgetExhaustionRate: searchDiagnostics.searchCalls === 0 ? 0 : searchDiagnostics.budgetExhaustedSearches / searchDiagnostics.searchCalls,
     });
