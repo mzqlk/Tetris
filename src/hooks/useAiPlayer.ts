@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react';
 import type { Piece } from '../types';
 import { useGameStore } from '../store/gameStore';
-import { FIXED_SEARCH_LIMITS, searchIterative } from '../ai/search';
+import { searchBudgeted } from '../ai/search';
+import { DETERMINISTIC_SEARCH_LIMITS } from '../ai/searchBudget';
 import type { PublicSearchState } from '../ai/publicState';
 import { projectPath, samePiece } from '../ai/replay';
 import { projectHardDrop, type AiMove } from '../ai/placements';
@@ -18,9 +19,8 @@ export interface AiPlayerOptions {
 export function planAction(
   state: PublicSearchState,
   weights: number[],
-  shouldAbort: () => boolean,
 ): AiPlan | { kind: 'hold' } | null {
-  const decision = searchIterative(state, weights, { ...FIXED_SEARCH_LIMITS, shouldAbort });
+  const decision = searchBudgeted(state, weights, DETERMINISTIC_SEARCH_LIMITS);
   if (decision === null) return null;
   if (decision.action.kind === 'hold') return { kind: 'hold' };
 
@@ -137,7 +137,6 @@ export function useAiPlayer(opts: AiPlayerOptions): void {
           schedule(IDLE_DELAY_MS);
           return;
         }
-        const deadline = performance.now() + (speed === 'instant' ? 100 : 200);
         const decision = planAction({
           board: store.board,
           current: store.currentPiece,
@@ -145,7 +144,7 @@ export function useAiPlayer(opts: AiPlayerOptions): void {
           hold: store.holdPiece,
           holdAvailable: store.holdAvailable,
           unseenBagMask: store.unseenBagMask,
-        }, toVector(weights), () => performance.now() >= deadline);
+        }, toVector(weights));
         if (decision !== null && 'kind' in decision) {
           store.hold();
           plan = null;

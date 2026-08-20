@@ -44,14 +44,23 @@ export interface BenchSummary {
     tetrisReadyRows: Distribution;
   };
   search: {
+    searchCalls: number;
     holdActions: number;
     holdRate: number;
     completedDepth: Distribution;
     minCompletedDepth: number;
+    completedDepthHistogram: [number, number, number, number, number];
+    totalWorkUnitsUsed: number;
+    meanWorkUnitsUsed: number;
+    maxWorkUnitsUsed: number;
+    budgetExhaustedSearches: number;
+    budgetExhaustionRate: number;
+    placementEvaluationUnits: number;
+    chanceExpansionUnits: number;
+    cacheHitUnits: number;
     expandedDecisionNodes: number;
     expandedChanceNodes: number;
     cacheHits: number;
-    abortedSearches: number;
   };
 }
 
@@ -90,6 +99,15 @@ export function summarizeBench(
   const holdActions = results.reduce(
     (sum, result) => sum + result.searchDiagnostics.holdActions, 0,
   );
+  const searchCalls = results.reduce((sum, result) => sum + result.searchDiagnostics.searchCalls, 0);
+  const completedDepthHistogram = [0, 0, 0, 0, 0] as [number, number, number, number, number];
+  for (const result of results) {
+    for (let depth = 0; depth < 5; depth++) {
+      completedDepthHistogram[depth] += result.searchDiagnostics.completedDepthHistogram[depth];
+    }
+  }
+  const totalWorkUnitsUsed = results.reduce((sum, result) => sum + result.searchDiagnostics.totalWorkUnitsUsed, 0);
+  const budgetExhaustedSearches = results.reduce((sum, result) => sum + result.searchDiagnostics.budgetExhaustedSearches, 0);
   return {
     score: distribution(results.map((result) => result.score)),
     scorePerScheduledPiece: distribution(
@@ -116,6 +134,7 @@ export function summarizeBench(
       ),
     },
     search: {
+      searchCalls,
       holdActions,
       holdRate: totalPieces === 0 ? 0 : holdActions / totalPieces,
       completedDepth: distribution(
@@ -124,6 +143,15 @@ export function summarizeBench(
       minCompletedDepth: Math.min(
         ...results.map((result) => result.searchDiagnostics.minCompletedDepth),
       ),
+      completedDepthHistogram,
+      totalWorkUnitsUsed,
+      meanWorkUnitsUsed: searchCalls === 0 ? 0 : totalWorkUnitsUsed / searchCalls,
+      maxWorkUnitsUsed: Math.max(...results.map((result) => result.searchDiagnostics.maxWorkUnitsUsed)),
+      budgetExhaustedSearches,
+      budgetExhaustionRate: searchCalls === 0 ? 0 : budgetExhaustedSearches / searchCalls,
+      placementEvaluationUnits: results.reduce((sum, result) => sum + result.searchDiagnostics.placementEvaluationUnits, 0),
+      chanceExpansionUnits: results.reduce((sum, result) => sum + result.searchDiagnostics.chanceExpansionUnits, 0),
+      cacheHitUnits: results.reduce((sum, result) => sum + result.searchDiagnostics.cacheHitUnits, 0),
       expandedDecisionNodes: results.reduce(
         (sum, result) => sum + result.searchDiagnostics.expandedDecisionNodes, 0,
       ),
@@ -132,9 +160,6 @@ export function summarizeBench(
       ),
       cacheHits: results.reduce(
         (sum, result) => sum + result.searchDiagnostics.cacheHits, 0,
-      ),
-      abortedSearches: results.reduce(
-        (sum, result) => sum + result.searchDiagnostics.abortedSearches, 0,
       ),
     },
   };
@@ -150,9 +175,11 @@ export function formatSearchDiagnostics(search: BenchSummary['search']): string 
     `completed depth mean/median/min/max ${search.completedDepth.mean.toFixed(2)}/`
       + `${search.completedDepth.median.toFixed(2)}/${search.completedDepth.min}/${search.completedDepth.max}`,
     `search min completed depth ${search.minCompletedDepth}`,
+    `completed depth histogram ${search.completedDepthHistogram.join('/')}`,
+    `work units mean/max ${search.meanWorkUnitsUsed.toFixed(2)}/${search.maxWorkUnitsUsed}`,
     `decision nodes ${search.expandedDecisionNodes}`,
     `chance nodes ${search.expandedChanceNodes}`,
     `cache hits ${search.cacheHits}`,
-    `aborts ${search.abortedSearches}`,
+    `budget exhaustion ${search.budgetExhaustedSearches} (${(100 * search.budgetExhaustionRate).toFixed(2)}%)`,
   ].join('\n');
 }

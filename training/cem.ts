@@ -116,6 +116,27 @@ export interface CandidateStats {
   survivalDiagnostics: SurvivalDiagnostics[];
 }
 
+const normalizeSearchDiagnostics = (input: SimulationSearchDiagnostics): SimulationSearchDiagnostics => ({
+  searchCalls: input.searchCalls ?? 0,
+  holdActions: input.holdActions ?? 0,
+  holdRate: input.holdRate ?? 0,
+  meanCompletedDepth: input.meanCompletedDepth ?? 0,
+  minCompletedDepth: input.minCompletedDepth ?? 0,
+  completedDepthHistogram: input.completedDepthHistogram ?? [0, 0, 0, 0, 0],
+  totalWorkUnitsUsed: input.totalWorkUnitsUsed ?? 0,
+  meanWorkUnitsUsed: input.meanWorkUnitsUsed ?? 0,
+  maxWorkUnitsUsed: input.maxWorkUnitsUsed ?? 0,
+  budgetExhaustedSearches: input.budgetExhaustedSearches ?? input.abortedSearches ?? 0,
+  budgetExhaustionRate: input.budgetExhaustionRate ?? 0,
+  placementEvaluationUnits: input.placementEvaluationUnits ?? 0,
+  chanceExpansionUnits: input.chanceExpansionUnits ?? 0,
+  cacheHitUnits: input.cacheHitUnits ?? 0,
+  expandedDecisionNodes: input.expandedDecisionNodes ?? 0,
+  expandedChanceNodes: input.expandedChanceNodes ?? 0,
+  cacheHits: input.cacheHits ?? 0,
+  abortedSearches: input.abortedSearches ?? input.budgetExhaustedSearches ?? 0,
+});
+
 /**
  * Reassemble per-candidate statistics from the flat results array.
  *
@@ -156,16 +177,22 @@ export function aggregateFitness(
     throw new Error(`expected ${expected} results, got ${results.length}`);
   }
   for (const result of results) {
-    const search = result.searchDiagnostics;
-    for (const field of ['holdActions', 'holdRate', 'meanCompletedDepth', 'minCompletedDepth',
-      'expandedDecisionNodes', 'expandedChanceNodes', 'cacheHits', 'abortedSearches'] as const) {
+    const search = normalizeSearchDiagnostics(result.searchDiagnostics);
+    for (const field of ['searchCalls', 'holdActions', 'holdRate', 'meanCompletedDepth', 'minCompletedDepth',
+      'totalWorkUnitsUsed', 'meanWorkUnitsUsed', 'maxWorkUnitsUsed', 'budgetExhaustedSearches',
+      'budgetExhaustionRate', 'placementEvaluationUnits', 'chanceExpansionUnits', 'cacheHitUnits',
+      'expandedDecisionNodes', 'expandedChanceNodes', 'cacheHits'] as const) {
       const value = search[field];
       if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
         throw new Error(`searchDiagnostics.${field} must be finite and non-negative`);
       }
     }
-    if (search.holdRate > 1 || search.meanCompletedDepth > 4 || search.minCompletedDepth > 4) {
+    if (search.holdRate > 1 || search.budgetExhaustionRate > 1 || search.meanCompletedDepth > 4 || search.minCompletedDepth > 4) {
       throw new Error('searchDiagnostics depth/rate is out of range');
+    }
+    if (search.completedDepthHistogram.length !== 5
+      || search.completedDepthHistogram.some((value) => !Number.isFinite(value) || value < 0)) {
+      throw new Error('searchDiagnostics.completedDepthHistogram must contain five non-negative values');
     }
     for (const field of [
       'meanCleanWellDepth',
@@ -205,8 +232,13 @@ export function aggregateFitness(
     let clearCounts = emptyLineClearCounts();
     let strategyDiagnostics = emptyStrategyDiagnostics();
     const searchDiagnostics: SimulationSearchDiagnostics = {
+      searchCalls: 0,
       holdActions: 0, holdRate: 0, meanCompletedDepth: 0, minCompletedDepth: 0,
-      expandedDecisionNodes: 0, expandedChanceNodes: 0, cacheHits: 0, abortedSearches: 0,
+      completedDepthHistogram: [0, 0, 0, 0, 0],
+      totalWorkUnitsUsed: 0, meanWorkUnitsUsed: 0, maxWorkUnitsUsed: 0,
+      budgetExhaustedSearches: 0, budgetExhaustionRate: 0,
+      placementEvaluationUnits: 0, chanceExpansionUnits: 0, cacheHitUnits: 0,
+      expandedDecisionNodes: 0, expandedChanceNodes: 0, cacheHits: 0,
     };
     let pieceCapGames = 0;
     let gameoverGames = 0;
@@ -218,16 +250,27 @@ export function aggregateFitness(
       height += r.meanHeight;
       clearCounts = addLineClearCounts(clearCounts, r.clearCounts);
       strategyDiagnostics = addStrategyDiagnostics(strategyDiagnostics, r.strategyDiagnostics);
-      searchDiagnostics.holdActions += r.searchDiagnostics.holdActions;
-      searchDiagnostics.holdRate += r.searchDiagnostics.holdRate;
-      searchDiagnostics.meanCompletedDepth += r.searchDiagnostics.meanCompletedDepth;
+      const rSearch = normalizeSearchDiagnostics(r.searchDiagnostics);
+      searchDiagnostics.holdActions += rSearch.holdActions;
+      searchDiagnostics.searchCalls! += rSearch.searchCalls!;
+      searchDiagnostics.holdRate += rSearch.holdRate;
+      searchDiagnostics.meanCompletedDepth += rSearch.meanCompletedDepth;
+      for (let depth = 0; depth < 5; depth++) {
+        searchDiagnostics.completedDepthHistogram[depth] += rSearch.completedDepthHistogram![depth];
+      }
+      searchDiagnostics.totalWorkUnitsUsed += rSearch.totalWorkUnitsUsed!;
+      searchDiagnostics.meanWorkUnitsUsed += rSearch.meanWorkUnitsUsed!;
+      searchDiagnostics.maxWorkUnitsUsed = Math.max(searchDiagnostics.maxWorkUnitsUsed!, rSearch.maxWorkUnitsUsed!);
+      searchDiagnostics.budgetExhaustedSearches += rSearch.budgetExhaustedSearches!;
+      searchDiagnostics.placementEvaluationUnits += rSearch.placementEvaluationUnits!;
+      searchDiagnostics.chanceExpansionUnits += rSearch.chanceExpansionUnits!;
+      searchDiagnostics.cacheHitUnits += rSearch.cacheHitUnits!;
       searchDiagnostics.minCompletedDepth = j === 0
-        ? r.searchDiagnostics.minCompletedDepth
-        : Math.min(searchDiagnostics.minCompletedDepth, r.searchDiagnostics.minCompletedDepth);
-      searchDiagnostics.expandedDecisionNodes += r.searchDiagnostics.expandedDecisionNodes;
-      searchDiagnostics.expandedChanceNodes += r.searchDiagnostics.expandedChanceNodes;
-      searchDiagnostics.cacheHits += r.searchDiagnostics.cacheHits;
-      searchDiagnostics.abortedSearches += r.searchDiagnostics.abortedSearches;
+        ? rSearch.minCompletedDepth
+        : Math.min(searchDiagnostics.minCompletedDepth!, rSearch.minCompletedDepth!);
+      searchDiagnostics.expandedDecisionNodes += rSearch.expandedDecisionNodes;
+      searchDiagnostics.expandedChanceNodes += rSearch.expandedChanceNodes;
+      searchDiagnostics.cacheHits += rSearch.cacheHits;
       if (r.reason === 'pieceCap') pieceCapGames++;
       if (r.reason === 'gameover') gameoverGames++;
     }
@@ -248,6 +291,8 @@ export function aggregateFitness(
       ...searchDiagnostics,
       holdRate: searchDiagnostics.holdRate / gamesPerCandidate,
       meanCompletedDepth: searchDiagnostics.meanCompletedDepth / gamesPerCandidate,
+      meanWorkUnitsUsed: searchDiagnostics.searchCalls === 0 ? 0 : searchDiagnostics.totalWorkUnitsUsed / searchDiagnostics.searchCalls,
+      budgetExhaustionRate: searchDiagnostics.searchCalls === 0 ? 0 : searchDiagnostics.budgetExhaustedSearches / searchDiagnostics.searchCalls,
     });
     survivalDiagnostics.push({ pieceCapGames, gameoverGames });
     fitness.push(candidateMeanScore / maxPieces);

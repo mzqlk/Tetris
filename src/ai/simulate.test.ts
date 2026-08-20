@@ -4,8 +4,8 @@ import {
   applyAction,
   projectPublicSearchState,
   simulateFromState,
-  simulateGame,
-  type FixedSearchConfig,
+  simulateGame as productionSimulateGame,
+  simulateGameWithSearchForTest,
   type SimAction,
 } from './simulate';
 import { mulberry32 } from './rng';
@@ -22,7 +22,7 @@ import { createPiece } from '../engine/piece';
 import { BOARD_WIDTH, TOTAL_ROWS } from '../constants';
 import type { Board, PieceType } from '../types';
 import { emptyStrategyDiagnostics } from './tetrisStrategy';
-import { FIXED_SEARCH_LIMITS } from './search';
+import { DETERMINISTIC_SEARCH_LIMITS } from './searchBudget';
 import { aggregateFitness } from '../../training/cem';
 
 afterEach(() => {
@@ -39,11 +39,18 @@ const STORE_ACTION: Record<StoreSimAction, keyof ReturnType<typeof useGameStore.
   hardDrop: 'hardDrop',
 };
 
-const TEST_SEARCH: FixedSearchConfig = {
-  maxLockedDepth: 1,
+const TEST_SEARCH = {
+  maxLockedDepth: 1 as const,
   maxRootPlacements: 1,
   maxChildPlacements: 1,
+  maxWorkUnits: 1512,
+  transpositionCacheEntries: 0,
+  placementCacheEntries: 0,
 };
+const simulateGame = (opts: { weights: number[]; seed: number; maxPieces: number; search?: typeof TEST_SEARCH }) =>
+  opts.search
+    ? simulateGameWithSearchForTest({ weights: opts.weights, seed: opts.seed, maxPieces: opts.maxPieces }, opts.search)
+    : productionSimulateGame(opts);
 
 /**
  * Emit an arbitrary but board-covering action sequence.
@@ -327,6 +334,29 @@ describe('simulateGame', () => {
   // search depth, so they run at depth 1 instead.
   const SLOW = 45_000;
 
+  it('aggregates deterministic v2 work diagnostics for each search', () => {
+    const result = simulateGameWithSearchForTest({
+      weights, seed: 7, maxPieces: 1,
+    }, {
+      ...DETERMINISTIC_SEARCH_LIMITS,
+      maxLockedDepth: 1,
+      maxRootPlacements: 1,
+      maxChildPlacements: 1,
+    });
+    const search = result.searchDiagnostics;
+    expect(search.searchCalls).toBeGreaterThan(0);
+    expect(search.completedDepthHistogram.reduce((sum, value) => sum + value, 0))
+      .toBe(search.searchCalls);
+    expect(search.totalWorkUnitsUsed).toBe(
+      search.placementEvaluationUnits + search.chanceExpansionUnits + search.cacheHitUnits,
+    );
+    expect(search.meanWorkUnitsUsed).toBe(search.totalWorkUnitsUsed / search.searchCalls);
+    expect(search.maxWorkUnitsUsed).toBeLessThanOrEqual(DETERMINISTIC_SEARCH_LIMITS.maxWorkUnits);
+    expect(search.budgetExhaustionRate).toBe(
+      search.budgetExhaustedSearches / search.searchCalls,
+    );
+  });
+
   it('is fully deterministic for a given seed', () => {
     const a = simulateGame({ weights, seed: 7, maxPieces: 20, search: TEST_SEARCH });
     const b = simulateGame({ weights, seed: 7, maxPieces: 20, search: TEST_SEARCH });
@@ -406,7 +436,7 @@ describe('simulateGame', () => {
     state.bag = [1];
 
     const result = simulateFromState(state, {
-      weights, maxPieces: 1, search: FIXED_SEARCH_LIMITS,
+      weights, maxPieces: 1,
     });
 
     expect(result.searchDiagnostics).toMatchObject({
@@ -433,9 +463,7 @@ describe('terminal Hold diagnostics', () => {
     state.unseenBagMask = 0b1111100;
     state.bag = [3];
 
-    const result = simulateFromState(state, { weights, maxPieces: 1, search: {
-      maxLockedDepth: 1, maxRootPlacements: 64, maxChildPlacements: 32,
-    } });
+    const result = simulateFromState(state, { weights, maxPieces: 1, limits: DETERMINISTIC_SEARCH_LIMITS });
 
     expect(result.reason).toBe('gameover');
     expect(result.pieces).toBe(0);
@@ -455,9 +483,7 @@ describe('terminal Hold diagnostics', () => {
     state.pieces = 1;
     state.holdActions = 1;
 
-    const result = simulateFromState(state, { weights, maxPieces: 2, search: {
-      maxLockedDepth: 1, maxRootPlacements: 64, maxChildPlacements: 32,
-    } });
+    const result = simulateFromState(state, { weights, maxPieces: 2, limits: DETERMINISTIC_SEARCH_LIMITS });
 
     expect(result.reason).toBe('gameover');
     expect(result.pieces).toBe(1);

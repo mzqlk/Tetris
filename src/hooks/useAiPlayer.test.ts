@@ -32,6 +32,7 @@ import { createPiece, movePiece } from '../engine/piece';
 import { cellKey, projectHardDrop } from '../ai/placements';
 import * as placements from '../ai/placements';
 import * as search from '../ai/search';
+import { DETERMINISTIC_SEARCH_LIMITS } from '../ai/searchBudget';
 import type { PublicSearchState } from '../ai/publicState';
 import { useGameStore } from '../store/gameStore';
 import type { Board, Piece, PieceType } from '../types';
@@ -125,7 +126,7 @@ function planFor(
     hold: null,
     holdAvailable: true,
     unseenBagMask: 0b1111100,
-  }, W, () => false);
+  }, W);
   if (result === null || 'kind' in result) throw new Error('expected a placement plan');
   return result;
 }
@@ -140,7 +141,7 @@ beforeEach(() => {
   vi.stubGlobal('window', globalThis);
   reactHarness.cleanup = undefined;
   resetStore();
-  vi.spyOn(search, 'searchIterative').mockImplementation((state, weights) => {
+  vi.spyOn(search, 'searchBudgeted').mockImplementation((state, weights) => {
     const decision = search.bestPlacement(
       state.board,
       state.current,
@@ -154,6 +155,13 @@ beforeEach(() => {
       value: { survivalProbability: 1, expectedHeuristicValue: decision.score },
       diagnostics: {
         completedDepth: 1,
+        attemptedDepth: 1,
+        workUnitsUsed: 1,
+        workUnitsLimit: 3584,
+        placementEvaluationUnits: 1,
+        chanceExpansionUnits: 0,
+        cacheHitUnits: 0,
+        budgetExhausted: false,
         expandedDecisionNodes: 1,
         expandedChanceNodes: 0,
         cacheHits: 0,
@@ -212,7 +220,7 @@ describe('planAction', () => {
       hold: null,
       holdAvailable: true,
       unseenBagMask: 0b1111100,
-    }, weights, () => false)).toBeNull();
+    }, weights)).toBeNull();
   });
 
   it('returns null when the piece cannot be placed anywhere', () => {
@@ -224,7 +232,7 @@ describe('planAction', () => {
       hold: null,
       holdAvailable: true,
       unseenBagMask: 0b1111100,
-    }, W, () => false)).toBeNull();
+    }, W)).toBeNull();
   });
 });
 
@@ -280,32 +288,26 @@ describe('advanceAiPlan', () => {
 });
 
 describe('useAiPlayer timer and lifecycle integration', () => {
-  it.each([
-    ['instant', 100],
-    ['normal', 200],
-    ['slow', 200],
-  ] as const)('injects the %s planning budget', (speed, milliseconds) => {
-    let now = 0;
-    vi.stubGlobal('performance', { now: () => now });
-    const observed: boolean[] = [];
-    vi.spyOn(search, 'searchIterative').mockImplementation((_state, _weights, budget) => {
-      observed.push(budget.shouldAbort());
-      now = milliseconds;
-      observed.push(budget.shouldAbort());
-      expect(budget.maxLockedDepth).toBe(4);
+  it.each(['instant', 'normal', 'slow'] as const)('uses the frozen search budget for %s planning', (speed) => {
+    const observed: number[] = [];
+    vi.spyOn(search, 'searchBudgeted').mockImplementation((...args) => {
+      const budget = args[2]!;
+      observed.push(budget.maxWorkUnits);
+      observed.push(args.length);
+      expect(budget).toBe(DETERMINISTIC_SEARCH_LIMITS);
       return null;
     });
 
     useAiPlayer(options(speed));
     runNextTimer();
 
-    expect(observed).toEqual([false, true]);
+    expect(observed).toEqual([DETERMINISTIC_SEARCH_LIMITS.maxWorkUnits, 3]);
   });
 
   it('executes Hold and replans only after the new preview is visible', () => {
     const states: PublicSearchState[] = [];
     const placement = placements.enumeratePlacements(createEmptyBoard(), createPiece(2))[0];
-    vi.spyOn(search, 'searchIterative').mockImplementation((state) => {
+    vi.spyOn(search, 'searchBudgeted').mockImplementation((state) => {
       states.push(state);
       return states.length === 1
         ? {
@@ -313,6 +315,13 @@ describe('useAiPlayer timer and lifecycle integration', () => {
             value: { survivalProbability: 1, expectedHeuristicValue: 0 },
             diagnostics: {
               completedDepth: 1,
+              attemptedDepth: 1,
+              workUnitsUsed: 1,
+              workUnitsLimit: 3584,
+              placementEvaluationUnits: 1,
+              chanceExpansionUnits: 0,
+              cacheHitUnits: 0,
+              budgetExhausted: false,
               expandedDecisionNodes: 1,
               expandedChanceNodes: 0,
               cacheHits: 0,
@@ -329,6 +338,13 @@ describe('useAiPlayer timer and lifecycle integration', () => {
             value: { survivalProbability: 1, expectedHeuristicValue: 0 },
             diagnostics: {
               completedDepth: 1,
+              attemptedDepth: 1,
+              workUnitsUsed: 1,
+              workUnitsLimit: 3584,
+              placementEvaluationUnits: 1,
+              chanceExpansionUnits: 0,
+              cacheHitUnits: 0,
+              budgetExhausted: false,
               expandedDecisionNodes: 1,
               expandedChanceNodes: 0,
               cacheHits: 0,

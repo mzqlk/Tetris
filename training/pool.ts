@@ -9,10 +9,20 @@ import {
 } from '../src/ai/simulate';
 
 const emptySearchDiagnostics = (): SimulationSearchDiagnostics => ({
+  searchCalls: 0,
   holdActions: 0,
   holdRate: 0,
   meanCompletedDepth: 0,
   minCompletedDepth: 0,
+  completedDepthHistogram: [0, 0, 0, 0, 0],
+  totalWorkUnitsUsed: 0,
+  meanWorkUnitsUsed: 0,
+  maxWorkUnitsUsed: 0,
+  budgetExhaustedSearches: 0,
+  budgetExhaustionRate: 0,
+  placementEvaluationUnits: 0,
+  chanceExpansionUnits: 0,
+  cacheHitUnits: 0,
   expandedDecisionNodes: 0,
   expandedChanceNodes: 0,
   cacheHits: 0,
@@ -40,7 +50,8 @@ export interface SimTask {
   weights: number[];
   seed: number;
   maxPieces: number;
-  search: FixedSearchConfig;
+  /** @deprecated Compile-only compatibility; worker ignores and does not propagate it. */
+  search?: FixedSearchConfig;
 }
 
 export interface SimTaskResult {

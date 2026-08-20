@@ -12,10 +12,17 @@ import {
 } from './lineClears';
 import { mulberry32 } from './rng';
 import {
-  FIXED_SEARCH_LIMITS,
-  searchFixed,
+  searchBudgeted,
   type SearchDiagnostics,
 } from './search';
+import { DETERMINISTIC_SEARCH_LIMITS, type SearchLimits } from './searchBudget';
+
+/** @deprecated Compile-only compatibility for Task 6 producers; ignored at runtime. */
+export interface FixedSearchConfig {
+  maxLockedDepth: 1 | 2 | 3 | 4;
+  maxRootPlacements: number;
+  maxChildPlacements: number;
+}
 import {
   initialUnseenBagMask,
   revealPiece,
@@ -34,21 +41,26 @@ import {
 
 export type SimAction = 'left' | 'right' | 'rotate' | 'softDrop' | 'hardDrop' | 'hold';
 
-export interface FixedSearchConfig {
-  maxLockedDepth: 1 | 2 | 3 | 4;
-  maxRootPlacements: number;
-  maxChildPlacements: number;
-}
-
 export interface SimulationSearchDiagnostics {
+  searchCalls: number;
   holdActions: number;
   holdRate: number;
   meanCompletedDepth: number;
   minCompletedDepth: number;
+  completedDepthHistogram: [number, number, number, number, number];
+  totalWorkUnitsUsed: number;
+  meanWorkUnitsUsed: number;
+  maxWorkUnitsUsed: number;
+  budgetExhaustedSearches: number;
+  budgetExhaustionRate: number;
+  placementEvaluationUnits: number;
+  chanceExpansionUnits: number;
+  cacheHitUnits: number;
   expandedDecisionNodes: number;
   expandedChanceNodes: number;
   cacheHits: number;
-  abortedSearches: number;
+  /** @deprecated Compile-only alias for budgetExhaustedSearches. */
+  abortedSearches?: number;
 }
 
 export interface SimState {
@@ -73,10 +85,16 @@ export interface SimState {
   holdActions: number;
   completedDepthSum: number;
   minCompletedDepth: number;
+  completedDepthHistogram: [number, number, number, number, number];
+  totalWorkUnitsUsed: number;
+  maxWorkUnitsUsed: number;
+  budgetExhaustedSearches: number;
+  placementEvaluationUnits: number;
+  chanceExpansionUnits: number;
+  cacheHitUnits: number;
   expandedDecisionNodes: number;
   expandedChanceNodes: number;
   cacheHits: number;
-  abortedSearches: number;
   rng: () => number;
 }
 
@@ -139,10 +157,16 @@ export function createSimState(seed: number): SimState {
     holdActions: 0,
     completedDepthSum: 0,
     minCompletedDepth: 0,
+    completedDepthHistogram: [0, 0, 0, 0, 0],
+    totalWorkUnitsUsed: 0,
+    maxWorkUnitsUsed: 0,
+    budgetExhaustedSearches: 0,
+    placementEvaluationUnits: 0,
+    chanceExpansionUnits: 0,
+    cacheHitUnits: 0,
     expandedDecisionNodes: 0,
     expandedChanceNodes: 0,
     cacheHits: 0,
-    abortedSearches: 0,
     rng,
   };
 
@@ -272,22 +296,38 @@ function recordSearchDiagnostics(state: SimState, diagnostics: SearchDiagnostics
   state.minCompletedDepth = state.searchCalls === 1
     ? diagnostics.completedDepth
     : Math.min(state.minCompletedDepth, diagnostics.completedDepth);
+  state.completedDepthHistogram[diagnostics.completedDepth]++;
+  state.totalWorkUnitsUsed += diagnostics.workUnitsUsed;
+  state.maxWorkUnitsUsed = Math.max(state.maxWorkUnitsUsed, diagnostics.workUnitsUsed);
+  if (diagnostics.budgetExhausted) state.budgetExhaustedSearches++;
+  state.placementEvaluationUnits += diagnostics.placementEvaluationUnits;
+  state.chanceExpansionUnits += diagnostics.chanceExpansionUnits;
+  state.cacheHitUnits += diagnostics.cacheHitUnits;
   state.expandedDecisionNodes += diagnostics.expandedDecisionNodes;
   state.expandedChanceNodes += diagnostics.expandedChanceNodes;
   state.cacheHits += diagnostics.cacheHits;
-  if (diagnostics.aborted) state.abortedSearches++;
 }
 
 function simulationSearchDiagnostics(state: SimState): SimulationSearchDiagnostics {
   return {
+    searchCalls: state.searchCalls,
     holdActions: state.holdActions,
     holdRate: state.pieces === 0 ? 0 : state.holdActions / state.pieces,
     meanCompletedDepth: state.searchCalls === 0 ? 0 : state.completedDepthSum / state.searchCalls,
     minCompletedDepth: state.searchCalls === 0 ? 0 : state.minCompletedDepth,
+    completedDepthHistogram: [...state.completedDepthHistogram] as [number, number, number, number, number],
+    totalWorkUnitsUsed: state.totalWorkUnitsUsed,
+    meanWorkUnitsUsed: state.searchCalls === 0 ? 0 : state.totalWorkUnitsUsed / state.searchCalls,
+    maxWorkUnitsUsed: state.maxWorkUnitsUsed,
+    budgetExhaustedSearches: state.budgetExhaustedSearches,
+    budgetExhaustionRate: state.searchCalls === 0 ? 0 : state.budgetExhaustedSearches / state.searchCalls,
+    placementEvaluationUnits: state.placementEvaluationUnits,
+    chanceExpansionUnits: state.chanceExpansionUnits,
+    cacheHitUnits: state.cacheHitUnits,
     expandedDecisionNodes: state.expandedDecisionNodes,
     expandedChanceNodes: state.expandedChanceNodes,
-    cacheHits: state.cacheHits,
-    abortedSearches: state.abortedSearches,
+  cacheHits: state.cacheHits,
+    abortedSearches: state.budgetExhaustedSearches,
   };
 }
 
@@ -300,17 +340,16 @@ function simulationSearchDiagnostics(state: SimState): SimulationSearchDiagnosti
  */
 export function simulateFromState(
   state: SimState,
-  opts: { weights: number[]; maxPieces: number; search: FixedSearchConfig },
+  opts: { weights: number[]; maxPieces: number; limits?: SearchLimits },
 ): SimResult {
   if (opts.weights.length !== FEATURE_COUNT) {
     throw new Error(`expected ${FEATURE_COUNT} weights, got ${opts.weights.length}`);
   }
 
   while (state.status === 'playing' && state.pieces < opts.maxPieces) {
-    const decision = searchFixed(projectPublicSearchState(state), opts.weights, {
-      ...opts.search,
-      shouldAbort: () => false,
-    });
+    const decision = searchBudgeted(
+      projectPublicSearchState(state), opts.weights, opts.limits ?? DETERMINISTIC_SEARCH_LIMITS,
+    );
     if (decision === null) {
       state.status = 'gameover';
       break;
@@ -347,14 +386,25 @@ export function simulateGame(opts: {
   weights: number[];
   seed: number;
   maxPieces: number;
-  search?: FixedSearchConfig;
-  /** Legacy caller metadata; fixed search intentionally ignores this value. */
   depth?: 1 | 2;
+  /** @deprecated Compile-only compatibility; ignored at runtime. */
+  search?: FixedSearchConfig;
 }): SimResult {
   const state = createSimState(opts.seed);
   return simulateFromState(state, {
     weights: opts.weights,
     maxPieces: opts.maxPieces,
-    search: opts.search ?? FIXED_SEARCH_LIMITS,
+  });
+}
+
+/** Test-only shallow search injection; production callers use frozen limits. */
+export function simulateGameWithSearchForTest(
+  opts: { weights: number[]; seed: number; maxPieces: number },
+  limits: SearchLimits,
+): SimResult {
+  return simulateFromState(createSimState(opts.seed), {
+    weights: opts.weights,
+    maxPieces: opts.maxPieces,
+    limits,
   });
 }
