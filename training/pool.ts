@@ -68,6 +68,18 @@ const WORKER_URL = new URL('./worker.ts', import.meta.url);
 
 export type WorkerFactory = (index: number) => Worker;
 
+export class WorkerPoolAbortError extends Error {
+  readonly name = 'WorkerPoolAbortError';
+
+  constructor() {
+    super('worker pool run aborted');
+  }
+}
+
+export interface WorkerPoolRunOptions {
+  signal?: AbortSignal;
+}
+
 // `execArgv` registers tsx's ESM loader inside the worker thread itself. A .ts
 // worker otherwise inherits plain Node under Vitest and cannot resolve the
 // extensionless shared-AI imports. Workers remain referenced; destroy() owns
@@ -98,6 +110,7 @@ export class WorkerPool {
   // below would spawn a fresh replacement worker moments after `this.workers`
   // has been cleared, leaking a thread destroy() never gets to terminate.
   private destroyed = false;
+  private destroyPromise: Promise<void> | null = null;
 
   private constructor(
     workers: Worker[],
@@ -124,7 +137,7 @@ export class WorkerPool {
     return this.workerFactory(i);
   }
 
-  run(tasks: SimTask[]): Promise<SimTaskResult[]> {
+  run(tasks: SimTask[], options?: WorkerPoolRunOptions): Promise<SimTaskResult[]> {
     if (tasks.length === 0) return Promise.resolve([]);
 
     return new Promise((resolveAll, rejectAll) => {
@@ -134,11 +147,38 @@ export class WorkerPool {
       let completed = 0;
       let cursor = 0;
       let settled = false;
+      const signal = options?.signal;
+
+      const removeAbortListener = () => {
+        signal?.removeEventListener('abort', abort);
+      };
+
+      const reject = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        removeAbortListener();
+        rejectAll(error);
+      };
+
+      const abort = () => {
+        if (settled) return;
+        settled = true;
+        removeAbortListener();
+        void (async () => {
+          try {
+            await this.destroy();
+          } finally {
+            rejectAll(new WorkerPoolAbortError());
+          }
+        })();
+      };
 
       const complete = (item: QueueItem, result: SimTaskResult) => {
+        if (settled) return;
         results[item.index] = result;
-        if (++completed === tasks.length && !settled) {
+        if (++completed === tasks.length) {
           settled = true;
+          removeAbortListener();
           resolveAll(results);
         }
       };
@@ -153,6 +193,7 @@ export class WorkerPool {
       };
 
       const retryOrFail = (item: QueueItem, reason: string) => {
+        if (settled) return;
         if (item.attempts < 2) {
           console.warn(`[pool] task ${item.task.taskId} ${reason}; retrying`);
           queue.push(item);
@@ -194,8 +235,7 @@ export class WorkerPool {
             this.workers[slot] = replacement;
             attach(replacement, slot);
           } catch (error) {
-            settled = true;
-            rejectAll(error);
+            reject(error);
             return;
           }
 
@@ -204,6 +244,7 @@ export class WorkerPool {
         };
 
         worker.on('message', (result: SimTaskResult) => {
+          if (settled) return;
           const item = inFlight.get(worker);
           if (item === undefined) return;
           inFlight.delete(worker);
@@ -227,19 +268,30 @@ export class WorkerPool {
         });
       };
 
+      signal?.addEventListener('abort', abort, { once: true });
+      if (signal?.aborted) {
+        abort();
+        return;
+      }
+
       try {
         this.workers.forEach(attach);
         for (const worker of this.workers) feed(worker);
       } catch (err) {
-        settled = true;
-        rejectAll(err);
+        reject(err);
       }
     });
   }
 
-  async destroy(): Promise<void> {
-    this.destroyed = true;
-    await Promise.all(this.workers.map((w) => w.terminate()));
-    this.workers = [];
+  destroy(): Promise<void> {
+    if (this.destroyPromise === null) {
+      this.destroyed = true;
+      const workers = this.workers;
+      this.workers = [];
+      this.destroyPromise = Promise.resolve()
+        .then(() => Promise.all(workers.map((worker) => worker.terminate())))
+        .then(() => undefined);
+    }
+    return this.destroyPromise;
   }
 }

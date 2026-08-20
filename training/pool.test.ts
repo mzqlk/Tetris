@@ -23,7 +23,107 @@ acceptsSimTask({ taskId: 0, weights: W, seed: 1, maxPieces: 12 });
 // @ts-expect-error SimTask must not carry a configurable search object.
 acceptsSimTask({ taskId: 0, weights: W, seed: 1, maxPieces: 12, search: {} });
 
+class ControlledWorker extends EventEmitter {
+  readonly posted: SimTask[] = [];
+  terminationCalls = 0;
+
+  postMessage(message: SimTask): void {
+    this.posted.push(message);
+  }
+
+  async terminate(): Promise<number> {
+    this.terminationCalls++;
+    queueMicrotask(() => this.emit('exit', 0));
+    return 0;
+  }
+}
+
+async function controlledPool(size = 1): Promise<{
+  pool: WorkerPool;
+  workers: ControlledWorker[];
+  constructionCount: () => number;
+}> {
+  const workers: ControlledWorker[] = [];
+  let constructions = 0;
+  const controlled = await WorkerPool.create(size, () => {
+    constructions++;
+    const worker = new ControlledWorker();
+    workers.push(worker);
+    return worker as unknown as Worker;
+  });
+  return { pool: controlled, workers, constructionCount: () => constructions };
+}
+
+async function observedSettlement(promise: Promise<unknown>): Promise<unknown> {
+  return Promise.race([
+    promise.then(
+      (value) => ({ status: 'resolved', value }),
+      (error: unknown) => error,
+    ),
+    new Promise((resolve) => setTimeout(() => resolve({ status: 'pending' }), 250)),
+  ]);
+}
+
+async function expectWorkerPoolAbortError(error: unknown): Promise<void> {
+  const poolModule = await import('./pool') as unknown as {
+    WorkerPoolAbortError?: new () => Error;
+  };
+  expect(poolModule.WorkerPoolAbortError).toBeTypeOf('function');
+  expect(error).toBeInstanceOf(poolModule.WorkerPoolAbortError!);
+  expect(error).toMatchObject({ name: 'WorkerPoolAbortError' });
+}
+
 describe('WorkerPool', () => {
+  it('aborts an in-flight run without retrying, replacing, or returning failed fitness', async () => {
+    const { pool: controlled, workers, constructionCount } = await controlledPool(2);
+    const controller = new AbortController();
+    const run = controlled.run(
+      [task(1, 101), task(2, 102), task(3, 103)],
+      { signal: controller.signal },
+    );
+
+    expect(workers.flatMap((worker) => worker.posted)).toHaveLength(2);
+    controller.abort();
+    const outcome = await observedSettlement(run);
+    await Promise.all([controlled.destroy(), controlled.destroy()]);
+
+    await expectWorkerPoolAbortError(outcome);
+    expect(Array.isArray(outcome)).toBe(false);
+    expect(constructionCount()).toBe(2);
+    expect(workers).toHaveLength(2);
+    expect(workers.every((worker) => worker.terminationCalls === 1)).toBe(true);
+  });
+
+  it('rejects an already-aborted run before any worker postMessage', async () => {
+    const { pool: controlled, workers, constructionCount } = await controlledPool();
+    const controller = new AbortController();
+    controller.abort();
+
+    const outcome = await observedSettlement(controlled.run(
+      [task(4, 104)],
+      { signal: controller.signal },
+    ));
+    await controlled.destroy();
+
+    await expectWorkerPoolAbortError(outcome);
+    expect(workers[0].posted).toEqual([]);
+    expect(constructionCount()).toBe(1);
+    expect(workers[0].terminationCalls).toBe(1);
+  });
+
+  it('makes concurrent destroy calls idempotent', async () => {
+    const { pool: controlled, workers, constructionCount } = await controlledPool(3);
+
+    await Promise.all([
+      controlled.destroy(),
+      controlled.destroy(),
+      controlled.destroy(),
+    ]);
+
+    expect(constructionCount()).toBe(3);
+    expect(workers.every((worker) => worker.terminationCalls === 1)).toBe(true);
+  });
+
   it('passes a search-free task to the worker without rewriting the task', async () => {
     const messages: SimTask[] = [];
     class RecordingWorker extends EventEmitter {

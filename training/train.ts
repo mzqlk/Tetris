@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { DEFAULT_CONFIG, resolveWorkers, type TrainConfig } from './config';
-import { WorkerPool, type SimTask } from './pool';
+import { WorkerPool, WorkerPoolAbortError, type SimTask } from './pool';
 import {
   aggregateFitness,
   eliteCount,
@@ -42,6 +42,7 @@ import {
 import { buildCandidateWeights, writeCandidateWeights } from './candidateWeights';
 import {
   assertFreshRun,
+  readCompatibleCheckpoint,
   readCompatibleRunArtifacts,
   resolveRunPaths,
   type ScoreRateCheckpoint,
@@ -149,7 +150,10 @@ if (args.resume) {
   if (!existsSync(paths.checkpoint)) {
     throw new Error(`--resume but no checkpoint at ${paths.checkpoint}`);
   }
-  checkpoint = readCompatibleRunArtifacts(paths);
+  const boundaryCheckpoint = readCompatibleCheckpoint(paths.checkpoint);
+  checkpoint = boundaryCheckpoint.gen === 0 && !existsSync(paths.log)
+    ? boundaryCheckpoint
+    : readCompatibleRunArtifacts(paths);
 } else {
   assertFreshRun(paths);
 }
@@ -189,6 +193,18 @@ if (checkpoint !== null) {
 }
 
 const pool = await WorkerPool.create(cfg.workers);
+const abortController = new AbortController();
+let stopping = false;
+const onSigint = () => {
+  if (stopping) {
+    process.exitCode = 1;
+    return;
+  }
+  stopping = true;
+  abortController.abort();
+  console.log('\ncaught SIGINT — abandoning incomplete generation');
+};
+process.on('SIGINT', onSigint);
 try {
 console.log(
   `training with ${cfg.workers} workers of ${cpus().length} cores` +
@@ -213,16 +229,6 @@ function saveCheckpoint() {
   };
   writeFileSync(paths.checkpoint, JSON.stringify(cp, null, 2));
 }
-
-let stopping = false;
-process.on('SIGINT', () => {
-  if (stopping) {
-    process.exitCode = 1;
-    return;
-  }
-  stopping = true;
-  console.log('\ncaught SIGINT — writing checkpoint and exiting');
-});
 
 async function runGeneration(): Promise<void> {
   const gen = state.gen;
@@ -251,7 +257,8 @@ async function runGeneration(): Promise<void> {
     });
   });
 
-  const results = await pool.run(tasks);
+  const results = await pool.run(tasks, { signal: abortController.signal });
+  if (abortController.signal.aborted) throw new WorkerPoolAbortError();
 
     const {
     fitness: scoreRates,
@@ -305,7 +312,7 @@ async function runGeneration(): Promise<void> {
       : closest, 0);
   const eliteSearchDiagnostics = elites[Math.floor((elites.length - 1) / 2)].searchDiagnostics;
 
-  appendFileSync(paths.log, JSON.stringify({
+  const generationLog = JSON.stringify({
     objective: SCORE_RATE_OBJECTIVE,
     ...SEARCH_METADATA,
     gen,
@@ -357,31 +364,18 @@ async function runGeneration(): Promise<void> {
     eliteSearchDiagnostics,
     gamesPerCandidate: cfg.gamesPerCandidate,
     elapsedMs,
-  }) + '\n');
-
-  console.log(
-    `gen ${String(gen).padStart(4)}` +
-    `  bestRate ${bestScoreRate.toFixed(3).padStart(10)}` +
-    `  medianRate ${median(scoreRates).toFixed(3).padStart(10)}` +
-    `  eliteScore ${eliteScore.toFixed(1).padStart(12)}` +
-    `  eliteH ${eliteHeight.toFixed(1).padStart(5)}` +
-    `  bestT4 ${(100 * bestTetrisLineShare).toFixed(1)}%` +
-    `  eliteT4 ${(100 * eliteTetrisLineShare).toFixed(1)}%` +
-    `  cap ${maxPieces}  ${(elapsedMs / 1000).toFixed(1)}s`,
-  );
-
-  state = nextState;
+  }) + '\n';
 
   const raised = nextMaxPieces(maxPieces, elitePieces, cfg.maxPiecesCap);
-  if (raised !== maxPieces) {
-    console.log(`  piece cap ${maxPieces} -> ${raised} (elite survival ${elitePieces.toFixed(0)})`);
-    maxPieces = raised;
-  }
+  let nextPublishedBaseline = publishedBaseline;
+  let nextBestQualifiedCandidate = bestQualifiedCandidate;
+  let candidateWeightsToWrite: ReturnType<typeof buildCandidateWeights> | null = null;
+  let reevaluationLog = '';
 
-  if (state.gen % cfg.reevalEvery === 0) {
-    const mu = normalize(state.mu);
+  if (nextState.gen % cfg.reevalEvery === 0) {
+    const mu = normalize(nextState.mu);
     const reevaluation = planReevaluation(
-      publishedBaseline,
+      nextPublishedBaseline,
       toVector(DEFAULT_WEIGHTS),
       mu,
     );
@@ -399,7 +393,8 @@ async function runGeneration(): Promise<void> {
       });
     });
 
-    const evalResults = await pool.run(evalTasks);
+    const evalResults = await pool.run(evalTasks, { signal: abortController.signal });
+    if (abortController.signal.aborted) throw new WorkerPoolAbortError();
   const evalStats = aggregateFitness(
       evalResults,
       evaluationWeights.length,
@@ -409,7 +404,7 @@ async function runGeneration(): Promise<void> {
     const evalSearchDiagnostics = evalStats.meanSearchDiagnostics;
     if (reevaluation.baselineIndex !== null) {
       const baseline = reevaluationSummary(evalStats, reevaluation.baselineIndex, evalSearchDiagnostics[reevaluation.baselineIndex]);
-      publishedBaseline = {
+      nextPublishedBaseline = {
         weights: evaluationWeights[reevaluation.baselineIndex],
         ...baseline,
         gen: -1,
@@ -423,40 +418,33 @@ async function runGeneration(): Promise<void> {
     }
 
     const candidateSummary = reevaluationSummary(evalStats, reevaluation.candidateIndex, evalSearchDiagnostics[reevaluation.candidateIndex]);
-    if (publishedBaseline === null) {
+    if (nextPublishedBaseline === null) {
       throw new Error('fixed reevaluation did not establish a published score baseline');
     }
     const candidate: ScoreRateEvaluation = {
       weights: mu,
       ...candidateSummary,
-      gen: state.gen,
+      gen: nextState.gen,
       evalGames: cfg.reevalGames,
       evalMaxPieces: cfg.reevalMaxPieces,
     };
     const currentQualified = bestQualifiedCandidate;
     const qualification = evaluateTetrisCandidate(
       candidate,
-      publishedBaseline,
+      nextPublishedBaseline,
       currentQualified,
     );
     if (qualification.shouldSave) {
-      bestQualifiedCandidate = candidate;
-      writeCandidateWeights(
-        paths.candidate,
-        buildCandidateWeights(
-          candidate,
-          SEARCH_METADATA.searchDepth,
-          new Date().toISOString(),
-        ),
-      );
-      console.log(
-        `  saved qualified candidate at gen ${candidate.gen}: ` +
-        `score rate ${candidate.scoreRate.toFixed(3)}`,
+      nextBestQualifiedCandidate = candidate;
+      candidateWeightsToWrite = buildCandidateWeights(
+        candidate,
+        SEARCH_METADATA.searchDepth,
+        new Date().toISOString(),
       );
     }
 
     const reevaluationEvent = buildReevaluationLogEntry({
-      gen: state.gen,
+      gen: nextState.gen,
       ts: Date.now(),
       ...SEARCH_METADATA,
       schedule: {
@@ -465,25 +453,61 @@ async function runGeneration(): Promise<void> {
         ...SEARCH_METADATA,
         baseSeed,
       },
-      publishedBaseline: loggedReevaluation(publishedBaseline),
+      publishedBaseline: loggedReevaluation(nextPublishedBaseline),
       currentQualified: currentQualified === null
         ? null
         : loggedReevaluation(currentQualified),
       candidate: loggedReevaluation(candidate),
       qualification,
     });
-    appendFileSync(paths.log, `${JSON.stringify(reevaluationEvent)}\n`);
+    reevaluationLog = `${JSON.stringify(reevaluationEvent)}\n`;
   }
 
+  if (abortController.signal.aborted) throw new WorkerPoolAbortError();
+  appendFileSync(paths.log, generationLog + reevaluationLog);
+  if (candidateWeightsToWrite !== null) {
+    writeCandidateWeights(paths.candidate, candidateWeightsToWrite);
+  }
+  state = nextState;
+  if (raised !== maxPieces) {
+    console.log(`  piece cap ${maxPieces} -> ${raised} (elite survival ${elitePieces.toFixed(0)})`);
+  }
+  maxPieces = raised;
+  publishedBaseline = nextPublishedBaseline;
+  bestQualifiedCandidate = nextBestQualifiedCandidate;
+  console.log(
+    `gen ${String(gen).padStart(4)}` +
+    `  bestRate ${bestScoreRate.toFixed(3).padStart(10)}` +
+    `  medianRate ${median(scoreRates).toFixed(3).padStart(10)}` +
+    `  eliteScore ${eliteScore.toFixed(1).padStart(12)}` +
+    `  eliteH ${eliteHeight.toFixed(1).padStart(5)}` +
+    `  bestT4 ${(100 * bestTetrisLineShare).toFixed(1)}%` +
+    `  eliteT4 ${(100 * eliteTetrisLineShare).toFixed(1)}%` +
+    `  cap ${maxPieces}  ${(elapsedMs / 1000).toFixed(1)}s`,
+  );
+  if (candidateWeightsToWrite !== null && nextBestQualifiedCandidate !== null) {
+    console.log(
+      `  saved qualified candidate at gen ${nextBestQualifiedCandidate.gen}: ` +
+      `score rate ${nextBestQualifiedCandidate.scoreRate.toFixed(3)}`,
+    );
+  }
   saveCheckpoint();
 }
 
-while (!stopping) {
-  if (args.generations !== null && state.gen >= args.generations) break;
-  await runGeneration();
+let abandonedGeneration = false;
+try {
+  while (!stopping) {
+    if (args.generations !== null && state.gen >= args.generations) break;
+    await runGeneration();
+  }
+} catch (error) {
+  if (!(error instanceof WorkerPoolAbortError) || !stopping) throw error;
+  abandonedGeneration = true;
+  console.log('abandoned incomplete generation; saving last complete checkpoint');
+  saveCheckpoint();
 }
 
-saveCheckpoint();
+if (!abandonedGeneration) saveCheckpoint();
 console.log(
   bestQualifiedCandidate === null
     ? `stopped at gen ${state.gen}; qualified candidate none`
@@ -491,6 +515,7 @@ console.log(
       `${bestQualifiedCandidate.scoreRate.toFixed(3)} (gen ${bestQualifiedCandidate.gen})`,
 );
 } finally {
+  process.off('SIGINT', onSigint);
   await pool.destroy();
 }
 }

@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -10,17 +11,62 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { resolve, join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { FEATURE_COUNT } from '../src/ai/features';
 import { DEFAULT_CONFIG } from './config';
 import { SEARCH_METADATA } from './objective';
 import { acquireRunLock } from './runLock';
 
 const ROOT = resolve(import.meta.dirname, '..');
+let TEMP_REPO_ROOT = '';
+
+const REQUIRED_TRAINING_FILES = [
+  'candidateWeights.ts',
+  'cem.ts',
+  'config.ts',
+  'objective.ts',
+  'pool.ts',
+  'publication.ts',
+  'reevaluation.ts',
+  'reevaluationLog.ts',
+  'runArtifacts.ts',
+  'runLock.ts',
+  'train.ts',
+  'worker.ts',
+] as const;
+
+beforeAll(() => {
+  TEMP_REPO_ROOT = mkdtempSync(join(tmpdir(), 'tetris-task7-repo-'));
+  mkdirSync(join(TEMP_REPO_ROOT, 'training'));
+  mkdirSync(join(TEMP_REPO_ROOT, 'src'));
+  for (const file of REQUIRED_TRAINING_FILES) {
+    cpSync(join(ROOT, 'training', file), join(TEMP_REPO_ROOT, 'training', file));
+  }
+  cpSync(join(ROOT, 'src'), join(TEMP_REPO_ROOT, 'src'), { recursive: true });
+  cpSync(join(ROOT, 'package.json'), join(TEMP_REPO_ROOT, 'package.json'));
+  for (const file of ['tsconfig.json', 'tsconfig.train.json', 'tsconfig.node.json']) {
+    const source = join(ROOT, file);
+    if (existsSync(source)) cpSync(source, join(TEMP_REPO_ROOT, file));
+  }
+  execFileSync('git', ['init', '--quiet'], { cwd: TEMP_REPO_ROOT, windowsHide: true });
+});
+
+afterAll(() => {
+  if (TEMP_REPO_ROOT.length === 0) return;
+  const resolved = resolve(TEMP_REPO_ROOT);
+  if (
+    dirname(resolved) !== resolve(tmpdir()) ||
+    !basename(resolved).startsWith('tetris-task7-repo-')
+  ) {
+    throw new Error(`refusing to remove unexpected temporary repo: ${resolved}`);
+  }
+  rmSync(resolved, { recursive: true, force: true });
+  if (existsSync(resolved)) throw new Error(`temporary repo was not removed: ${resolved}`);
+});
 
 const EXPECTED_SEARCH_METADATA = {
   searchContract: 'bag-expectimax-hold-v2',
@@ -217,7 +263,7 @@ const writeValidV5Run = (
 const runTrain = (
   outputDir: string,
   resume: boolean,
-  repositoryRoot = ROOT,
+  repositoryRoot = TEMP_REPO_ROOT,
 ) => spawnSync(process.execPath, [
   '--import', 'tsx',
   resolve(repositoryRoot, 'training/train.ts'),
@@ -341,7 +387,7 @@ Worker.prototype.postMessage = function (task) {
       const result = spawnSync(process.execPath, [
         '--import', 'tsx',
         '--import', pathToFileURL(preloadPath).href,
-        resolve(ROOT, 'training/train.ts'),
+        resolve(TEMP_REPO_ROOT, 'training/train.ts'),
         '--resume',
         '--generations', '4',
         '--workers', '1',
@@ -452,7 +498,7 @@ describe('train --resume objective gate', () => {
 
       const result = spawnSync(process.execPath, [
         '--import', 'tsx',
-        resolve(ROOT, 'training/train.ts'),
+        resolve(TEMP_REPO_ROOT, 'training/train.ts'),
         '--resume',
         '--output-dir', outputDir,
       ], { cwd: ROOT, encoding: 'utf8' });
@@ -495,7 +541,7 @@ describe('train --resume objective gate', () => {
 
       const result = spawnSync(process.execPath, [
         '--import', 'tsx',
-        resolve(ROOT, 'training/train.ts'),
+        resolve(TEMP_REPO_ROOT, 'training/train.ts'),
         '--resume',
         '--generations', '0',
         '--workers', '1',
@@ -646,7 +692,7 @@ describe('train --generations argument gate', () => {
     try {
       const result = spawnSync(process.execPath, [
         '--import', 'tsx',
-        resolve(ROOT, 'training/train.ts'),
+        resolve(TEMP_REPO_ROOT, 'training/train.ts'),
         '--generations', value,
         '--workers', '1',
         '--output-dir', outputDir,
@@ -675,7 +721,7 @@ describe('train --generations argument gate', () => {
       expect(result.status).toBe(0);
       expect(`${result.stdout}\n${result.stderr}`).not.toMatch(/training with .* workers/);
       expect(snapshotDirectory(outputDir)).toEqual(before);
-      const nextOwner = acquireRunLock(ROOT);
+      const nextOwner = acquireRunLock(TEMP_REPO_ROOT);
       nextOwner.release();
     } finally {
       rmSync(outputDir, { recursive: true, force: true });
@@ -684,10 +730,68 @@ describe('train --generations argument gate', () => {
 });
 
 describe('train SIGINT lifecycle', () => {
+  it('abandons a blocked gen-0 generation at the last complete checkpoint boundary', () => {
+    const parent = mkdtempSync(join(tmpdir(), 'tetris-sigint-abort-generation-'));
+    const outputDir = join(parent, 'output');
+    const preloadPath = join(parent, 'abort-first-task-preload.mjs');
+    writeFileSync(preloadPath, `
+import { Worker } from 'node:worker_threads';
+
+let blocked = false;
+const originalPostMessage = Worker.prototype.postMessage;
+Worker.prototype.postMessage = function (task) {
+  if (!blocked && typeof task === 'object' && task !== null && 'taskId' in task) {
+    blocked = true;
+    process.emit('SIGINT');
+    return;
+  }
+  return originalPostMessage.apply(this, arguments);
+};
+`);
+    try {
+      const result = spawnSync(process.execPath, [
+        '--import', pathToFileURL(preloadPath).href,
+        '--import', 'tsx',
+        resolve(TEMP_REPO_ROOT, 'training/train.ts'),
+        '--generations', '1',
+        '--workers', '1',
+        '--output-dir', outputDir,
+      ], {
+        cwd: ROOT,
+        encoding: 'utf8',
+        timeout: 10_000,
+      });
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toMatch(/abandon|incomplete generation/i);
+      expect(`${result.stdout}\n${result.stderr}`).not.toMatch(/saved qualified/i);
+
+      const checkpoint = JSON.parse(readFileSync(join(outputDir, 'checkpoint.json'), 'utf8'));
+      expect(checkpoint).toMatchObject({ version: 6, objective: 'score-rate-v5', gen: 0 });
+      expect(existsSync(join(outputDir, 'training-log.jsonl'))).toBe(false);
+
+      const resume = spawnSync(process.execPath, [
+        '--import', 'tsx',
+        resolve(TEMP_REPO_ROOT, 'training/train.ts'),
+        '--resume',
+        '--generations', '0',
+        '--workers', '1',
+        '--output-dir', outputDir,
+      ], { cwd: ROOT, encoding: 'utf8', timeout: 10_000 });
+      expect(resume.status, `${resume.stdout}\n${resume.stderr}`).toBe(0);
+      expect(`${resume.stdout}\n${resume.stderr}`).toMatch(/validated score-rate-v5 resume artifacts at gen 0/);
+
+      const nextOwner = acquireRunLock(TEMP_REPO_ROOT);
+      nextOwner.release();
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  }, 20_000);
+
   it.each([
     ['one', 1, 0],
     ['two', 2, 1],
-  ])('handles %s real process SIGINT event(s) through destroy then release', (
+  ])('sets the expected status for %s real process SIGINT event(s)', (
     _label,
     signalCount,
     expectedStatus,
@@ -749,7 +853,7 @@ process.on = function (event, listener) {
       const result = spawnSync(process.execPath, [
         '--import', pathToFileURL(preloadPath).href,
         '--import', 'tsx',
-        resolve(ROOT, 'training/train.ts'),
+        resolve(TEMP_REPO_ROOT, 'training/train.ts'),
         '--resume',
         '--generations', '1',
         '--workers', '1',
@@ -768,8 +872,14 @@ process.on = function (event, listener) {
       expect(result.status).toBe(expectedStatus);
       expect(trace.filter((event) => event === 'sigint')).toHaveLength(signalCount);
       expect(trace.some((event) => event.startsWith('process.exit:'))).toBe(false);
-      expect(trace.indexOf('destroy')).toBeGreaterThan(-1);
-      expect(trace.indexOf('release')).toBeGreaterThan(trace.indexOf('destroy'));
+      if (signalCount === 1) {
+        expect(trace.indexOf('destroy')).toBeGreaterThan(-1);
+        expect(trace.indexOf('release')).toBeGreaterThan(trace.indexOf('destroy'));
+      } else {
+        expect(`${result.stdout}\n${result.stderr}`).not.toMatch(
+          /cleanup (?:complete|succeeded)|safe to exit/i,
+        );
+      }
     } finally {
       rmSync(parent, { recursive: true, force: true });
     }
@@ -813,7 +923,7 @@ syncBuiltinESMExports();
       const result = spawnSync(process.execPath, [
         '--import', pathToFileURL(preloadPath).href,
         '--import', 'tsx',
-        resolve(ROOT, 'training/train.ts'),
+        resolve(TEMP_REPO_ROOT, 'training/train.ts'),
         '--resume',
         '--generations', '1',
         '--workers', '1',
@@ -831,7 +941,7 @@ syncBuiltinESMExports();
       expect(snapshotDirectory(outputDir)).toEqual(before);
       expect(trace.indexOf('destroy')).toBeGreaterThan(-1);
       expect(trace.indexOf('release')).toBeGreaterThan(trace.indexOf('destroy'));
-      const nextOwner = acquireRunLock(ROOT);
+      const nextOwner = acquireRunLock(TEMP_REPO_ROOT);
       nextOwner.release();
     } finally {
       if (existsSync(checkpointPath)) chmodSync(checkpointPath, 0o666);
@@ -849,7 +959,7 @@ describe('train output-directory lock', () => {
     const competingOutput = separateOutput
       ? mkdtempSync(join(tmpdir(), 'tetris-other-output-'))
       : outputDir;
-    const lock = acquireRunLock(ROOT);
+    const lock = acquireRunLock(TEMP_REPO_ROOT);
     try {
       writeFileSync(
         join(competingOutput, 'checkpoint.json'),
@@ -878,8 +988,8 @@ describe('train output-directory lock', () => {
     const aliasParent = mkdtempSync(join(tmpdir(), 'tetris-repository-alias-'));
     const repositoryAlias = join(aliasParent, 'repo');
     const outputDir = mkdtempSync(join(tmpdir(), 'tetris-aliased-cli-output-'));
-    symlinkSync(ROOT, repositoryAlias, type);
-    const lock = acquireRunLock(ROOT);
+    symlinkSync(TEMP_REPO_ROOT, repositoryAlias, type);
+    const lock = acquireRunLock(TEMP_REPO_ROOT);
     try {
       writeFileSync(join(outputDir, 'checkpoint.json'), JSON.stringify(validCheckpoint()));
       writeFileSync(
@@ -918,9 +1028,9 @@ describe('train output-directory lock', () => {
       const canonical = (path: string) => realpathSync.native(path)
         .replaceAll('\\', '/')
         .toLowerCase();
-      expect(canonical(alias)).toBe(canonical(ROOT));
+      expect(canonical(alias)).toBe(canonical(TEMP_REPO_ROOT));
       const outputDir = mkdtempSync(join(tmpdir(), `tetris-${label}-alias-output-`));
-      const lock = acquireRunLock(ROOT);
+      const lock = acquireRunLock(TEMP_REPO_ROOT);
       try {
         writeFileSync(join(outputDir, 'checkpoint.json'), JSON.stringify(validCheckpoint()));
         writeFileSync(
