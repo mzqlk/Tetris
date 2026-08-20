@@ -357,6 +357,24 @@ describe('simulateGame', () => {
     );
   });
 
+  it('reports Hold rate per search call when Hold adds a decision without a lock', () => {
+    const result = simulateGameWithSearchForTest({
+      weights, seed: 1, maxPieces: 10,
+    }, {
+      ...DETERMINISTIC_SEARCH_LIMITS,
+      maxLockedDepth: 1,
+      maxRootPlacements: 1,
+      maxChildPlacements: 1,
+    });
+
+    expect(result.searchDiagnostics).toMatchObject({
+      searchCalls: 12,
+      holdActions: 2,
+    });
+    expect(result.searchDiagnostics.searchCalls).toBeGreaterThan(result.pieces);
+    expect(result.searchDiagnostics.holdRate).toBeCloseTo(1 / 6, 12);
+  });
+
   it('is fully deterministic for a given seed', () => {
     const a = simulateGame({ weights, seed: 7, maxPieces: 20, search: TEST_SEARCH });
     const b = simulateGame({ weights, seed: 7, maxPieces: 20, search: TEST_SEARCH });

@@ -13,9 +13,10 @@ import {
   hasSearchMetadata,
   type SearchMetadata,
 } from './objective';
-import type {
-  CandidateQualification,
-  ReevaluationSummary,
+import {
+  evaluateTetrisCandidate,
+  type CandidateQualification,
+  type ReevaluationSummary,
 } from './publication';
 
 export interface LoggedReevaluation extends ReevaluationSummary {
@@ -222,6 +223,11 @@ export function parseReevaluationLogEntry(payload: unknown): ReevaluationLogEntr
   if (typeof raw.qualification !== 'object' || raw.qualification === null
     || Array.isArray(raw.qualification)) return null;
   const qualification = raw.qualification as Record<string, unknown>;
+  const expectedQualification = evaluateTetrisCandidate(
+    candidate,
+    publishedBaseline,
+    currentQualified,
+  );
   if (!exactKeys(qualification, QUALIFICATION_KEYS)
     || typeof qualification.shouldSave !== 'boolean'
     || typeof qualification.scoreQualified !== 'boolean'
@@ -233,6 +239,13 @@ export function parseReevaluationLogEntry(payload: unknown): ReevaluationLogEntr
     || !finite(qualification.scoreDelta) || !finite(qualification.scoreRateDelta)
     || !finite(qualification.tetrisLineShareDelta)
     || !finite(qualification.pieceCapGamesDelta)
+    || !closeEnough(qualification.scoreTolerance, expectedQualification.scoreTolerance)
+    || qualification.scoreQualified !== expectedQualification.scoreQualified
+    || qualification.tetrisQualified !== expectedQualification.tetrisQualified
+    || qualification.survivalQualified !== expectedQualification.survivalQualified
+    || qualification.betterThanCurrent !== expectedQualification.betterThanCurrent
+    || qualification.reason !== expectedQualification.reason
+    || qualification.shouldSave !== expectedQualification.shouldSave
     || qualification.decision !== (qualification.shouldSave ? 'save-candidate' : 'keep-current')
     || !closeEnough(qualification.scoreDelta, candidate.meanScore - publishedBaseline.meanScore)
     || !closeEnough(qualification.scoreRateDelta, candidate.scoreRate - publishedBaseline.scoreRate)

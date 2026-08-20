@@ -304,7 +304,7 @@ function simulationSearchDiagnostics(state: SimState): SimulationSearchDiagnosti
   return {
     searchCalls: state.searchCalls,
     holdActions: state.holdActions,
-    holdRate: state.pieces === 0 ? 0 : state.holdActions / state.pieces,
+    holdRate: state.searchCalls === 0 ? 0 : state.holdActions / state.searchCalls,
     meanCompletedDepth: state.searchCalls === 0 ? 0 : state.completedDepthSum / state.searchCalls,
     minCompletedDepth: state.searchCalls === 0 ? 0 : state.minCompletedDepth,
     completedDepthHistogram: [...state.completedDepthHistogram] as [number, number, number, number, number],
@@ -349,9 +349,7 @@ export function simulateFromState(
     if (decision.action.kind === 'hold') {
       applyAction(state, 'hold');
       // Count only Holds that complete a valid decision cycle. A Hold may
-      // promote a blocked piece and end the game before any lock; recording it
-      // against the locked-piece denominator would make the diagnostic rate
-      // inconsistent (and can exceed one).
+      // promote a blocked piece and end the game before the action completes.
       if (state.status === 'playing') state.holdActions++;
       continue;
     }

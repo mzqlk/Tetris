@@ -314,4 +314,47 @@ describe('buildReevaluationLogEntry', () => {
     overBudget.candidate.searchDiagnostics!.maxWorkUnitsUsed = 3_585;
     expect(parseReevaluationLogEntry(overBudget)).toBeNull();
   });
+
+  it.each([
+    ['scoreTolerance', 0],
+    ['scoreQualified', false],
+    ['tetrisQualified', false],
+    ['survivalQualified', false],
+    ['betterThanCurrent', false],
+    ['reason', 'score-not-higher'],
+  ])('rejects a reevaluation with tampered qualification %s', (field, value) => {
+    const event = validEvent();
+    (event.qualification as unknown as Record<string, unknown>)[field] = value;
+    expect(parseReevaluationLogEntry(event)).toBeNull();
+  });
+
+  it('rejects semantically false shouldSave even when its decision label agrees', () => {
+    const event = validEvent();
+    event.qualification.shouldSave = false;
+    event.qualification.decision = 'keep-current';
+    expect(parseReevaluationLogEntry(event)).toBeNull();
+  });
+
+  it('rejects inconsistent qualification input before building an event', () => {
+    const valid = validEvent();
+    const { seedStrategy: _seedStrategy, ...schedule } = valid.schedule;
+
+    expect(() => buildReevaluationLogEntry({
+      gen: valid.gen,
+      ts: valid.ts,
+      searchContract: valid.searchContract,
+      searchDepth: valid.searchDepth,
+      rootBeamWidth: valid.rootBeamWidth,
+      childBeamWidth: valid.childBeamWidth,
+      maxWorkUnits: valid.maxWorkUnits,
+      budgetCorpus: valid.budgetCorpus,
+      transpositionCacheEntries: valid.transpositionCacheEntries,
+      placementCacheEntries: valid.placementCacheEntries,
+      schedule,
+      publishedBaseline: valid.publishedBaseline,
+      currentQualified: valid.currentQualified,
+      candidate: valid.candidate,
+      qualification: { ...valid.qualification, scoreQualified: false },
+    })).toThrow(/reevaluation payload/i);
+  });
 });

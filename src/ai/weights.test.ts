@@ -325,6 +325,37 @@ describe('parseWeightsFile', () => {
   });
 
   it.each([
+    ['expandedDecisionNodes', 1],
+    ['expandedChanceNodes', 1],
+    ['cacheHits', 1],
+  ])('rejects zero-call diagnostics with nonzero %s', (field, value) => {
+    expect(parseWeightsFile({
+      ...v6File,
+      searchDiagnostics: {
+        ...searchDiagnostics,
+        searchCalls: 0,
+        holdActions: 0,
+        holdRate: 0,
+        meanCompletedDepth: 0,
+        minCompletedDepth: 0,
+        completedDepthHistogram: [0, 0, 0, 0, 0],
+        totalWorkUnitsUsed: 0,
+        meanWorkUnitsUsed: 0,
+        maxWorkUnitsUsed: 0,
+        budgetExhaustedSearches: 0,
+        budgetExhaustionRate: 0,
+        placementEvaluationUnits: 0,
+        chanceExpansionUnits: 0,
+        cacheHitUnits: 0,
+        expandedDecisionNodes: 0,
+        expandedChanceNodes: 0,
+        cacheHits: 0,
+        [field]: value,
+      },
+    })).toBeNull();
+  });
+
+  it.each([
     'meanScore',
     'evalMaxPieces',
     'meanLines',

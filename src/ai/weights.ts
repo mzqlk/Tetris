@@ -300,6 +300,10 @@ export function parseSearchDiagnostics(
     budgetExhaustedSearches > searchCalls || categoryTotal !== totalWorkUnitsUsed ||
     maxWorkUnitsUsed > maxWorkUnits || totalWorkUnitsUsed > searchCalls * maxWorkUnits ||
     maxWorkUnitsUsed < meanWorkUnitsUsed || maxWorkUnitsUsed > totalWorkUnitsUsed ||
+    (searchCalls === 0 && (
+      integers.expandedDecisionNodes !== 0 || integers.expandedChanceNodes !== 0 ||
+      integers.cacheHits !== 0
+    )) ||
     !closeEnough(holdRate, searchCalls === 0 ? 0 : holdActions / searchCalls) ||
     !closeEnough(meanCompletedDepth, expectedMeanDepth) ||
     minCompletedDepth !== expectedMinDepth ||
