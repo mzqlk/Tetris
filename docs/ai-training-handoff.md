@@ -241,7 +241,7 @@ fitness = meanLines - heightPenalty * meanHeight
 
 当前训练器默认使用 `public/ai/score-rate-v5/`，也可通过 `--output-dir` 选择隔离目录。只有 objective `score-rate-v5`、schema version 6、精确 13 维且顺序不变、搜索 metadata（v2/4/64/32/3584/`budget-corpus-v1`）与 config/log 连续的产物可恢复；`score-rate-v1/`、`score-rate-v2/`、`score-rate-v3/`、`score-rate-v4/` 及 schema version 1–5 checkpoint/log 都是历史产物，v5 绝不恢复或追加。根 `public/ai/checkpoint.json` / `training-log.jsonl` 是更旧目标产物，`score-rate-v1-smoke/` 是历史隔离冒烟产物；路径相邻不表示目标兼容。
 
-**2026-08-03 收口快照（历史）**：score-rate-v1 checkpoint 为 gen 20，日志包含 gen 0–19 的 20 条 generation 记录和一条 gen 20 reevaluation；当时发布权重写入了根 `best-weights.json` 与 tracked `src/ai/trained-weights.json`。这些权重现已被 gen-40 v2 替代，该快照只保留为历史证据，不是当前 v3 resume/append 的依据。
+**2026-08-03 收口快照（历史）**：score-rate-v1 checkpoint 为 gen 20，日志包含 gen 0–19 的 20 条 generation 记录和一条 gen 20 reevaluation；当时发布权重写入了根 `best-weights.json` 与 tracked `src/ai/trained-weights.json`。这些权重现已被 gen-40 v2 替代，该快照只保留为历史证据，不是当前 v5 resume/append 的依据。
 
 任何训练前都按以下顺序判断：
 
