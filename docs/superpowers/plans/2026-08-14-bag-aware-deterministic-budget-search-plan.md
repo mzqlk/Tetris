@@ -4,7 +4,7 @@
 
 **Goal:** Replace the non-viable exact depth-four production search with the approved deterministic work-unit `bag-expectimax-hold-v2` contract, calibrate one shared budget, migrate training to `score-rate-v5` schema 6, and make interrupted training stop at a recoverable generation boundary.
 
-**Architecture:** One per-decision ledger charges placement evaluation, exact chance expansion, and cache-hit traversal before work occurs. Browser and Node production consumers share one frozen iterative-deepening configuration; only complete depths commit. A versioned 96-state public corpus selects the fixed budget before any trainer/schema migration proceeds.
+**Architecture:** One per-decision ledger charges placement evaluation, exact chance expansion, and cache-hit traversal before work occurs. Browser and Node production consumers share one frozen iterative-deepening configuration; only complete depths commit. A versioned 96-state public corpus selects a coarse 256-unit candidate below a 140 ms selection line, then validates the frozen value in three independent blocks below 160 ms before any trainer/schema migration proceeds.
 
 **Tech Stack:** TypeScript 5.6, React 18, Zustand, Vitest 3, Node worker threads, Vite 6, PowerShell, Git.
 
@@ -30,6 +30,9 @@
 - Do not publish, push, or perform browser/runtime acceptance.
 - Use exact pathspecs for every `git add`; inspect staged scope before every commit.
 - Use bounded serial Vitest commands first: `--pool=threads --maxWorkers=1 --minWorkers=1 --fileParallelism=false`.
+- Calibration selection uses 256-unit steps from 1536, a 140 ms selection line, at most 32 candidates, and no adjacent `budget + 1` proof.
+- Frozen-budget verification uses three isolated blocks, each with one corpus warmup plus five measured rounds; every block must stay at or below 160 ms.
+- `calibrate:search` requires explicit `--select` or `--verify-frozen` mode and emits complete structured JSON on success and failure.
 
 ---
 
@@ -396,18 +399,57 @@ export interface SerializedBudgetState {
 export const BUDGET_CORPUS_V1: readonly SerializedBudgetState[];
 export function materializeBudgetState(value: SerializedBudgetState): PublicSearchState;
 
-export interface CalibrationResult {
-  corpus: 'budget-corpus-v1';
-  selectedBudget: number;
-  depthOneRequiredBudget: 1512;
-  rounds: readonly CalibrationRound[];
+export const BUDGET_CANDIDATE_STEP = 256;
+export const SELECTION_P95_LIMIT_MS = 140;
+export const VERIFICATION_P95_LIMIT_MS = 160;
+export const MAX_SELECTION_CANDIDATES = 32;
+export const VERIFICATION_BLOCKS = 3;
+
+export interface CandidateMeasurement {
+  budget: number;
+  rounds: readonly [CalibrationRound, CalibrationRound, CalibrationRound, CalibrationRound, CalibrationRound];
+  worstP95Ms: number;
   depthHistogram: readonly [number, number, number, number, number];
+  workUnitsUsed: readonly number[]; // exactly 5 x 96 entries
+  placementEvaluationUnits: number;
+  chanceExpansionUnits: number;
+  cacheHitUnits: number;
+  allDepthOneComplete: boolean;
+  allDepthFourComplete: boolean;
+  overBudgetCount: number;
+  deterministic: boolean;
+  reasons: readonly string[];
 }
 
-export function selectLargestBudget(
+export interface SelectionOutput {
+  mode: 'select';
+  status: 'pass' | 'fail';
+  corpus: 'budget-corpus-v1';
+  proposedBudget: number | null;
+  candidates: readonly CandidateMeasurement[];
+  failureReasons: readonly string[];
+  environment: CalibrationEnvironment;
+}
+
+export interface VerificationOutput {
+  mode: 'verify-frozen';
+  status: 'pass' | 'fail';
+  corpus: 'budget-corpus-v1';
+  frozenBudget: number;
+  blocks: readonly CandidateMeasurement[]; // exactly 3 entries
+  failureReasons: readonly string[];
+  environment: CalibrationEnvironment;
+}
+
+export function selectBudgetFromLadder(
   measure: (maxWorkUnits: number) => CandidateMeasurement,
   minimum?: number,
-): CalibrationResult;
+): Omit<SelectionOutput, 'environment'>;
+
+export function verifyFrozenBudget(
+  frozenBudget: number,
+  measure: (maxWorkUnits: number) => CandidateMeasurement,
+): Omit<VerificationOutput, 'environment'>;
 ```
 
 - [ ] **Step 1: Write corpus contract RED tests**
@@ -448,68 +490,125 @@ it('covers every piece and all public Hold/bag boundaries', () => {
 
 Store all row masks and public fields as literals. Use IDs `low-00` through `danger-23`. Assign strata by actual maximum occupied height: low 0-4, medium 5-9, high 10-15, danger 16-20. `materializeBudgetState` maps bit `x` in row `y` to a nonzero occupied cell and calls `assertPublicSearchState` before returning. Do not import `rng.ts`, `simulate.ts`, `generateBag`, or a seed.
 
-- [ ] **Step 3: Write calibrator algorithm RED tests**
+- [ ] **Step 3: Write selection-ladder RED tests**
 
-Inject measurements so tests run without real search or wall clock. Prove: minimum 1512 is always tested; doubling brackets the boundary; integer binary search returns the adjacent pass/fail boundary; five-round worst p95 controls qualification; any incomplete depth 1, over-budget result, nondeterministic result, or non-monotonic adjacent measurement throws.
+Inject measurements so tests run without real search or wall clock. Prove:
 
 ```ts
-it('selects the adjacent passing integer and rejects candidate plus one', () => {
-  const result = selectLargestBudget((budget) => fakeMeasurement({
+it('selects the largest scanned 256-unit candidate below the 140 ms line', () => {
+  const result = selectBudgetFromLadder((budget) => fakeMeasurement({
     budget,
-    worstP95Ms: budget <= 4096 ? 159 : 161,
+    worstP95Ms: budget <= 3584 ? 139 : 161,
   }));
-  expect(result.selectedBudget).toBe(4096);
+  expect(result.status).toBe('pass');
+  expect(result.proposedBudget).toBe(3584);
+  expect(result.candidates.map((candidate) => candidate.budget)).toEqual([
+    1536, 1792, 2048, 2304, 2560, 2816, 3072, 3328, 3584, 3840, 4096,
+  ]);
 });
 ```
 
-- [ ] **Step 4: Implement the import-safe calibration CLI**
+Also prove that the selector:
+
+- starts at 1536 even when the caller minimum is 1512;
+- stops after every state completes depth 4;
+- stops after two consecutive candidates exceed 160 ms;
+- fails after 32 candidates if neither normal stop condition occurs;
+- fails when no scanned candidate passes 140 ms;
+- fails on incomplete depth 1, over-budget work, nondeterminism, a non-five-round measurement, a wrong 480-entry work-unit distribution, or a category-unit sum mismatch;
+- does not require `proposedBudget + 1` to fail and does not overwrite earlier candidate traces.
+
+- [ ] **Step 4: Write frozen-verification and JSON RED tests**
+
+```ts
+it('requires three isolated frozen-budget blocks below 160 ms', () => {
+  let block = 0;
+  const result = verifyFrozenBudget(3584, (budget) => fakeMeasurement({
+    budget,
+    worstP95Ms: [151, 159, 160][block++],
+  }));
+  expect(result.status).toBe('pass');
+  expect(result.blocks).toHaveLength(3);
+});
+```
+
+Add separate failures for block p95 above 160 ms and every structural invariant. Test success and failure serialization for both modes. Each output must retain all five rounds, the full 480-value work-unit distribution, category totals, depth histogram, qualification reasons, thresholds, corpus id, and environment. Invalid/missing/combined mode flags fail with structured JSON and a nonzero CLI result; do not test by reading source text.
+
+- [ ] **Step 5: Run focused tests and verify RED**
+
+```powershell
+npx vitest run training/searchBudgetCorpus.test.ts training/calibrateSearchBudget.test.ts src/ai/searchBudget.test.ts src/ai/search.test.ts --pool=threads --maxWorkers=1 --minWorkers=1 --fileParallelism=false
+```
+
+Expected: FAIL because the current WIP still implements noisy integer bisection, has no explicit modes, and omits auditable candidate/block output.
+
+- [ ] **Step 6: Implement explicit snapshots and measurement traces**
+
+Keep all 96 row masks and public fields as literals. `measureCandidate` warms the whole corpus once, then records exactly five complete rounds. Compare action, value, completed depth, and unit diagnostics for each state across rounds. Preserve all 480 `workUnitsUsed` values, category totals, depth histogram, p50/p95/max, depth-one/depth-four completion, over-budget count, deterministic status, and explicit qualification reasons. Validate internally that category totals reconstruct total work and that `worstP95Ms` equals the maximum of exactly five round p95 values.
+
+- [ ] **Step 7: Implement the selection ladder**
+
+Start at `Math.ceil(maximum(1512, minimum) / 256) * 256`. Measure ascending 256-unit candidates and retain every measurement. A candidate is selectable only when its structural invariants pass and `worstP95Ms <= 140`. Stop after all states complete depth 4, after two consecutive `worstP95Ms > 160`, or fail after 32 candidates. Return the largest selectable scanned budget; never perform an adjacent `+1` proof or overwrite an earlier measurement.
+
+- [ ] **Step 8: Implement frozen verification and the import-safe CLI**
 
 Add `"calibrate:search": "tsx training/calibrateSearchBudget.ts"` to `package.json`. The CLI must:
 
-- warm the whole corpus once per candidate;
-- measure five complete corpus rounds with `process.hrtime.bigint()`;
-- compute each round's p50/p95/max and use the largest p95;
-- compare action, value, completed depth, and unit diagnostics across repeats;
-- emit one JSON `CalibrationResult` plus Node version, OS, CPU model, and per-depth histogram;
-- exit nonzero on any contract failure;
+- require exactly one of `--select` and `--verify-frozen`;
+- use `process.hrtime.bigint()` only for measurement, never for search decisions;
+- run `--verify-frozen` as three sequential blocks, each with a new warmup plus five measured rounds;
+- emit one complete `SelectionOutput` or `VerificationOutput` JSON on success and failure;
+- include Node version, OS, CPU model, thresholds, candidate step, maximum candidate count, block count, and every measurement trace;
+- exit nonzero exactly when output status is `fail`;
 - never import filesystem write APIs or write artifacts/source.
 
 Use an `isMain(import.meta.url)` guard so unit tests can import helpers without running calibration.
 
-- [ ] **Step 5: Run unit tests**
+- [ ] **Step 9: Run unit and type tests**
 
 ```powershell
 npx vitest run training/searchBudgetCorpus.test.ts training/calibrateSearchBudget.test.ts src/ai/searchBudget.test.ts src/ai/search.test.ts --pool=threads --maxWorkers=1 --minWorkers=1 --fileParallelism=false
 npm run typecheck:train
 ```
 
-Expected: PASS without running the five-round real calibration.
+Expected: PASS without running real wall-clock calibration.
 
-- [ ] **Step 6: Run the approved calibration hard gate**
+- [ ] **Step 10: Preflight and run the selection hard gate**
+
+Refresh Node processes, protected paths, the stale external trainer lock, and Task 3 diff before execution. Do not delete the lock or run while another Tetris calibration/test/train process exists.
 
 ```powershell
-npm run calibrate:search
+npm run calibrate:search -- --select
 ```
 
-Expected: exit 0; JSON reports `depthOneRequiredBudget: 1512`, a selected integer at least 1512, all 96 states complete depth 1, worst five-round p95 no more than 160 ms, zero over-budget decisions, and an adjacent failing `selectedBudget + 1` confirmation.
+Expected: exit 0 and `status: "pass"`; proposed budget is a 256-unit multiple at least 1536, its selection measurement has five-round worst p95 no more than 140 ms, all structural invariants pass, a normal stop condition is recorded, and complete candidate traces are present.
 
-If the command fails, becomes non-monotonic, exceeds 160 ms at 1512, crashes, or leaves a Node process: capture the bounded output in the continuity checkpoint and stop the entire plan. Do not change 4/64/32, remove exact chance outcomes, run training, or continue to Task 4.
+If the command fails, reaches the 32-candidate cap, lacks audit fields, crashes, or leaves a Node process: capture the bounded JSON/process evidence in the continuity checkpoint and stop the entire plan. Do not change 4/64/32, remove exact chance outcomes, run training, or continue to Task 4.
 
-- [ ] **Step 7: Freeze the measured integer**
+- [ ] **Step 11: Freeze only the proposed staircase integer**
 
-Use `apply_patch` to replace `DETERMINISTIC_SEARCH_LIMITS.maxWorkUnits` with the exact JSON `selectedBudget`. Add a test asserting that exact integer and append a “Calibration evidence” section to the design containing the selected integer, corpus id, environment fields, five p95 values, depth histogram, and command date. Do not paste machine-private paths.
+Use `apply_patch` to replace the stale, rejected 4390 WIP with the exact JSON `proposedBudget`. Add a test asserting that integer. Do not add accepted calibration evidence to the design yet; selection alone is not acceptance.
 
-- [ ] **Step 8: Re-run the frozen-budget gate**
+- [ ] **Step 12: Run the frozen-budget verification hard gate**
 
 ```powershell
-npm run calibrate:search
+npm run calibrate:search -- --verify-frozen
+```
+
+Expected: exit 0 and `status: "pass"`; JSON contains exactly three blocks, every block has five complete rounds, every block worst p95 is no more than 160 ms, and all structural invariants pass. On failure or residual calibration process, checkpoint the evidence and stop the plan without selecting another budget.
+
+- [ ] **Step 13: Append accepted evidence and re-run focused gates**
+
+Only after verification passes, append a “Calibration evidence” section to the design containing the proposed/frozen integer, corpus id, selection candidate trace summary, all three verification block p95 arrays, depth/unit distributions, environment, command date, and explicit statement that 4390/3998 were rejected historical attempts.
+
+```powershell
 npx vitest run src/ai/searchBudget.test.ts training/searchBudgetCorpus.test.ts training/calibrateSearchBudget.test.ts src/ai/search.test.ts --pool=threads --maxWorkers=1 --minWorkers=1 --fileParallelism=false
 npm run typecheck:train
 ```
 
-Expected: the CLI selects the same frozen integer and all focused tests pass.
+Expected: all focused tests and training typecheck pass; no calibration Node remains.
 
-- [ ] **Step 9: Review and commit Task 3**
+- [ ] **Step 14: Review and commit Task 3**
 
 ```powershell
 git status --short -- public/ai src/ai/trained-weights.json training/searchProbe.ts training/searchProbeWorker.ts training/searchProbe.test.ts
@@ -705,7 +804,7 @@ git commit -m "feat(training): define score-rate-v5 schema"
 
 - [ ] **Step 1: Write config/path isolation RED tests**
 
-Assert default v5 paths, schema 1-5 resume rejection, v4 log append rejection, and a serializable config with no search keys. Add a source-contract test that trainer, bench, and paired bench use `SEARCH_METADATA`/`DETERMINISTIC_SEARCH_LIMITS` rather than hard-coded v1/v4 strings.
+Assert default v5 paths, schema 1-5 resume rejection, v4 log append rejection, and a serializable config with no search keys. Verify the shared exported metadata is consumed at trainer/bench/paired boundaries through real payloads and type-level config absence; do not read or match source text.
 
 - [ ] **Step 2: Write generation/checkpoint mutation RED tests**
 
@@ -841,7 +940,8 @@ Replace statements that call v4/v1 the active trainer/search contract. Preserve 
 Document:
 
 ```powershell
-npm run calibrate:search
+npm run calibrate:search -- --select
+npm run calibrate:search -- --verify-frozen
 npm test
 npm run lint
 npm run build
@@ -901,10 +1001,10 @@ For each confirmed Critical/Important issue, add a failing test, implement the s
 - [ ] **Step 3: Run fresh calibration verification**
 
 ```powershell
-npm run calibrate:search
+npm run calibrate:search -- --verify-frozen
 ```
 
-Expected: same frozen integer, all 96 depth-1 complete, no unit overrun/nondeterminism, and five-round worst p95 <= 160 ms. Stop on failure.
+Expected: `--verify-frozen` reports the already frozen budget, exactly three verification blocks, all 96 depth-1 complete in every block, no unit overrun/nondeterminism, and every block's five-round worst p95 <= 160 ms. `--select` is only run when choosing a new staircase candidate; it does not prove frozen acceptance. Stop on failure.
 
 - [ ] **Step 4: Run fresh code gates separately**
 
