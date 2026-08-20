@@ -126,7 +126,7 @@ const normalizeSearchDiagnostics = (input: SimulationSearchDiagnostics): Simulat
   totalWorkUnitsUsed: input.totalWorkUnitsUsed ?? 0,
   meanWorkUnitsUsed: input.meanWorkUnitsUsed ?? 0,
   maxWorkUnitsUsed: input.maxWorkUnitsUsed ?? 0,
-  budgetExhaustedSearches: input.budgetExhaustedSearches ?? input.abortedSearches ?? 0,
+  budgetExhaustedSearches: input.budgetExhaustedSearches,
   budgetExhaustionRate: input.budgetExhaustionRate ?? 0,
   placementEvaluationUnits: input.placementEvaluationUnits ?? 0,
   chanceExpansionUnits: input.chanceExpansionUnits ?? 0,
@@ -134,7 +134,6 @@ const normalizeSearchDiagnostics = (input: SimulationSearchDiagnostics): Simulat
   expandedDecisionNodes: input.expandedDecisionNodes ?? 0,
   expandedChanceNodes: input.expandedChanceNodes ?? 0,
   cacheHits: input.cacheHits ?? 0,
-  abortedSearches: input.abortedSearches ?? input.budgetExhaustedSearches ?? 0,
 });
 
 /**

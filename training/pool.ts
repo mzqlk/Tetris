@@ -4,7 +4,6 @@ import { TOTAL_ROWS } from '../src/constants';
 import { emptyLineClearCounts, type LineClearCounts } from '../src/ai/lineClears';
 import { emptyStrategyDiagnostics, type StrategyDiagnostics } from '../src/ai/tetrisStrategy';
 import {
-  type FixedSearchConfig,
   type SimulationSearchDiagnostics,
 } from '../src/ai/simulate';
 
@@ -26,7 +25,6 @@ const emptySearchDiagnostics = (): SimulationSearchDiagnostics => ({
   expandedDecisionNodes: 0,
   expandedChanceNodes: 0,
   cacheHits: 0,
-  abortedSearches: 0,
 });
 
 /**
@@ -50,8 +48,6 @@ export interface SimTask {
   weights: number[];
   seed: number;
   maxPieces: number;
-  /** @deprecated Compile-only compatibility; worker ignores and does not propagate it. */
-  search?: FixedSearchConfig;
 }
 
 export interface SimTaskResult {
@@ -152,7 +148,8 @@ export class WorkerPool {
         const item = queue[cursor++];
         inFlight.set(worker, item);
         item.attempts++;
-        worker.postMessage(item.task);
+        const { taskId, weights, seed, maxPieces } = item.task;
+        worker.postMessage({ taskId, weights, seed, maxPieces });
       };
 
       const retryOrFail = (item: QueueItem, reason: string) => {

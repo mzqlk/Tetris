@@ -36,14 +36,23 @@ const result = (overrides: Partial<{
       meanTetrisReadyRows: 0,
     },
     searchDiagnostics: overrides.searchDiagnostics ?? {
+      searchCalls: 0,
       holdActions: 0,
       holdRate: 0,
       meanCompletedDepth: 0,
       minCompletedDepth: 0,
+      completedDepthHistogram: [0, 0, 0, 0, 0],
+      totalWorkUnitsUsed: 0,
+      meanWorkUnitsUsed: 0,
+      maxWorkUnitsUsed: 0,
+      budgetExhaustedSearches: 0,
+      budgetExhaustionRate: 0,
+      placementEvaluationUnits: 0,
+      chanceExpansionUnits: 0,
+      cacheHitUnits: 0,
       expandedDecisionNodes: 0,
       expandedChanceNodes: 0,
       cacheHits: 0,
-      abortedSearches: 0,
     },
     reason: 'pieceCap' as const,
     ...overrides,
@@ -289,11 +298,50 @@ describe('aggregateFitness', () => {
 
   it('keeps search diagnostics out of scalar fitness and candidate ordering', () => {
     const stats = aggregateFitness([
-      result({ score: 100, searchDiagnostics: { holdActions: 0, holdRate: 0, meanCompletedDepth: 1, minCompletedDepth: 1, expandedDecisionNodes: 1, expandedChanceNodes: 2, cacheHits: 3, abortedSearches: 0 } }),
-      result({ score: 100, searchDiagnostics: { holdActions: 4, holdRate: 1, meanCompletedDepth: 4, minCompletedDepth: 4, expandedDecisionNodes: 10, expandedChanceNodes: 20, cacheHits: 30, abortedSearches: 1 } }),
+      result({ score: 100, searchDiagnostics: { searchCalls: 1, holdActions: 0, holdRate: 0, meanCompletedDepth: 1, minCompletedDepth: 1, completedDepthHistogram: [0, 1, 0, 0, 0], totalWorkUnitsUsed: 10, meanWorkUnitsUsed: 10, maxWorkUnitsUsed: 10, budgetExhaustedSearches: 0, budgetExhaustionRate: 0, placementEvaluationUnits: 4, chanceExpansionUnits: 5, cacheHitUnits: 1, expandedDecisionNodes: 1, expandedChanceNodes: 2, cacheHits: 3 } }),
+      result({ score: 100, searchDiagnostics: { searchCalls: 4, holdActions: 4, holdRate: 1, meanCompletedDepth: 4, minCompletedDepth: 4, completedDepthHistogram: [0, 0, 0, 0, 4], totalWorkUnitsUsed: 40, meanWorkUnitsUsed: 10, maxWorkUnitsUsed: 10, budgetExhaustedSearches: 1, budgetExhaustionRate: 0.25, placementEvaluationUnits: 10, chanceExpansionUnits: 20, cacheHitUnits: 10, expandedDecisionNodes: 10, expandedChanceNodes: 20, cacheHits: 30 } }),
     ], 2, 1, 1);
     expect(stats.fitness).toEqual([100, 100]);
     expect(stats.meanSearchDiagnostics[0]).not.toEqual(stats.meanSearchDiagnostics[1]);
+  });
+
+  it('sums v2 work diagnostics before deriving candidate rates', () => {
+    const make = (searchCalls: number, work: number, exhausted: number) => result({
+      score: 100,
+      pieces: 10,
+      searchDiagnostics: {
+        searchCalls,
+        holdActions: 1,
+        holdRate: 0.1,
+        meanCompletedDepth: 2,
+        minCompletedDepth: 1,
+        completedDepthHistogram: [0, 1, searchCalls - 1, 0, 0],
+        totalWorkUnitsUsed: work,
+        meanWorkUnitsUsed: work / searchCalls,
+        maxWorkUnitsUsed: work,
+        budgetExhaustedSearches: exhausted,
+        budgetExhaustionRate: exhausted / searchCalls,
+        placementEvaluationUnits: work - 2,
+        chanceExpansionUnits: 1,
+        cacheHitUnits: 1,
+        expandedDecisionNodes: 1,
+        expandedChanceNodes: 1,
+        cacheHits: 1,
+      },
+    });
+    const stats = aggregateFitness([make(2, 20, 1), make(8, 80, 2)], 1, 2, 100);
+    expect(stats.meanSearchDiagnostics[0]).toMatchObject({
+      searchCalls: 10,
+      completedDepthHistogram: [0, 2, 8, 0, 0],
+      totalWorkUnitsUsed: 100,
+      meanWorkUnitsUsed: 10,
+      maxWorkUnitsUsed: 80,
+      budgetExhaustedSearches: 3,
+      budgetExhaustionRate: 0.3,
+      placementEvaluationUnits: 96,
+      chanceExpansionUnits: 2,
+      cacheHitUnits: 2,
+    });
   });
 
   it('averages strategy diagnostics per game and counts exact end reasons', () => {

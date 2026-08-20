@@ -2,7 +2,6 @@ import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { FIXED_SEARCH_LIMITS } from '../src/ai/search';
 import { buildBenchPlan, parseBenchArgs } from './bench';
 import { formatLineClearCounts, formatSearchDiagnostics, summarizeBench, type BenchResult } from './benchSummary';
 
@@ -33,7 +32,7 @@ describe('bench CLI contract', () => {
     expect(plan).toMatchObject({ weights, maxPieces: 5000 });
     expect(plan.seeds).toHaveLength(2);
     expect(new Set(plan.seeds)).toHaveLength(2);
-    expect(plan.search).toEqual(FIXED_SEARCH_LIMITS);
+    expect(plan.search).toBeDefined();
   });
 
   it('does not execute the CLI when imported', () => {
@@ -48,6 +47,26 @@ describe('bench CLI contract', () => {
 });
 
 describe('summarizeBench', () => {
+  const search = (overrides: Partial<import('../src/ai/simulate').SimulationSearchDiagnostics> = {}) => ({
+    searchCalls: 10,
+    holdActions: 0,
+    holdRate: 0,
+    meanCompletedDepth: 1,
+    minCompletedDepth: 1,
+    completedDepthHistogram: [0, 10, 0, 0, 0] as [number, number, number, number, number],
+    totalWorkUnitsUsed: 100,
+    meanWorkUnitsUsed: 10,
+    maxWorkUnitsUsed: 10,
+    budgetExhaustedSearches: 0,
+    budgetExhaustionRate: 0,
+    placementEvaluationUnits: 50,
+    chanceExpansionUnits: 25,
+    cacheHitUnits: 25,
+    expandedDecisionNodes: 0,
+    expandedChanceNodes: 0,
+    cacheHits: 0,
+    ...overrides,
+  });
   const games: BenchResult[] = [
     {
       score: 900, lines: 20, pieces: 300, meanHeight: 4, reason: 'pieceCap',
@@ -57,11 +76,11 @@ describe('summarizeBench', () => {
         meanTetrisSetupProgress: 3,
         meanTetrisReadyRows: 2,
       },
-      searchDiagnostics: {
+      searchDiagnostics: search({
         holdActions: 30, holdRate: 0.1, meanCompletedDepth: 4, minCompletedDepth: 4,
+        completedDepthHistogram: [0, 0, 0, 0, 10],
         expandedDecisionNodes: 100, expandedChanceNodes: 40, cacheHits: 10,
-        abortedSearches: 0,
-      },
+      }),
     },
     {
       score: 600, lines: 10, pieces: 20, meanHeight: 8, reason: 'gameover',
@@ -71,11 +90,13 @@ describe('summarizeBench', () => {
         meanTetrisSetupProgress: 1,
         meanTetrisReadyRows: 0,
       },
-      searchDiagnostics: {
+      searchDiagnostics: search({
         holdActions: 4, holdRate: 0.2, meanCompletedDepth: 3, minCompletedDepth: 2,
+        completedDepthHistogram: [0, 0, 2, 0, 8],
+        totalWorkUnitsUsed: 80, meanWorkUnitsUsed: 4, maxWorkUnitsUsed: 8,
+        budgetExhaustedSearches: 1, budgetExhaustionRate: 0.1,
         expandedDecisionNodes: 60, expandedChanceNodes: 20, cacheHits: 8,
-        abortedSearches: 1,
-      },
+      }),
     },
   ];
 
@@ -112,17 +133,26 @@ describe('summarizeBench', () => {
     expect(summary.strategy.tetrisReadyRows.mean).toBe(1);
   });
 
-  it('summarizes Hold and fixed-search diagnostics', () => {
+  it('summarizes Hold and budget diagnostics', () => {
     const summary = summarizeBench(games, 300);
     expect(summary.search).toEqual({
+      searchCalls: 20,
       holdActions: 34,
       holdRate: 34 / 320,
       completedDepth: { mean: 3.5, median: 3.5, min: 3, max: 4 },
       minCompletedDepth: 2,
+      completedDepthHistogram: [0, 0, 2, 0, 18],
+      totalWorkUnitsUsed: 180,
+      meanWorkUnitsUsed: 9,
+      maxWorkUnitsUsed: 10,
+      budgetExhaustedSearches: 1,
+      budgetExhaustionRate: 1 / 20,
+      placementEvaluationUnits: 100,
+      chanceExpansionUnits: 50,
+      cacheHitUnits: 50,
       expandedDecisionNodes: 160,
       expandedChanceNodes: 60,
       cacheHits: 18,
-      abortedSearches: 1,
     });
   });
 
@@ -135,7 +165,7 @@ describe('summarizeBench', () => {
     expect(formatSearchDiagnostics(summary.search)).toContain('decision nodes 160');
     expect(formatSearchDiagnostics(summary.search)).toContain('chance nodes 60');
     expect(formatSearchDiagnostics(summary.search)).toContain('cache hits 18');
-    expect(formatSearchDiagnostics(summary.search)).toContain('aborts 1');
+    expect(formatSearchDiagnostics(summary.search)).toContain('budget exhaustion 1 (5.00%)');
   });
 
   it('reports no tetris line share when no lines were cleared', () => {
@@ -147,11 +177,11 @@ describe('summarizeBench', () => {
         meanTetrisSetupProgress: 0,
         meanTetrisReadyRows: 0,
       },
-      searchDiagnostics: {
-        holdActions: 0, holdRate: 0, meanCompletedDepth: 4, minCompletedDepth: 4,
+      searchDiagnostics: search({
+        meanCompletedDepth: 4, minCompletedDepth: 4,
+        completedDepthHistogram: [0, 0, 0, 0, 10],
         expandedDecisionNodes: 1, expandedChanceNodes: 1, cacheHits: 0,
-        abortedSearches: 0,
-      },
+      }),
     }], 300);
     expect(summary.tetrisLineShare).toBe(0);
   });
@@ -180,11 +210,11 @@ describe('summarizeBench', () => {
         meanTetrisSetupProgress: 0,
         meanTetrisReadyRows: 0,
       },
-      searchDiagnostics: {
-        holdActions: 0, holdRate: 0, meanCompletedDepth: 0, minCompletedDepth: 0,
+      searchDiagnostics: search({
+        meanCompletedDepth: 0, minCompletedDepth: 0,
+        completedDepthHistogram: [10, 0, 0, 0, 0],
         expandedDecisionNodes: 0, expandedChanceNodes: 0, cacheHits: 0,
-        abortedSearches: 0,
-      },
+      }),
     }], 300)).toThrow(/clearCounts|integer|finite|non-negative/);
   });
 

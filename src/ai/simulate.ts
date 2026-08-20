@@ -17,12 +17,6 @@ import {
 } from './search';
 import { DETERMINISTIC_SEARCH_LIMITS, type SearchLimits } from './searchBudget';
 
-/** @deprecated Compile-only compatibility for Task 6 producers; ignored at runtime. */
-export interface FixedSearchConfig {
-  maxLockedDepth: 1 | 2 | 3 | 4;
-  maxRootPlacements: number;
-  maxChildPlacements: number;
-}
 import {
   initialUnseenBagMask,
   revealPiece,
@@ -59,8 +53,6 @@ export interface SimulationSearchDiagnostics {
   expandedDecisionNodes: number;
   expandedChanceNodes: number;
   cacheHits: number;
-  /** @deprecated Compile-only alias for budgetExhaustedSearches. */
-  abortedSearches?: number;
 }
 
 export interface SimState {
@@ -327,7 +319,6 @@ function simulationSearchDiagnostics(state: SimState): SimulationSearchDiagnosti
     expandedDecisionNodes: state.expandedDecisionNodes,
     expandedChanceNodes: state.expandedChanceNodes,
   cacheHits: state.cacheHits,
-    abortedSearches: state.budgetExhaustedSearches,
   };
 }
 
@@ -387,8 +378,6 @@ export function simulateGame(opts: {
   seed: number;
   maxPieces: number;
   depth?: 1 | 2;
-  /** @deprecated Compile-only compatibility; ignored at runtime. */
-  search?: FixedSearchConfig;
 }): SimResult {
   const state = createSimState(opts.seed);
   return simulateFromState(state, {

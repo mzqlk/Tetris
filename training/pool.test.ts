@@ -2,18 +2,11 @@ import { describe, it, expect, afterAll } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { Worker } from 'node:worker_threads';
 import { FAILED_RESULT, WorkerPool, type SimTask, type WorkerFactory } from './pool';
-import { FIXED_SEARCH_LIMITS } from '../src/ai/search';
 import { toVector, HANDCRAFTED_WEIGHTS } from '../src/ai/weights';
 import { TOTAL_ROWS } from '../src/constants';
 import { emptyStrategyDiagnostics } from '../src/ai/tetrisStrategy';
-import type { FixedSearchConfig } from '../src/ai/simulate';
 
 const W = toVector(HANDCRAFTED_WEIGHTS);
-const TEST_SEARCH: FixedSearchConfig = {
-  maxLockedDepth: 1,
-  maxRootPlacements: 1,
-  maxChildPlacements: 1,
-};
 const pool = await WorkerPool.create(3);
 
 afterAll(async () => {
@@ -21,25 +14,17 @@ afterAll(async () => {
 });
 
 const task = (taskId: number, seed: number, weights = W): SimTask => ({
-  taskId, weights, seed, maxPieces: 12, search: TEST_SEARCH,
+  taskId, weights, seed, maxPieces: 12,
 });
 
 const acceptsSimTask: (task: SimTask) => void = () => {};
 
-// @ts-expect-error SimTask producers must provide an explicit fixed-search contract.
 acceptsSimTask({ taskId: 0, weights: W, seed: 1, maxPieces: 12 });
-acceptsSimTask({
-  taskId: 0,
-  weights: W,
-  seed: 1,
-  maxPieces: 12,
-  search: FIXED_SEARCH_LIMITS,
-  // @ts-expect-error Legacy depth metadata is not part of the SimTask contract.
-  depth: 2,
-});
+// @ts-expect-error SimTask must not carry a configurable search object.
+acceptsSimTask({ taskId: 0, weights: W, seed: 1, maxPieces: 12, search: {} });
 
 describe('WorkerPool', () => {
-  it('passes the required fixed search config to the worker without rewriting the task', async () => {
+  it('passes a search-free task to the worker without rewriting the task', async () => {
     const messages: SimTask[] = [];
     class RecordingWorker extends EventEmitter {
       postMessage(message: SimTask): void {
@@ -65,7 +50,6 @@ describe('WorkerPool', () => {
       weights: W,
       seed: 23,
       maxPieces: 12,
-      search: FIXED_SEARCH_LIMITS,
     };
 
     try {
@@ -75,12 +59,38 @@ describe('WorkerPool', () => {
     }
 
     expect(messages).toEqual([fixedTask]);
-    expect(messages[0]).toBe(fixedTask);
-    expect(messages[0].search).toEqual({
-      maxLockedDepth: 4,
-      maxRootPlacements: 64,
-      maxChildPlacements: 32,
-    });
+    expect(messages[0]).toEqual(fixedTask);
+    expect('search' in messages[0]).toBe(false);
+  });
+
+  it('drops legacy search metadata before posting a worker message', async () => {
+    const messages: SimTask[] = [];
+    class RecordingWorker extends EventEmitter {
+      postMessage(message: SimTask): void {
+        messages.push(message);
+        queueMicrotask(() => this.emit('message', {
+          taskId: message.taskId,
+          ...FAILED_RESULT,
+          failed: false,
+        }));
+      }
+
+      async terminate(): Promise<number> { return 0; }
+    }
+    const recordingPool = await WorkerPool.create(
+      1,
+      () => new RecordingWorker() as unknown as Worker,
+    );
+    const legacyTask = {
+      taskId: 18, weights: W, seed: 24, maxPieces: 1, search: { maxWorkUnits: 1 },
+    } as unknown as SimTask;
+    try {
+      await recordingPool.run([legacyTask]);
+    } finally {
+      await recordingPool.destroy();
+    }
+    expect(messages[0]).toEqual({ taskId: 18, weights: W, seed: 24, maxPieces: 1 });
+    expect('search' in messages[0]).toBe(false);
   });
 
   it('terminates already-created workers when a later construction fails', async () => {
@@ -156,7 +166,7 @@ describe('WorkerPool', () => {
   it('produces the same numbers as an in-process simulation', async () => {
     const { simulateGame } = await import('../src/ai/simulate');
     const direct = simulateGame({
-      weights: W, seed: 99, maxPieces: 12, search: TEST_SEARCH,
+      weights: W, seed: 99, maxPieces: 12,
     });
     const [viaWorker] = await pool.run([task(0, 99)]);
 
@@ -186,14 +196,23 @@ describe('WorkerPool', () => {
     expect(results[1].meanHeight).toBe(TOTAL_ROWS);
     expect(results[1].strategyDiagnostics).toEqual(emptyStrategyDiagnostics());
     expect(results[1].searchDiagnostics).toEqual({
+      searchCalls: 0,
       holdActions: 0,
       holdRate: 0,
       meanCompletedDepth: 0,
       minCompletedDepth: 0,
+      completedDepthHistogram: [0, 0, 0, 0, 0],
+      totalWorkUnitsUsed: 0,
+      meanWorkUnitsUsed: 0,
+      maxWorkUnitsUsed: 0,
+      budgetExhaustedSearches: 0,
+      budgetExhaustionRate: 0,
+      placementEvaluationUnits: 0,
+      chanceExpansionUnits: 0,
+      cacheHitUnits: 0,
       expandedDecisionNodes: 0,
       expandedChanceNodes: 0,
       cacheHits: 0,
-      abortedSearches: 0,
     });
     expect(results[1].reason).toBe('error');
     expect(results[0].failed).toBe(false);
@@ -206,14 +225,23 @@ describe('WorkerPool', () => {
     });
     expect(FAILED_RESULT.strategyDiagnostics).toEqual(emptyStrategyDiagnostics());
     expect(FAILED_RESULT.searchDiagnostics).toEqual({
+      searchCalls: 0,
       holdActions: 0,
       holdRate: 0,
       meanCompletedDepth: 0,
       minCompletedDepth: 0,
+      completedDepthHistogram: [0, 0, 0, 0, 0],
+      totalWorkUnitsUsed: 0,
+      meanWorkUnitsUsed: 0,
+      maxWorkUnitsUsed: 0,
+      budgetExhaustedSearches: 0,
+      budgetExhaustionRate: 0,
+      placementEvaluationUnits: 0,
+      chanceExpansionUnits: 0,
+      cacheHitUnits: 0,
       expandedDecisionNodes: 0,
       expandedChanceNodes: 0,
       cacheHits: 0,
-      abortedSearches: 0,
     });
     expect(FAILED_RESULT.reason).toBe('error');
   });
