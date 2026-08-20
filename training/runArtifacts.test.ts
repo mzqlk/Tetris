@@ -10,7 +10,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { SEARCH_METADATA, SEARCH_METADATA_KEYS } from './objective';
+import { SEARCH_METADATA } from './objective';
 import {
   assertFreshRun,
   readCompatibleCheckpoint,
@@ -25,6 +25,22 @@ const temp = () => {
   return dir;
 };
 const copy = <T>(value: T): T => structuredClone(value);
+
+const EXPECTED_SEARCH_METADATA = {
+  searchContract: 'bag-expectimax-hold-v2',
+  searchDepth: 4,
+  rootBeamWidth: 64,
+  childBeamWidth: 32,
+  maxWorkUnits: 3584,
+  budgetCorpus: 'budget-corpus-v1',
+  transpositionCacheEntries: 65_536,
+  placementCacheEntries: 16_384,
+} as const;
+const EXPECTED_SEARCH_METADATA_KEYS = [
+  'searchContract', 'searchDepth', 'rootBeamWidth', 'childBeamWidth',
+  'maxWorkUnits', 'budgetCorpus', 'transpositionCacheEntries',
+  'placementCacheEntries',
+] as const;
 
 const AXIS_0 = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 const AXIS_1 = [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
@@ -139,12 +155,12 @@ const CHECKPOINT = {
   config: CONFIG,
   publishedBaseline: BASELINE,
   bestQualifiedCandidate: CANDIDATE_2,
-  ...SEARCH_METADATA,
+  ...EXPECTED_SEARCH_METADATA,
 };
 
 const GEN_0 = {
   objective: 'score-rate-v5',
-  ...SEARCH_METADATA,
+  ...EXPECTED_SEARCH_METADATA,
   gen: 0,
   ts: 1_000,
   bestScoreRate: 5,
@@ -209,14 +225,14 @@ const logged = <T extends typeof BASELINE>(evaluation: T) => {
 
 const REEVALUATION_2 = {
   objective: 'score-rate-v5',
-  ...SEARCH_METADATA,
+  ...EXPECTED_SEARCH_METADATA,
   kind: 'reevaluation',
   gen: 2,
   ts: 2_002,
   schedule: {
     games: 30,
     maxPieces: 5_000,
-    ...SEARCH_METADATA,
+    ...EXPECTED_SEARCH_METADATA,
     baseSeed: 20_260_727,
     seedStrategy: 'fixed-reevaluation-v1',
   },
@@ -241,7 +257,7 @@ const REEVALUATION_2 = {
 
 const REEVALUATION_4_KEEP = {
   objective: 'score-rate-v5',
-  ...SEARCH_METADATA,
+  ...EXPECTED_SEARCH_METADATA,
   kind: 'reevaluation',
   gen: 4,
   ts: 2_004,
@@ -294,7 +310,7 @@ const CANDIDATE_FILE = {
   searchDiagnostics: CANDIDATE_2.searchDiagnostics,
   evalGames: 30,
   gen: 2,
-  ...SEARCH_METADATA,
+  ...EXPECTED_SEARCH_METADATA,
   trainedAt: '2026-08-11T00:00:00.000Z',
 };
 
@@ -318,6 +334,10 @@ afterEach(() => {
 });
 
 describe('resolveRunPaths', () => {
+  it('exports the exact frozen search metadata contract', () => {
+    expect(SEARCH_METADATA).toEqual(EXPECTED_SEARCH_METADATA);
+    expect(Object.keys(SEARCH_METADATA)).toEqual(EXPECTED_SEARCH_METADATA_KEYS);
+  });
   it('returns isolated score-rate-v5 path strings', () => {
     const root = 'D:/repo';
     expect(resolveRunPaths(root, null)).toEqual({
@@ -402,7 +422,7 @@ describe('readCompatibleCheckpoint', () => {
     expect(() => readCompatibleCheckpoint(path)).toThrow(/checkpoint/i);
   });
 
-  it.each(SEARCH_METADATA_KEYS)(
+  it.each(EXPECTED_SEARCH_METADATA_KEYS)(
     'rejects a checkpoint missing %s',
     (field) => {
       const checkpoint = copy(CHECKPOINT) as Record<string, unknown>;
@@ -413,7 +433,7 @@ describe('readCompatibleCheckpoint', () => {
     },
   );
 
-  it.each(SEARCH_METADATA_KEYS)(
+  it.each(EXPECTED_SEARCH_METADATA_KEYS)(
     'rejects a checkpoint with wrong %s',
     (field) => {
       const checkpoint = copy(CHECKPOINT) as Record<string, unknown>;
@@ -503,7 +523,7 @@ describe('readCompatibleRunArtifacts', () => {
     )).toThrow(/generation.*schema/i);
   });
 
-  it.each(SEARCH_METADATA_KEYS)(
+  it.each(EXPECTED_SEARCH_METADATA_KEYS)(
     'rejects a generation missing %s',
     (field) => {
       const bad = copy(GEN_0) as Record<string, unknown>;
@@ -514,7 +534,7 @@ describe('readCompatibleRunArtifacts', () => {
     },
   );
 
-  it.each(SEARCH_METADATA_KEYS)('rejects a generation with wrong %s', (field) => {
+  it.each(EXPECTED_SEARCH_METADATA_KEYS)('rejects a generation with wrong %s', (field) => {
     const bad = { ...GEN_0, [field]: field === 'budgetCorpus' ? 'wrong-corpus' : -1 };
     expect(() => readCompatibleRunArtifacts(
       writeRun(CHECKPOINT, [bad, GEN_1, REEVALUATION_2]),
@@ -606,7 +626,7 @@ describe('readCompatibleRunArtifacts', () => {
     )).toThrow(/schema/i);
   });
 
-  it.each(SEARCH_METADATA_KEYS)(
+  it.each(EXPECTED_SEARCH_METADATA_KEYS)(
     'rejects a reevaluation missing top-level %s',
     (field) => {
       const event = copy(REEVALUATION_2) as unknown as Record<string, unknown>;
@@ -617,14 +637,14 @@ describe('readCompatibleRunArtifacts', () => {
     },
   );
 
-  it.each(SEARCH_METADATA_KEYS)('rejects a reevaluation with wrong top-level %s', (field) => {
+  it.each(EXPECTED_SEARCH_METADATA_KEYS)('rejects a reevaluation with wrong top-level %s', (field) => {
     const event = { ...copy(REEVALUATION_2), [field]: field === 'budgetCorpus' ? 'wrong-corpus' : -1 };
     expect(() => readCompatibleRunArtifacts(
       writeRun(CHECKPOINT, [GEN_0, GEN_1, event]),
     )).toThrow(/reevaluation search metadata/i);
   });
 
-  it.each(SEARCH_METADATA_KEYS)(
+  it.each(EXPECTED_SEARCH_METADATA_KEYS)(
     'rejects a reevaluation schedule missing %s',
     (field) => {
       const event = copy(REEVALUATION_2);
@@ -635,7 +655,7 @@ describe('readCompatibleRunArtifacts', () => {
     },
   );
 
-  it.each(SEARCH_METADATA_KEYS)('rejects a reevaluation schedule with wrong %s', (field) => {
+  it.each(EXPECTED_SEARCH_METADATA_KEYS)('rejects a reevaluation schedule with wrong %s', (field) => {
     const event = copy(REEVALUATION_2);
     (event.schedule as unknown as Record<string, unknown>)[field] =
       field === 'budgetCorpus' ? 'wrong-corpus' : -1;

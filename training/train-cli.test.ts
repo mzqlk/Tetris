@@ -22,6 +22,22 @@ import { acquireRunLock } from './runLock';
 
 const ROOT = resolve(import.meta.dirname, '..');
 
+const EXPECTED_SEARCH_METADATA = {
+  searchContract: 'bag-expectimax-hold-v2',
+  searchDepth: 4,
+  rootBeamWidth: 64,
+  childBeamWidth: 32,
+  maxWorkUnits: 3584,
+  budgetCorpus: 'budget-corpus-v1',
+  transpositionCacheEntries: 65_536,
+  placementCacheEntries: 16_384,
+} as const;
+const EXPECTED_SEARCH_METADATA_KEYS = [
+  'searchContract', 'searchDepth', 'rootBeamWidth', 'childBeamWidth',
+  'maxWorkUnits', 'budgetCorpus', 'transpositionCacheEntries',
+  'placementCacheEntries',
+] as const;
+
 const axisVector = (axis = 0) => Array.from(
   { length: FEATURE_COUNT },
   (_, index) => Number(index === axis),
@@ -48,7 +64,7 @@ const SEARCH_DIAGNOSTICS = {
 const validCheckpoint = (gen = 1) => ({
   version: 6,
   objective: 'score-rate-v5',
-  ...SEARCH_METADATA,
+  ...EXPECTED_SEARCH_METADATA,
   gen,
   mu: unitVector(),
   sigma: Array(FEATURE_COUNT).fill(1),
@@ -70,7 +86,7 @@ const validGeneration = (
   elitePieces = maxPieces,
 ) => ({
   objective: 'score-rate-v5',
-  ...SEARCH_METADATA,
+  ...EXPECTED_SEARCH_METADATA,
   gen,
   ts: 1_000 + gen,
   bestScoreRate: 5,
@@ -134,14 +150,14 @@ const reevaluationRecord = (
   const scale = Math.max(Math.abs(candidate.meanScore), Math.abs(publishedBaseline.meanScore));
   return {
     objective: 'score-rate-v5',
-    ...SEARCH_METADATA,
+    ...EXPECTED_SEARCH_METADATA,
     kind: 'reevaluation',
     gen,
     ts: 2_000 + gen,
     schedule: {
       games: DEFAULT_CONFIG.reevalGames,
       maxPieces: DEFAULT_CONFIG.reevalMaxPieces,
-      ...SEARCH_METADATA,
+      ...EXPECTED_SEARCH_METADATA,
       baseSeed: DEFAULT_CONFIG.baseSeed,
       seedStrategy: 'fixed-reevaluation-v1',
     },
@@ -223,6 +239,11 @@ const expectRejectedBeforeWorkersOrWrites = (
 };
 
 describe('trainer candidate orchestration', () => {
+  it('uses the independently specified schema-6 search metadata', () => {
+    expect(SEARCH_METADATA).toEqual(EXPECTED_SEARCH_METADATA);
+    expect(Object.keys(SEARCH_METADATA)).toEqual(EXPECTED_SEARCH_METADATA_KEYS);
+  });
+
   it('persists an immutable baseline and self-resumes its run-local candidate artifacts', () => {
     const parent = mkdtempSync(join(tmpdir(), 'tetris-stubbed-orchestration-'));
     const outputDir = join(parent, 'output');
@@ -351,14 +372,14 @@ Worker.prototype.postMessage = function (task) {
       expect(checkpoint).toMatchObject({
         version: 6,
         objective: 'score-rate-v5',
-        ...SEARCH_METADATA,
+        ...EXPECTED_SEARCH_METADATA,
         publishedBaseline: { gen: -1, meanScore: 25_000 },
         bestQualifiedCandidate: { gen: 2, meanScore: 30_000 },
       });
       expect(candidate).toMatchObject({
         version: 6,
         objective: 'score-rate-v5',
-        ...SEARCH_METADATA,
+        ...EXPECTED_SEARCH_METADATA,
         gen: 2,
         meanScore: 30_000,
       });
@@ -457,7 +478,7 @@ describe('train --resume objective gate', () => {
       writeFileSync(checkpointPath, JSON.stringify({
         version: 6,
         objective: 'score-rate-v5',
-        ...SEARCH_METADATA,
+        ...EXPECTED_SEARCH_METADATA,
         gen: 0,
         mu: Array(FEATURE_COUNT - 1).fill(0),
         sigma: Array(FEATURE_COUNT).fill(1),

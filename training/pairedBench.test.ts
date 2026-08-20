@@ -4,6 +4,22 @@ import { HANDCRAFTED_WEIGHTS, type WeightsFile } from '../src/ai/weights';
 import { SEARCH_METADATA } from './objective';
 import { buildPairedPlan, parsePairedBenchArgs } from './pairedBench';
 
+const EXPECTED_SEARCH_METADATA = {
+  searchContract: 'bag-expectimax-hold-v2',
+  searchDepth: 4,
+  rootBeamWidth: 64,
+  childBeamWidth: 32,
+  maxWorkUnits: 3584,
+  budgetCorpus: 'budget-corpus-v1',
+  transpositionCacheEntries: 65_536,
+  placementCacheEntries: 16_384,
+} as const;
+const EXPECTED_SEARCH_METADATA_KEYS = [
+  'searchContract', 'searchDepth', 'rootBeamWidth', 'childBeamWidth',
+  'maxWorkUnits', 'budgetCorpus', 'transpositionCacheEntries',
+  'placementCacheEntries',
+] as const;
+
 function validBaseline(): WeightsFile {
   return {
     version: 3,
@@ -37,7 +53,7 @@ function validCandidate(): WeightsFile {
     tetrisLineShare: 840 / 2360,
     evalGames: 30,
     gen: 10,
-    ...SEARCH_METADATA,
+    ...EXPECTED_SEARCH_METADATA,
     searchDiagnostics: {
       searchCalls: 1500,
       holdActions: 100,
@@ -130,7 +146,9 @@ describe('pairedBench module', () => {
     expect(plan).toMatchObject({ maxPieces: 5000 });
     expect(plan.seeds).toHaveLength(30);
     expect(new Set(plan.seeds)).toHaveLength(30);
-    expect(plan.searchMetadata).toBe(SEARCH_METADATA);
+    expect(SEARCH_METADATA).toEqual(EXPECTED_SEARCH_METADATA);
+    expect(Object.keys(SEARCH_METADATA)).toEqual(EXPECTED_SEARCH_METADATA_KEYS);
+    expect(plan.searchMetadata).toEqual(EXPECTED_SEARCH_METADATA);
     expect(plan.baseline).not.toHaveProperty('search');
     expect(plan.candidate).not.toHaveProperty('search');
   });

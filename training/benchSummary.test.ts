@@ -4,6 +4,22 @@ import { SEARCH_METADATA } from './objective';
 import { buildBenchPlan, parseBenchArgs } from './bench';
 import { formatLineClearCounts, formatSearchDiagnostics, summarizeBench, type BenchResult } from './benchSummary';
 
+const EXPECTED_SEARCH_METADATA = {
+  searchContract: 'bag-expectimax-hold-v2',
+  searchDepth: 4,
+  rootBeamWidth: 64,
+  childBeamWidth: 32,
+  maxWorkUnits: 3584,
+  budgetCorpus: 'budget-corpus-v1',
+  transpositionCacheEntries: 65_536,
+  placementCacheEntries: 16_384,
+} as const;
+const EXPECTED_SEARCH_METADATA_KEYS = [
+  'searchContract', 'searchDepth', 'rootBeamWidth', 'childBeamWidth',
+  'maxWorkUnits', 'budgetCorpus', 'transpositionCacheEntries',
+  'placementCacheEntries',
+] as const;
+
 describe('bench CLI contract', () => {
   it('parses the supported benchmark schedule without a search flag', () => {
     expect(parseBenchArgs(['--games', '30', '--max-pieces', '2000'])).toMatchObject({
@@ -27,7 +43,9 @@ describe('bench CLI contract', () => {
     expect(plan).toMatchObject({ weights, maxPieces: 5000 });
     expect(plan.seeds).toHaveLength(2);
     expect(new Set(plan.seeds)).toHaveLength(2);
-    expect(plan.searchMetadata).toBe(SEARCH_METADATA);
+    expect(SEARCH_METADATA).toEqual(EXPECTED_SEARCH_METADATA);
+    expect(Object.keys(SEARCH_METADATA)).toEqual(EXPECTED_SEARCH_METADATA_KEYS);
+    expect(plan.searchMetadata).toEqual(EXPECTED_SEARCH_METADATA);
     expect(plan).not.toHaveProperty('search');
   });
 

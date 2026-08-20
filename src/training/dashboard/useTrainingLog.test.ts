@@ -1,11 +1,27 @@
 import { describe, it, expect } from 'vitest';
 import { FEATURE_COUNT } from '../../ai/features';
-import { SEARCH_METADATA, SEARCH_METADATA_KEYS } from '../../ai/trainingObjective';
+import { SEARCH_METADATA } from '../../ai/trainingObjective';
 import { LOG_URL, parseLog } from './useTrainingLog';
+
+const EXPECTED_SEARCH_METADATA = {
+  searchContract: 'bag-expectimax-hold-v2',
+  searchDepth: 4,
+  rootBeamWidth: 64,
+  childBeamWidth: 32,
+  maxWorkUnits: 3584,
+  budgetCorpus: 'budget-corpus-v1',
+  transpositionCacheEntries: 65_536,
+  placementCacheEntries: 16_384,
+} as const;
+const EXPECTED_SEARCH_METADATA_KEYS = [
+  'searchContract', 'searchDepth', 'rootBeamWidth', 'childBeamWidth',
+  'maxWorkUnits', 'budgetCorpus', 'transpositionCacheEntries',
+  'placementCacheEntries',
+] as const;
 
 const line = (gen: number) => JSON.stringify({
   objective: 'score-rate-v5',
-  ...SEARCH_METADATA,
+  ...EXPECTED_SEARCH_METADATA,
   gen,
   ts: 1785000000000 + gen,
   bestScoreRate: 125.5 + gen,
@@ -50,6 +66,11 @@ const line = (gen: number) => JSON.stringify({
 });
 
 describe('parseLog', () => {
+  it('uses the independently specified schema-6 search metadata', () => {
+    expect(SEARCH_METADATA).toEqual(EXPECTED_SEARCH_METADATA);
+    expect(Object.keys(SEARCH_METADATA)).toEqual(EXPECTED_SEARCH_METADATA_KEYS);
+  });
+
   it('uses the score-rate-v5 log URL', () => {
     expect(LOG_URL).toBe('/ai/score-rate-v5/training-log.jsonl');
   });
@@ -107,7 +128,7 @@ describe('parseLog', () => {
     },
   );
 
-  it.each(SEARCH_METADATA_KEYS)(
+  it.each(EXPECTED_SEARCH_METADATA_KEYS)(
     'ignores a v5 line with wrong %s metadata before normalizing diagnostics',
     (field) => {
       const invalid = JSON.parse(line(0));
@@ -116,6 +137,12 @@ describe('parseLog', () => {
       expect(parseLog(JSON.stringify(invalid))).toEqual([]);
     },
   );
+
+  it('ignores a v5 generation with an extra metadata key', () => {
+    const invalid = JSON.parse(line(0));
+    invalid.searchMode = 'unreviewed';
+    expect(parseLog(JSON.stringify(invalid))).toEqual([]);
+  });
 
   it('ignores a v5 line whose exact diagnostics are malformed', () => {
     const invalid = JSON.parse(line(0));

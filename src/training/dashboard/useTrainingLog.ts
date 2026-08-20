@@ -3,6 +3,7 @@ import { FEATURE_COUNT } from '../../ai/features';
 import {
   SCORE_RATE_OBJECTIVE,
   SEARCH_METADATA,
+  SEARCH_METADATA_KEYS,
   hasSearchMetadata,
 } from '../../ai/trainingObjective';
 import type { StrategyDiagnostics } from '../../ai/tetrisStrategy';
@@ -20,6 +21,17 @@ const NUMBER_FIELDS = [
   'worstScoreRate',
 ] as const;
 const ARRAY_FIELDS = ['mu', 'sigma', 'bestWeights'] as const;
+const SUPPORTED_GENERATION_FIELDS = new Set<string>([
+  'objective', ...SEARCH_METADATA_KEYS, 'gen', 'ts', 'bestScoreRate',
+  'meanScoreRate', 'medianScoreRate', 'worstScoreRate', 'scoreRateStd',
+  'mu', 'sigma', 'bestWeights', 'maxPieces', 'medianPieces', 'elitePieces',
+  'medianScore', 'eliteScore', 'medianLines', 'medianHeight', 'eliteHeight',
+  'bestTetrisLineShare', 'medianTetrisLineShare', 'eliteTetrisLineShare',
+  'bestStrategyDiagnostics', 'medianStrategyDiagnostics',
+  'eliteStrategyDiagnostics', 'bestSearchDiagnostics',
+  'medianSearchDiagnostics', 'eliteSearchDiagnostics', 'gamesPerCandidate',
+  'elapsedMs',
+]);
 
 const num = (value: unknown, fallback: number): number =>
   typeof value === 'number' && Number.isFinite(value) ? value : fallback;
@@ -68,6 +80,9 @@ export function parseLog(text: string): LogEntry[] {
     if (typeof value !== 'object' || value === null) continue;
 
     const e = value as Record<string, unknown>;
+    // Current non-metadata generation fields may still be absent and defaulted
+    // below, but no unreviewed top-level field may extend schema-6 metadata.
+    if (Object.keys(e).some((key) => !SUPPORTED_GENERATION_FIELDS.has(key))) continue;
     if (NUMBER_FIELDS.some((f) => typeof e[f] !== 'number' || !Number.isFinite(e[f]))) continue;
     if (ARRAY_FIELDS.some((f) => !weightVector(e[f]))) continue;
     if (e.objective !== SCORE_RATE_OBJECTIVE || !hasSearchMetadata(e)) continue;
