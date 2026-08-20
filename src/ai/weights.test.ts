@@ -6,6 +6,7 @@ import {
 import {
   LEGACY_FEATURE_NAMES, SCORE_RATE_V2_FEATURE_NAMES, FEATURE_NAMES, FEATURE_COUNT,
 } from './features';
+import { SEARCH_METADATA } from './trainingObjective';
 
 const sample: Weights = {
   aggregateHeight: -1, holes: -2, bumpiness: -3, maxHeight: -4, linesCleared: 5,
@@ -131,6 +132,41 @@ describe('parseWeightsFile', () => {
     },
   };
 
+  const searchDiagnostics = {
+    searchCalls: 10,
+    holdActions: 4,
+    holdRate: 0.4,
+    meanCompletedDepth: 3.3,
+    minCompletedDepth: 2,
+    completedDepthHistogram: [0, 0, 2, 3, 5],
+    totalWorkUnitsUsed: 30_000,
+    meanWorkUnitsUsed: 3_000,
+    maxWorkUnitsUsed: 3_584,
+    budgetExhaustedSearches: 2,
+    budgetExhaustionRate: 0.2,
+    placementEvaluationUnits: 20_000,
+    chanceExpansionUnits: 8_000,
+    cacheHitUnits: 2_000,
+    expandedDecisionNodes: 100,
+    expandedChanceNodes: 50,
+    cacheHits: 2_000,
+  };
+
+  const v6File = {
+    ...v4File,
+    version: 6,
+    objective: 'score-rate-v5',
+    searchContract: 'bag-expectimax-hold-v2',
+    searchDepth: 4,
+    rootBeamWidth: 64,
+    childBeamWidth: 32,
+    maxWorkUnits: 3_584,
+    budgetCorpus: 'budget-corpus-v1',
+    transpositionCacheEntries: 65_536,
+    placementCacheEntries: 16_384,
+    searchDiagnostics,
+  };
+
   it('accepts a complete file', () => {
     const parsed = parseWeightsFile(valid);
     expect(parsed).not.toBeNull();
@@ -201,22 +237,92 @@ describe('parseWeightsFile', () => {
     })).toBeNull();
   });
 
-  it('accepts exact version-5 score-rate-v4 metadata', () => {
+  it('accepts version-5 score-rate-v4 only as a legacy in-memory model', () => {
     expect(parseWeightsFile(v5File)).toMatchObject({
       version: 5,
       objective: 'score-rate-v4',
-      searchContract: 'bag-expectimax-hold-v1',
       searchDepth: 4,
-      rootBeamWidth: 64,
-      childBeamWidth: 32,
     });
   });
 
-  it.each(['searchContract', 'searchDepth', 'rootBeamWidth', 'childBeamWidth'])('rejects version-5 weights missing %s', (key) => {
-      const payload = { ...v5File } as Record<string, unknown>;
-      Reflect.deleteProperty(payload, key);
-      expect(parseWeightsFile(payload)).toBeNull();
+  it('accepts exact version-6 score-rate-v5 metadata from the shared frozen contract', () => {
+    expect(Object.isFrozen(SEARCH_METADATA)).toBe(true);
+    expect(SEARCH_METADATA).toEqual({
+      searchContract: 'bag-expectimax-hold-v2',
+      searchDepth: 4,
+      rootBeamWidth: 64,
+      childBeamWidth: 32,
+      maxWorkUnits: 3_584,
+      budgetCorpus: 'budget-corpus-v1',
+      transpositionCacheEntries: 65_536,
+      placementCacheEntries: 16_384,
     });
+    expect(parseWeightsFile(v6File)).toMatchObject({
+      version: 6,
+      objective: 'score-rate-v5',
+      ...SEARCH_METADATA,
+      searchDiagnostics,
+    });
+  });
+
+  const metadataMutations = [
+    ['searchContract', 'bag-expectimax-hold-v1'],
+    ['searchDepth', 3],
+    ['rootBeamWidth', 63],
+    ['childBeamWidth', 31],
+    ['maxWorkUnits', 3_583],
+    ['budgetCorpus', 'budget-corpus-v0'],
+    ['transpositionCacheEntries', 65_535],
+    ['placementCacheEntries', 16_383],
+  ] as const;
+
+  it.each(metadataMutations)('rejects version-6 weights missing %s', (field) => {
+    const payload = { ...v6File } as Record<string, unknown>;
+    Reflect.deleteProperty(payload, field);
+    expect(parseWeightsFile(payload)).toBeNull();
+  });
+
+  it.each(metadataMutations)('rejects version-6 weights with wrong %s', (field, wrong) => {
+    expect(parseWeightsFile({ ...v6File, [field]: wrong })).toBeNull();
+  });
+
+  it.each(['maxWorkUnits', 'budgetCorpus', 'transpositionCacheEntries', 'placementCacheEntries'])(
+    'rejects version-6 weights with an extra key adjacent to %s',
+    (field) => {
+      expect(parseWeightsFile({ ...v6File, [`${field}Extra`]: 1 })).toBeNull();
+    },
+  );
+
+  it('rejects a schema-5 payload as the current score-rate-v5 schema', () => {
+    expect(parseWeightsFile({ ...v6File, version: 5 })).toBeNull();
+  });
+
+  it.each(Object.keys(searchDiagnostics))(
+    'rejects version-6 diagnostics missing %s instead of filling zero',
+    (field) => {
+      const diagnostics = { ...searchDiagnostics } as Record<string, unknown>;
+      Reflect.deleteProperty(diagnostics, field);
+      expect(parseWeightsFile({ ...v6File, searchDiagnostics: diagnostics })).toBeNull();
+    },
+  );
+
+  it.each([
+    ['histogram/count mismatch', { completedDepthHistogram: [0, 0, 2, 3, 4] }],
+    ['completed-depth mean mismatch', { meanCompletedDepth: 3.2 }],
+    ['minimum completed depth mismatch', { minCompletedDepth: 1 }],
+    ['work category total mismatch', { cacheHitUnits: 1_999 }],
+    ['work mean mismatch', { meanWorkUnitsUsed: 2_999 }],
+    ['hold rate mismatch', { holdRate: 0.3 }],
+    ['budget exhaustion rate mismatch', { budgetExhaustionRate: 0.1 }],
+    ['work maximum below mean', { maxWorkUnitsUsed: 2_999 }],
+    ['work maximum above metadata limit', { maxWorkUnitsUsed: 3_585 }],
+    ['non-finite work count', { totalWorkUnitsUsed: Number.NaN }],
+  ])('rejects version-6 diagnostics with %s', (_label, mutation) => {
+    expect(parseWeightsFile({
+      ...v6File,
+      searchDiagnostics: { ...searchDiagnostics, ...mutation },
+    })).toBeNull();
+  });
 
   it.each([
     'meanScore',

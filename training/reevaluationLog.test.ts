@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { FEATURE_COUNT } from '../src/ai/features';
 import { evaluateTetrisCandidate } from './publication';
-import { buildReevaluationLogEntry, type LoggedReevaluation } from './reevaluationLog';
+import {
+  buildReevaluationLogEntry,
+  parseReevaluationLogEntry,
+  type LoggedReevaluation,
+} from './reevaluationLog';
 
 const evaluated = (
   gen: number,
@@ -26,14 +30,23 @@ const evaluated = (
     meanTetrisReadyRows: 1,
   },
   searchDiagnostics: {
+    searchCalls: 10,
     holdActions: 4,
-    holdRate: 0.2,
-    meanCompletedDepth: 3.5,
+    holdRate: 0.4,
+    meanCompletedDepth: 3.3,
     minCompletedDepth: 2,
+    completedDepthHistogram: [0, 0, 2, 3, 5],
+    totalWorkUnitsUsed: 30_000,
+    meanWorkUnitsUsed: 3_000,
+    maxWorkUnitsUsed: 3_584,
+    budgetExhaustedSearches: 2,
+    budgetExhaustionRate: 0.2,
+    placementEvaluationUnits: 20_000,
+    chanceExpansionUnits: 8_000,
+    cacheHitUnits: 2_000,
     expandedDecisionNodes: 10,
     expandedChanceNodes: 20,
-    cacheHits: 3,
-    abortedSearches: 1,
+    cacheHits: 2_000,
   },
   survivalDiagnostics: {
     pieceCapGames,
@@ -60,17 +73,25 @@ describe('buildReevaluationLogEntry', () => {
     const event = buildReevaluationLogEntry({
       gen: 30,
       ts: 123,
-      searchContract: 'bag-expectimax-hold-v1',
+      searchContract: 'bag-expectimax-hold-v2',
       searchDepth: 4,
       rootBeamWidth: 64,
       childBeamWidth: 32,
+      maxWorkUnits: 3_584,
+      budgetCorpus: 'budget-corpus-v1',
+      transpositionCacheEntries: 65_536,
+      placementCacheEntries: 16_384,
       schedule: {
         games: 30,
         maxPieces: 5000,
-        searchContract: 'bag-expectimax-hold-v1',
+        searchContract: 'bag-expectimax-hold-v2',
         searchDepth: 4,
         rootBeamWidth: 64,
         childBeamWidth: 32,
+        maxWorkUnits: 3_584,
+        budgetCorpus: 'budget-corpus-v1',
+        transpositionCacheEntries: 65_536,
+        placementCacheEntries: 16_384,
         baseSeed: 20260727,
       },
       publishedBaseline,
@@ -80,7 +101,9 @@ describe('buildReevaluationLogEntry', () => {
     });
 
     expect(event).toMatchObject({
-      objective: 'score-rate-v4',
+      objective: 'score-rate-v5',
+      searchContract: 'bag-expectimax-hold-v2',
+      maxWorkUnits: 3_584,
       kind: 'reevaluation',
       gen: 30,
       schedule: { seedStrategy: 'fixed-reevaluation-v1' },
@@ -112,11 +135,15 @@ describe('buildReevaluationLogEntry', () => {
     const event = buildReevaluationLogEntry({
       gen: 10,
       ts: 123,
-      searchContract: 'bag-expectimax-hold-v1',
+      searchContract: 'bag-expectimax-hold-v2',
       searchDepth: 4,
       rootBeamWidth: 64,
       childBeamWidth: 32,
-    schedule: { games: 30, maxPieces: 5000, searchContract: 'bag-expectimax-hold-v1', searchDepth: 4, rootBeamWidth: 64, childBeamWidth: 32, baseSeed: 1 },
+      maxWorkUnits: 3_584,
+      budgetCorpus: 'budget-corpus-v1',
+      transpositionCacheEntries: 65_536,
+      placementCacheEntries: 16_384,
+    schedule: { games: 30, maxPieces: 5000, searchContract: 'bag-expectimax-hold-v2', searchDepth: 4, rootBeamWidth: 64, childBeamWidth: 32, maxWorkUnits: 3_584, budgetCorpus: 'budget-corpus-v1', transpositionCacheEntries: 65_536, placementCacheEntries: 16_384, baseSeed: 1 },
       publishedBaseline,
       currentQualified: null,
       candidate,
@@ -144,11 +171,15 @@ describe('buildReevaluationLogEntry', () => {
     const event = buildReevaluationLogEntry({
       gen: 30,
       ts: 123,
-      searchContract: 'bag-expectimax-hold-v1',
+      searchContract: 'bag-expectimax-hold-v2',
       searchDepth: 4,
       rootBeamWidth: 64,
       childBeamWidth: 32,
-    schedule: { games: 30, maxPieces: 5000, searchContract: 'bag-expectimax-hold-v1', searchDepth: 4, rootBeamWidth: 64, childBeamWidth: 32, baseSeed: 1 },
+      maxWorkUnits: 3_584,
+      budgetCorpus: 'budget-corpus-v1',
+      transpositionCacheEntries: 65_536,
+      placementCacheEntries: 16_384,
+    schedule: { games: 30, maxPieces: 5000, searchContract: 'bag-expectimax-hold-v2', searchDepth: 4, rootBeamWidth: 64, childBeamWidth: 32, maxWorkUnits: 3_584, budgetCorpus: 'budget-corpus-v1', transpositionCacheEntries: 65_536, placementCacheEntries: 16_384, baseSeed: 1 },
       publishedBaseline,
       currentQualified,
       candidate,
@@ -186,5 +217,101 @@ describe('buildReevaluationLogEntry', () => {
     expect(event.currentQualified?.weights[0]).toBe(0.2);
     expect(event.candidate.weights[0]).toBe(0.3);
     expect(event.qualification.shouldSave).toBe(true);
+  });
+
+  it('accepts an exact schema-6 reevaluation entry', () => {
+    const publishedBaseline = evaluated(-1, Array(FEATURE_COUNT).fill(0.1), 3_000_000, 0);
+    const candidate = evaluated(30, Array(FEATURE_COUNT).fill(0.3), 3_006_000);
+    const event = buildReevaluationLogEntry({
+      gen: 30,
+      ts: 123,
+      searchContract: 'bag-expectimax-hold-v2', searchDepth: 4,
+      rootBeamWidth: 64, childBeamWidth: 32, maxWorkUnits: 3_584,
+      budgetCorpus: 'budget-corpus-v1', transpositionCacheEntries: 65_536,
+      placementCacheEntries: 16_384,
+      schedule: {
+        games: 30, maxPieces: 5000, searchContract: 'bag-expectimax-hold-v2',
+        searchDepth: 4, rootBeamWidth: 64, childBeamWidth: 32, maxWorkUnits: 3_584,
+        budgetCorpus: 'budget-corpus-v1', transpositionCacheEntries: 65_536,
+        placementCacheEntries: 16_384, baseSeed: 1,
+      },
+      publishedBaseline,
+      currentQualified: null,
+      candidate,
+      qualification: evaluateTetrisCandidate(candidate, publishedBaseline, null),
+    });
+    expect(parseReevaluationLogEntry(event)).toEqual(event);
+  });
+
+  const metadataMutations = [
+    ['maxWorkUnits', 3_583],
+    ['budgetCorpus', 'budget-corpus-v0'],
+    ['transpositionCacheEntries', 65_535],
+    ['placementCacheEntries', 16_383],
+  ] as const;
+
+  const validEvent = () => {
+    const publishedBaseline = evaluated(-1, Array(FEATURE_COUNT).fill(0.1), 3_000_000, 0);
+    const candidate = evaluated(30, Array(FEATURE_COUNT).fill(0.3), 3_006_000);
+    return buildReevaluationLogEntry({
+      gen: 30, ts: 123, searchContract: 'bag-expectimax-hold-v2', searchDepth: 4,
+      rootBeamWidth: 64, childBeamWidth: 32, maxWorkUnits: 3_584,
+      budgetCorpus: 'budget-corpus-v1', transpositionCacheEntries: 65_536,
+      placementCacheEntries: 16_384,
+      schedule: {
+        games: 30, maxPieces: 5000, searchContract: 'bag-expectimax-hold-v2',
+        searchDepth: 4, rootBeamWidth: 64, childBeamWidth: 32, maxWorkUnits: 3_584,
+        budgetCorpus: 'budget-corpus-v1', transpositionCacheEntries: 65_536,
+        placementCacheEntries: 16_384, baseSeed: 1,
+      },
+      publishedBaseline, currentQualified: null, candidate,
+      qualification: evaluateTetrisCandidate(candidate, publishedBaseline, null),
+    });
+  };
+
+  it.each(metadataMutations)('rejects reevaluation metadata missing %s', (field) => {
+    const event = validEvent() as unknown as Record<string, unknown>;
+    Reflect.deleteProperty(event, field);
+    expect(parseReevaluationLogEntry(event)).toBeNull();
+  });
+
+  it.each(metadataMutations)('rejects wrong reevaluation metadata %s', (field, wrong) => {
+    expect(parseReevaluationLogEntry({ ...validEvent(), [field]: wrong })).toBeNull();
+  });
+
+  it.each(metadataMutations)('rejects an extra reevaluation key adjacent to %s', (field) => {
+    expect(parseReevaluationLogEntry({ ...validEvent(), [`${field}Extra`]: 1 })).toBeNull();
+  });
+
+  it.each(metadataMutations)('rejects reevaluation schedule metadata missing %s', (field) => {
+    const event = validEvent();
+    Reflect.deleteProperty(event.schedule, field);
+    expect(parseReevaluationLogEntry(event)).toBeNull();
+  });
+
+  it.each(metadataMutations)('rejects wrong reevaluation schedule metadata %s', (field, wrong) => {
+    const event = validEvent();
+    (event.schedule as unknown as Record<string, unknown>)[field] = wrong;
+    expect(parseReevaluationLogEntry(event)).toBeNull();
+  });
+
+  it.each(metadataMutations)('rejects an extra reevaluation schedule key adjacent to %s', (field) => {
+    const event = validEvent();
+    (event.schedule as unknown as Record<string, unknown>)[`${field}Extra`] = 1;
+    expect(parseReevaluationLogEntry(event)).toBeNull();
+  });
+
+  it('rejects absent and internally inconsistent reevaluation diagnostics', () => {
+    const missing = validEvent();
+    delete (missing.candidate as Partial<LoggedReevaluation>).searchDiagnostics;
+    expect(parseReevaluationLogEntry(missing)).toBeNull();
+
+    const inconsistent = validEvent();
+    inconsistent.candidate.searchDiagnostics!.cacheHitUnits = 1_999;
+    expect(parseReevaluationLogEntry(inconsistent)).toBeNull();
+
+    const overBudget = validEvent();
+    overBudget.candidate.searchDiagnostics!.maxWorkUnitsUsed = 3_585;
+    expect(parseReevaluationLogEntry(overBudget)).toBeNull();
   });
 });

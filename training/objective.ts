@@ -2,10 +2,16 @@ export {
   LEGACY_SCORE_RATE_OBJECTIVE,
   SCORE_RATE_V2_OBJECTIVE,
   SCORE_RATE_V3_OBJECTIVE,
+  SCORE_RATE_V4_OBJECTIVE,
   SCORE_RATE_OBJECTIVE,
   SEARCH_CONTRACT,
+  SEARCH_METADATA,
+  SEARCH_METADATA_KEYS,
   SEARCH_SCHEMA_VERSION,
+  hasSearchMetadata,
 } from '../src/ai/trainingObjective';
+
+export type { SearchMetadata } from '../src/ai/trainingObjective';
 
 /** Height may break a publication tie only inside this relative score band. */
 export const SCORE_TIE_RELATIVE_TOLERANCE = 0.001;

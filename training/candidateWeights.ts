@@ -7,11 +7,18 @@ import {
 import type { LineClearCounts } from '../src/ai/lineClears';
 import type { StrategyDiagnostics, SurvivalDiagnostics } from '../src/ai/tetrisStrategy';
 import type { SearchDiagnostics } from '../src/ai/weights';
-import { SCORE_RATE_OBJECTIVE, SEARCH_CONTRACT, SEARCH_SCHEMA_VERSION } from './objective';
+import {
+  SCORE_RATE_OBJECTIVE,
+  SEARCH_CONTRACT,
+  SEARCH_METADATA,
+  SEARCH_METADATA_KEYS,
+  SEARCH_SCHEMA_VERSION,
+  type SearchMetadata,
+} from './objective';
 import type { ScoreRateEvaluation } from './runArtifacts';
 
-export interface CandidateWeightsFile {
-  version: 5;
+export interface CandidateWeightsFile extends SearchMetadata {
+  version: typeof SEARCH_SCHEMA_VERSION;
   weights: Weights;
   objective: typeof SCORE_RATE_OBJECTIVE;
   meanScore: number;
@@ -24,10 +31,6 @@ export interface CandidateWeightsFile {
   survivalDiagnostics: SurvivalDiagnostics;
   evalGames: number;
   gen: number;
-  searchContract: typeof SEARCH_CONTRACT;
-  searchDepth: 4;
-  rootBeamWidth: 64;
-  childBeamWidth: 32;
   searchDiagnostics: SearchDiagnostics;
   trainedAt: string;
 }
@@ -35,9 +38,14 @@ export interface CandidateWeightsFile {
 const CANDIDATE_WEIGHTS_KEYS = [
   'version', 'weights', 'objective', 'meanScore', 'evalMaxPieces', 'meanLines',
   'meanHeight', 'meanClearCounts', 'tetrisLineShare', 'strategyDiagnostics',
-  'survivalDiagnostics', 'evalGames', 'gen', 'searchContract', 'searchDepth',
-  'rootBeamWidth', 'childBeamWidth', 'searchDiagnostics', 'trainedAt',
+  'survivalDiagnostics', 'evalGames', 'gen', ...SEARCH_METADATA_KEYS,
+  'searchDiagnostics', 'trainedAt',
 ] as const;
+
+const snapshotSearchDiagnostics = (diagnostics: SearchDiagnostics): SearchDiagnostics => ({
+  ...diagnostics,
+  completedDepthHistogram: [...diagnostics.completedDepthHistogram],
+});
 
 export function parseCandidateWeights(payload: unknown): CandidateWeightsFile | null {
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return null;
@@ -59,13 +67,12 @@ export function parseCandidateWeights(payload: unknown): CandidateWeightsFile | 
     parsed.tetrisLineShare === null ||
     parsed.strategyDiagnostics === null ||
     parsed.survivalDiagnostics === null
-    || parsed.searchContract !== SEARCH_CONTRACT || parsed.searchDepth !== 4
-    || parsed.rootBeamWidth !== 64 || parsed.childBeamWidth !== 32
+    || parsed.searchContract !== SEARCH_CONTRACT
     || parsed.searchDiagnostics === null
   ) return null;
 
   return {
-    version: 5,
+    version: SEARCH_SCHEMA_VERSION,
     weights: { ...parsed.weights },
     objective: SCORE_RATE_OBJECTIVE,
     meanScore: parsed.meanScore,
@@ -78,11 +85,8 @@ export function parseCandidateWeights(payload: unknown): CandidateWeightsFile | 
     survivalDiagnostics: { ...parsed.survivalDiagnostics },
     evalGames: parsed.evalGames,
     gen: parsed.gen,
-    searchContract: SEARCH_CONTRACT,
-    searchDepth: 4,
-    rootBeamWidth: 64,
-    childBeamWidth: 32,
-    searchDiagnostics: parsed.searchDiagnostics!,
+    ...SEARCH_METADATA,
+    searchDiagnostics: snapshotSearchDiagnostics(parsed.searchDiagnostics!),
     trainedAt: parsed.trainedAt,
   };
 }
@@ -92,14 +96,14 @@ export function buildCandidateWeights(
   searchDepth: 4,
   trainedAt: string,
 ): CandidateWeightsFile {
-  if (searchDepth !== 4) {
+  if (searchDepth !== SEARCH_METADATA.searchDepth) {
     throw new Error('candidate weights require the fixed depth-4 search contract');
   }
   if (evaluation.searchDiagnostics === undefined) {
     throw new Error('candidate evaluation must include search diagnostics');
   }
   return {
-    version: 5,
+    version: SEARCH_SCHEMA_VERSION,
     weights: fromVector(evaluation.weights),
     objective: SCORE_RATE_OBJECTIVE,
     meanScore: evaluation.meanScore,
@@ -112,11 +116,8 @@ export function buildCandidateWeights(
     survivalDiagnostics: { ...evaluation.survivalDiagnostics },
     evalGames: evaluation.evalGames,
     gen: evaluation.gen,
-    searchContract: SEARCH_CONTRACT,
-    searchDepth: 4,
-    rootBeamWidth: 64,
-    childBeamWidth: 32,
-    searchDiagnostics: { ...evaluation.searchDiagnostics },
+    ...SEARCH_METADATA,
+    searchDiagnostics: snapshotSearchDiagnostics(evaluation.searchDiagnostics),
     trainedAt,
   };
 }
@@ -124,7 +125,7 @@ export function buildCandidateWeights(
 export function writeCandidateWeights(path: string, payload: unknown): void {
   const parsed = parseCandidateWeights(payload);
   if (parsed === null) {
-    throw new Error('candidate payload must match the exact score-rate-v4 version 5 schema');
+    throw new Error('candidate payload must match the exact score-rate-v5 version 6 schema');
   }
   writeFileSync(path, JSON.stringify(parsed, null, 2));
 }

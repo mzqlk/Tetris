@@ -35,14 +35,23 @@ const evaluation: ScoreRateEvaluation = {
   },
   survivalDiagnostics: { pieceCapGames: 30, gameoverGames: 0 },
   searchDiagnostics: {
-    holdActions: 900,
-    holdRate: 0.15,
-    meanCompletedDepth: 3.9,
-    minCompletedDepth: 3,
+    searchCalls: 10,
+    holdActions: 4,
+    holdRate: 0.4,
+    meanCompletedDepth: 3.3,
+    minCompletedDepth: 2,
+    completedDepthHistogram: [0, 0, 2, 3, 5],
+    totalWorkUnitsUsed: 30_000,
+    meanWorkUnitsUsed: 3_000,
+    maxWorkUnitsUsed: 3_584,
+    budgetExhaustedSearches: 2,
+    budgetExhaustionRate: 0.2,
+    placementEvaluationUnits: 20_000,
+    chanceExpansionUnits: 8_000,
+    cacheHitUnits: 2_000,
     expandedDecisionNodes: 12_000,
     expandedChanceNodes: 8_000,
     cacheHits: 2_000,
-    abortedSearches: 1,
   },
   gen: 20,
   evalGames: 30,
@@ -54,11 +63,11 @@ afterEach(() => {
 });
 
 describe('buildCandidateWeights', () => {
-  it('builds an exact version-5 candidate with search diagnostics and no publication paths', () => {
+  it('builds an exact version-6 candidate with frozen search metadata and no publication paths', () => {
     expect(buildCandidateWeights(evaluation, 4, '2026-08-11T00:00:00.000Z')).toEqual({
-      version: 5,
+      version: 6,
       weights: fromVector(evaluation.weights),
-      objective: 'score-rate-v4',
+      objective: 'score-rate-v5',
       meanScore: 3_100_000,
       evalMaxPieces: 5_000,
       meanLines: 1_950,
@@ -72,21 +81,34 @@ describe('buildCandidateWeights', () => {
       },
       survivalDiagnostics: { pieceCapGames: 30, gameoverGames: 0 },
       searchDiagnostics: {
-        holdActions: 900,
-        holdRate: 0.15,
-        meanCompletedDepth: 3.9,
-        minCompletedDepth: 3,
+        searchCalls: 10,
+        holdActions: 4,
+        holdRate: 0.4,
+        meanCompletedDepth: 3.3,
+        minCompletedDepth: 2,
+        completedDepthHistogram: [0, 0, 2, 3, 5],
+        totalWorkUnitsUsed: 30_000,
+        meanWorkUnitsUsed: 3_000,
+        maxWorkUnitsUsed: 3_584,
+        budgetExhaustedSearches: 2,
+        budgetExhaustionRate: 0.2,
+        placementEvaluationUnits: 20_000,
+        chanceExpansionUnits: 8_000,
+        cacheHitUnits: 2_000,
         expandedDecisionNodes: 12_000,
         expandedChanceNodes: 8_000,
         cacheHits: 2_000,
-        abortedSearches: 1,
       },
       evalGames: 30,
       gen: 20,
-      searchContract: 'bag-expectimax-hold-v1',
+      searchContract: 'bag-expectimax-hold-v2',
       searchDepth: 4,
       rootBeamWidth: 64,
       childBeamWidth: 32,
+      maxWorkUnits: 3_584,
+      budgetCorpus: 'budget-corpus-v1',
+      transpositionCacheEntries: 65_536,
+      placementCacheEntries: 16_384,
       trainedAt: '2026-08-11T00:00:00.000Z',
     });
   });
@@ -132,7 +154,7 @@ describe('writeCandidateWeights', () => {
       version: 4,
     };
 
-    expect(() => writeCandidateWeights(path, invalid)).toThrow(/version 5|candidate/i);
+    expect(() => writeCandidateWeights(path, invalid)).toThrow(/version 6|candidate/i);
     expect(existsSync(path)).toBe(false);
   });
 
@@ -154,8 +176,69 @@ describe('writeCandidateWeights', () => {
       const invalid = buildCandidateWeights(evaluation, 4, '2026-08-11T00:00:00.000Z') as unknown as Record<string, unknown>;
       Reflect.deleteProperty(invalid, field);
 
-      expect(() => writeCandidateWeights(path, invalid)).toThrow(/version 5|candidate|schema/i);
+      expect(() => writeCandidateWeights(path, invalid)).toThrow(/version 6|candidate|schema/i);
       expect(existsSync(path)).toBe(false);
     },
   );
+
+  const metadataMutations = [
+    ['maxWorkUnits', 3_583],
+    ['budgetCorpus', 'budget-corpus-v0'],
+    ['transpositionCacheEntries', 65_535],
+    ['placementCacheEntries', 16_383],
+  ] as const;
+
+  it.each(metadataMutations)('rejects a payload missing %s', (field) => {
+    const path = join(temp(), 'candidate.json');
+    const invalid = buildCandidateWeights(evaluation, 4, '2026-08-11T00:00:00.000Z') as unknown as Record<string, unknown>;
+    Reflect.deleteProperty(invalid, field);
+    expect(() => writeCandidateWeights(path, invalid)).toThrow(/version 6|candidate|schema/i);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it.each(metadataMutations)('rejects a payload with wrong %s', (field, wrong) => {
+    const path = join(temp(), 'candidate.json');
+    const invalid = {
+      ...buildCandidateWeights(evaluation, 4, '2026-08-11T00:00:00.000Z'),
+      [field]: wrong,
+    };
+    expect(() => writeCandidateWeights(path, invalid)).toThrow(/version 6|candidate|schema/i);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it.each(metadataMutations)('rejects an extra key adjacent to %s', (field) => {
+    const path = join(temp(), 'candidate.json');
+    const invalid = {
+      ...buildCandidateWeights(evaluation, 4, '2026-08-11T00:00:00.000Z'),
+      [`${field}Extra`]: 1,
+    };
+    expect(() => writeCandidateWeights(path, invalid)).toThrow(/candidate|schema/i);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it.each([
+    ['histogram/count mismatch', { completedDepthHistogram: [0, 0, 2, 3, 4] }],
+    ['unit category mismatch', { cacheHitUnits: 1_999 }],
+    ['work mean mismatch', { meanWorkUnitsUsed: 2_999 }],
+    ['hold rate mismatch', { holdRate: 0.3 }],
+    ['exhaustion rate mismatch', { budgetExhaustionRate: 0.1 }],
+    ['maximum below mean', { maxWorkUnitsUsed: 2_999 }],
+    ['maximum above budget', { maxWorkUnitsUsed: 3_585 }],
+  ])('rejects inconsistent candidate diagnostics: %s', (_label, mutation) => {
+    const path = join(temp(), 'candidate.json');
+    const valid = buildCandidateWeights(evaluation, 4, '2026-08-11T00:00:00.000Z');
+    const invalid = { ...valid, searchDiagnostics: { ...valid.searchDiagnostics, ...mutation } };
+    expect(() => writeCandidateWeights(path, invalid)).toThrow(/candidate|schema/i);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it('rejects legacy schema-5 candidate payloads', () => {
+    const path = join(temp(), 'candidate.json');
+    const invalid = {
+      ...buildCandidateWeights(evaluation, 4, '2026-08-11T00:00:00.000Z'),
+      version: 5,
+    };
+    expect(() => writeCandidateWeights(path, invalid)).toThrow(/version 6|candidate/i);
+    expect(existsSync(path)).toBe(false);
+  });
 });

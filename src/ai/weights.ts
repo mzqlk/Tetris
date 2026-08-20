@@ -10,7 +10,9 @@ import {
 import type { StrategyDiagnostics, SurvivalDiagnostics } from './tetrisStrategy';
 import {
   LEGACY_SCORE_RATE_OBJECTIVE, SCORE_RATE_V2_OBJECTIVE, SCORE_RATE_V3_OBJECTIVE,
-  SCORE_RATE_OBJECTIVE, SEARCH_CONTRACT, SEARCH_SCHEMA_VERSION,
+  SCORE_RATE_V4_OBJECTIVE, SCORE_RATE_OBJECTIVE, SEARCH_CONTRACT,
+  SEARCH_METADATA, SEARCH_METADATA_KEYS, SEARCH_SCHEMA_VERSION,
+  hasSearchMetadata,
   type SearchMetadata,
 } from './trainingObjective';
 import trainedWeightsJson from './trained-weights.json';
@@ -34,6 +36,10 @@ export interface WeightsFile {
   searchContract?: typeof SEARCH_CONTRACT;
   rootBeamWidth?: 64;
   childBeamWidth?: 32;
+  maxWorkUnits?: number;
+  budgetCorpus?: 'budget-corpus-v1';
+  transpositionCacheEntries?: number;
+  placementCacheEntries?: number;
   searchDiagnostics?: SearchDiagnostics | null;
   trainedAt: string;
   strategyDiagnostics: StrategyDiagnostics | null;
@@ -41,6 +47,26 @@ export interface WeightsFile {
 }
 
 export interface SearchDiagnostics {
+  searchCalls: number;
+  holdActions: number;
+  holdRate: number;
+  meanCompletedDepth: number;
+  minCompletedDepth: number;
+  completedDepthHistogram: [number, number, number, number, number];
+  totalWorkUnitsUsed: number;
+  meanWorkUnitsUsed: number;
+  maxWorkUnitsUsed: number;
+  budgetExhaustedSearches: number;
+  budgetExhaustionRate: number;
+  placementEvaluationUnits: number;
+  chanceExpansionUnits: number;
+  cacheHitUnits: number;
+  expandedDecisionNodes: number;
+  expandedChanceNodes: number;
+  cacheHits: number;
+}
+
+interface LegacySearchDiagnostics {
   holdActions: number;
   holdRate: number;
   meanCompletedDepth: number;
@@ -200,31 +226,136 @@ function parseScoreMetadata(d: Record<string, unknown>): ScoreMetadata | null {
 }
 
 function parseSearchMetadata(d: Record<string, unknown>): SearchMetadata | null {
-  if (
-    d.searchContract !== SEARCH_CONTRACT || d.searchDepth !== 4 ||
-    d.rootBeamWidth !== 64 || d.childBeamWidth !== 32
-  ) return null;
-  return { searchContract: SEARCH_CONTRACT, searchDepth: 4, rootBeamWidth: 64, childBeamWidth: 32 };
+  return hasSearchMetadata(d) ? SEARCH_METADATA : null;
 }
 
-function parseSearchDiagnostics(value: unknown): SearchDiagnostics | null {
+const SEARCH_DIAGNOSTICS_KEYS = [
+  'searchCalls', 'holdActions', 'holdRate', 'meanCompletedDepth',
+  'minCompletedDepth', 'completedDepthHistogram', 'totalWorkUnitsUsed',
+  'meanWorkUnitsUsed', 'maxWorkUnitsUsed', 'budgetExhaustedSearches',
+  'budgetExhaustionRate', 'placementEvaluationUnits', 'chanceExpansionUnits',
+  'cacheHitUnits', 'expandedDecisionNodes', 'expandedChanceNodes', 'cacheHits',
+] as const;
+
+export function parseSearchDiagnostics(
+  value: unknown,
+  maxWorkUnits = SEARCH_METADATA.maxWorkUnits,
+): SearchDiagnostics | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  if (
+    Object.keys(raw).length !== SEARCH_DIAGNOSTICS_KEYS.length ||
+    SEARCH_DIAGNOSTICS_KEYS.some((key) => !Object.prototype.hasOwnProperty.call(raw, key))
+  ) return null;
+
+  const integerKeys = [
+    'searchCalls', 'holdActions', 'totalWorkUnitsUsed', 'maxWorkUnitsUsed',
+    'budgetExhaustedSearches', 'placementEvaluationUnits', 'chanceExpansionUnits',
+    'cacheHitUnits', 'expandedDecisionNodes', 'expandedChanceNodes', 'cacheHits',
+  ] as const;
+  const integers = Object.fromEntries(integerKeys.map((key) => [
+    key,
+    integerAtLeast(raw[key], 0),
+  ])) as Record<(typeof integerKeys)[number], number | null>;
+  if (integerKeys.some((key) => integers[key] === null)) return null;
+
+  const holdRate = nonNegativeFinite(raw.holdRate);
+  const meanCompletedDepth = nonNegativeFinite(raw.meanCompletedDepth);
+  const minCompletedDepth = integerAtLeast(raw.minCompletedDepth, 0);
+  const meanWorkUnitsUsed = nonNegativeFinite(raw.meanWorkUnitsUsed);
+  const budgetExhaustionRate = nonNegativeFinite(raw.budgetExhaustionRate);
+  if (
+    holdRate === null || meanCompletedDepth === null || minCompletedDepth === null ||
+    meanWorkUnitsUsed === null || budgetExhaustionRate === null ||
+    holdRate > 1 || meanCompletedDepth > 4 || minCompletedDepth > 4 ||
+    budgetExhaustionRate > 1
+  ) return null;
+
+  if (!Array.isArray(raw.completedDepthHistogram) || raw.completedDepthHistogram.length !== 5) {
+    return null;
+  }
+  const parsedDepthHistogram = raw.completedDepthHistogram.map((count) =>
+    integerAtLeast(count, 0));
+  if (parsedDepthHistogram.some((count) => count === null)) return null;
+  const completedDepthHistogram = parsedDepthHistogram as number[];
+
+  const searchCalls = integers.searchCalls!;
+  const holdActions = integers.holdActions!;
+  const totalWorkUnitsUsed = integers.totalWorkUnitsUsed!;
+  const maxWorkUnitsUsed = integers.maxWorkUnitsUsed!;
+  const budgetExhaustedSearches = integers.budgetExhaustedSearches!;
+  const categoryTotal = integers.placementEvaluationUnits!
+    + integers.chanceExpansionUnits! + integers.cacheHitUnits!;
+  const histogramTotal = completedDepthHistogram.reduce((sum, count) => sum + count, 0);
+  const expectedMeanDepth = searchCalls === 0 ? 0 : completedDepthHistogram.reduce(
+    (sum, count, depth) => sum + count * depth,
+    0,
+  ) / searchCalls;
+  const expectedMinDepth = searchCalls === 0
+    ? 0
+    : completedDepthHistogram.findIndex((count) => count > 0);
+
+  if (
+    histogramTotal !== searchCalls || holdActions > searchCalls ||
+    budgetExhaustedSearches > searchCalls || categoryTotal !== totalWorkUnitsUsed ||
+    maxWorkUnitsUsed > maxWorkUnits || totalWorkUnitsUsed > searchCalls * maxWorkUnits ||
+    maxWorkUnitsUsed < meanWorkUnitsUsed || maxWorkUnitsUsed > totalWorkUnitsUsed ||
+    !closeEnough(holdRate, searchCalls === 0 ? 0 : holdActions / searchCalls) ||
+    !closeEnough(meanCompletedDepth, expectedMeanDepth) ||
+    minCompletedDepth !== expectedMinDepth ||
+    !closeEnough(meanWorkUnitsUsed, searchCalls === 0 ? 0 : totalWorkUnitsUsed / searchCalls) ||
+    !closeEnough(
+      budgetExhaustionRate,
+      searchCalls === 0 ? 0 : budgetExhaustedSearches / searchCalls,
+    )
+  ) return null;
+
+  return {
+    searchCalls,
+    holdActions,
+    holdRate,
+    meanCompletedDepth,
+    minCompletedDepth,
+    completedDepthHistogram: completedDepthHistogram as [number, number, number, number, number],
+    totalWorkUnitsUsed,
+    meanWorkUnitsUsed,
+    maxWorkUnitsUsed,
+    budgetExhaustedSearches,
+    budgetExhaustionRate,
+    placementEvaluationUnits: integers.placementEvaluationUnits!,
+    chanceExpansionUnits: integers.chanceExpansionUnits!,
+    cacheHitUnits: integers.cacheHitUnits!,
+    expandedDecisionNodes: integers.expandedDecisionNodes!,
+    expandedChanceNodes: integers.expandedChanceNodes!,
+    cacheHits: integers.cacheHits!,
+  };
+}
+
+function parseLegacySearchDiagnostics(value: unknown): LegacySearchDiagnostics | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
   const keys = ['holdActions', 'holdRate', 'meanCompletedDepth', 'minCompletedDepth',
     'expandedDecisionNodes', 'expandedChanceNodes', 'cacheHits', 'abortedSearches'] as const;
   if (Object.keys(raw).length !== keys.length || keys.some((key) => !Object.prototype.hasOwnProperty.call(raw, key))) return null;
   for (const key of keys) {
-    const valueAtKey = raw[key];
-    if (typeof valueAtKey !== 'number' || !Number.isFinite(valueAtKey) || valueAtKey < 0) return null;
+    const entry = raw[key];
+    if (typeof entry !== 'number' || !Number.isFinite(entry) || entry < 0) return null;
   }
   if ((raw.holdRate as number) > 1 || (raw.meanCompletedDepth as number) > 4 || (raw.minCompletedDepth as number) > 4) return null;
-  return raw as unknown as SearchDiagnostics;
+  return raw as unknown as LegacySearchDiagnostics;
 }
 
-const V5_KEYS = [
+const LEGACY_V5_KEYS = [
   'version', 'weights', 'objective', 'meanScore', 'evalMaxPieces', 'meanLines',
   'meanHeight', 'meanClearCounts', 'tetrisLineShare', 'evalGames', 'gen',
   'searchContract', 'searchDepth', 'rootBeamWidth', 'childBeamWidth',
+  'searchDiagnostics', 'trainedAt', 'strategyDiagnostics', 'survivalDiagnostics',
+] as const;
+
+const V6_KEYS = [
+  'version', 'weights', 'objective', 'meanScore', 'evalMaxPieces', 'meanLines',
+  'meanHeight', 'meanClearCounts', 'tetrisLineShare', 'evalGames', 'gen',
+  ...SEARCH_METADATA_KEYS,
   'searchDiagnostics', 'trainedAt', 'strategyDiagnostics', 'survivalDiagnostics',
 ] as const;
 
@@ -316,8 +447,24 @@ export function parseWeightsFile(data: unknown): WeightsFile | null {
     strategyDiagnostics = parseStrategyDiagnostics(d.strategyDiagnostics);
     survivalDiagnostics = parseSurvivalDiagnostics(d.survivalDiagnostics, currentMetadata.evalGames);
     if (strategyDiagnostics === null || survivalDiagnostics === null) return null;
+  } else if (version === 5 && objective === SCORE_RATE_V4_OBJECTIVE) {
+    if (
+      Object.keys(d).length !== LEGACY_V5_KEYS.length ||
+      LEGACY_V5_KEYS.some((key) => !Object.prototype.hasOwnProperty.call(d, key)) ||
+      d.searchContract !== 'bag-expectimax-hold-v1' || d.searchDepth !== 4 ||
+      d.rootBeamWidth !== 64 || d.childBeamWidth !== 32 ||
+      parseLegacySearchDiagnostics(d.searchDiagnostics) === null
+    ) return null;
+    const current = parseExactWeights(raw, FEATURE_NAMES);
+    if (current === null) return null;
+    weights = current as Weights;
+    currentMetadata = parseScoreMetadata(d);
+    if (currentMetadata === null) return null;
+    strategyDiagnostics = parseStrategyDiagnostics(d.strategyDiagnostics);
+    survivalDiagnostics = parseSurvivalDiagnostics(d.survivalDiagnostics, currentMetadata.evalGames);
+    if (strategyDiagnostics === null || survivalDiagnostics === null) return null;
   } else if (version === SEARCH_SCHEMA_VERSION && objective === SCORE_RATE_OBJECTIVE) {
-    if (Object.keys(d).length !== V5_KEYS.length || V5_KEYS.some((key) => !Object.prototype.hasOwnProperty.call(d, key))) return null;
+    if (Object.keys(d).length !== V6_KEYS.length || V6_KEYS.some((key) => !Object.prototype.hasOwnProperty.call(d, key))) return null;
     const current = parseExactWeights(raw, FEATURE_NAMES);
     if (current === null) return null;
     weights = current as Weights;
@@ -326,7 +473,7 @@ export function parseWeightsFile(data: unknown): WeightsFile | null {
     strategyDiagnostics = parseStrategyDiagnostics(d.strategyDiagnostics);
     survivalDiagnostics = parseSurvivalDiagnostics(d.survivalDiagnostics, currentMetadata.evalGames);
     if (strategyDiagnostics === null || survivalDiagnostics === null) return null;
-    searchDiagnostics = parseSearchDiagnostics(d.searchDiagnostics);
+    searchDiagnostics = parseSearchDiagnostics(d.searchDiagnostics, SEARCH_METADATA.maxWorkUnits);
     if (searchDiagnostics === null) return null;
   } else {
     return null;
@@ -351,8 +498,16 @@ export function parseWeightsFile(data: unknown): WeightsFile | null {
     gen: currentMetadata?.gen ?? num(d.gen, 0),
     searchDepth: currentMetadata?.searchDepth ?? (d.searchDepth === 1 ? 1 : d.searchDepth === 4 ? 4 : 2),
     searchContract: version === SEARCH_SCHEMA_VERSION ? SEARCH_CONTRACT : undefined,
-    rootBeamWidth: version === SEARCH_SCHEMA_VERSION ? 64 : undefined,
-    childBeamWidth: version === SEARCH_SCHEMA_VERSION ? 32 : undefined,
+    rootBeamWidth: version === SEARCH_SCHEMA_VERSION ? SEARCH_METADATA.rootBeamWidth : undefined,
+    childBeamWidth: version === SEARCH_SCHEMA_VERSION ? SEARCH_METADATA.childBeamWidth : undefined,
+    maxWorkUnits: version === SEARCH_SCHEMA_VERSION ? SEARCH_METADATA.maxWorkUnits : undefined,
+    budgetCorpus: version === SEARCH_SCHEMA_VERSION ? SEARCH_METADATA.budgetCorpus : undefined,
+    transpositionCacheEntries: version === SEARCH_SCHEMA_VERSION
+      ? SEARCH_METADATA.transpositionCacheEntries
+      : undefined,
+    placementCacheEntries: version === SEARCH_SCHEMA_VERSION
+      ? SEARCH_METADATA.placementCacheEntries
+      : undefined,
     searchDiagnostics,
     trainedAt: currentMetadata?.trainedAt ?? (typeof d.trainedAt === 'string' ? d.trainedAt : ''),
     strategyDiagnostics,
