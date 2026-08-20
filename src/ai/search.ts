@@ -494,7 +494,6 @@ function finishDiagnostics(context: SearchContext): void {
   context.diagnostics.placementEvaluationUnits = snapshot.placementEvaluationUnits;
   context.diagnostics.chanceExpansionUnits = snapshot.chanceExpansionUnits;
   context.diagnostics.cacheHitUnits = snapshot.cacheHitUnits;
-  context.diagnostics.budgetExhausted ||= snapshot.exhausted;
   context.diagnostics.aborted = context.diagnostics.budgetExhausted;
 }
 

@@ -152,6 +152,21 @@ describe('budgeted expectimax search', () => {
     })).toThrow(/depth one/i);
   });
 
+  it('does not report an exactly exhausted complete depth as budget exhausted', () => {
+    const result = searchBudgeted(state({ unseenBagMask: 0 }), zeros(), {
+      ...DETERMINISTIC_SEARCH_LIMITS,
+      maxLockedDepth: 2,
+      maxWorkUnits: 3010,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.diagnostics.completedDepth).toBe(2);
+    expect(result!.diagnostics.attemptedDepth).toBe(2);
+    expect(result!.diagnostics.workUnitsUsed).toBe(3010);
+    expect(result!.diagnostics.budgetExhausted).toBe(false);
+    expect(result!.diagnostics.aborted).toBe(false);
+  });
+
   it('retains exactly the requested root and child beam prefixes with stable ties', () => {
     const entries = Array.from({ length: 65 }, (_, enumerationIndex) => ({
       enumerationIndex,
