@@ -1,4 +1,10 @@
-import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  writeFileSync,
+} from 'node:fs';
 import { cpus } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -76,6 +82,16 @@ function generationTarget(value: string | undefined): number {
   return result;
 }
 
+function pathEntryExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
 function parseArgs(argv: string[]): {
   generations: number | null;
   resume: boolean;
@@ -151,9 +167,17 @@ if (args.resume) {
     throw new Error(`--resume but no checkpoint at ${paths.checkpoint}`);
   }
   const boundaryCheckpoint = readCompatibleCheckpoint(paths.checkpoint);
-  checkpoint = boundaryCheckpoint.gen === 0 && !existsSync(paths.log)
-    ? boundaryCheckpoint
-    : readCompatibleRunArtifacts(paths);
+  if (boundaryCheckpoint.gen === 0 && !pathEntryExists(paths.log)) {
+    if (boundaryCheckpoint.bestQualifiedCandidate !== null) {
+      throw new Error('gen-0 checkpoint without a log cannot contain a qualified candidate');
+    }
+    if (pathEntryExists(paths.candidate)) {
+      throw new Error('gen-0 checkpoint without a log cannot contain a candidate artifact');
+    }
+    checkpoint = boundaryCheckpoint;
+  } else {
+    checkpoint = readCompatibleRunArtifacts(paths);
+  }
 } else {
   assertFreshRun(paths);
 }

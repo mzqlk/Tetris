@@ -170,7 +170,7 @@ export class WorkerPool {
           } finally {
             rejectAll(new WorkerPoolAbortError());
           }
-        })();
+        })().catch(() => undefined);
       };
 
       const complete = (item: QueueItem, result: SimTaskResult) => {
@@ -289,7 +289,15 @@ export class WorkerPool {
       const workers = this.workers;
       this.workers = [];
       this.destroyPromise = Promise.resolve()
-        .then(() => Promise.all(workers.map((worker) => worker.terminate())))
+        .then(async () => {
+          const outcomes = await Promise.allSettled(
+            workers.map((worker) => worker.terminate()),
+          );
+          const failure = outcomes.find(
+            (outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected',
+          );
+          if (failure !== undefined) throw failure.reason;
+        })
         .then(() => undefined);
     }
     return this.destroyPromise;

@@ -27,14 +27,19 @@ class ControlledWorker extends EventEmitter {
   readonly posted: SimTask[] = [];
   terminationCalls = 0;
 
+  constructor(private readonly terminateImpl: () => Promise<number> = async () => 0) {
+    super();
+  }
+
   postMessage(message: SimTask): void {
     this.posted.push(message);
   }
 
   async terminate(): Promise<number> {
     this.terminationCalls++;
-    queueMicrotask(() => this.emit('exit', 0));
-    return 0;
+    const result = await this.terminateImpl();
+    queueMicrotask(() => this.emit('exit', result));
+    return result;
   }
 }
 
@@ -122,6 +127,89 @@ describe('WorkerPool', () => {
 
     expect(constructionCount()).toBe(3);
     expect(workers.every((worker) => worker.terminationCalls === 1)).toBe(true);
+  });
+
+  it('waits for every termination and returns one shared rejected destroy promise', async () => {
+    let releaseSecond!: () => void;
+    let secondSettled = false;
+    const secondTermination = new Promise<number>((resolve) => {
+      releaseSecond = () => {
+        secondSettled = true;
+        resolve(0);
+      };
+    });
+    const workers = [
+      new ControlledWorker(async () => { throw new Error('first terminate failed'); }),
+      new ControlledWorker(() => secondTermination),
+    ];
+    const controlled = await WorkerPool.create(
+      2,
+      (index) => workers[index] as unknown as Worker,
+    );
+
+    const destroyPromise = controlled.destroy();
+    const early = await Promise.race([
+      destroyPromise.then(
+        () => ({ status: 'resolved' }),
+        (error: unknown) => ({ status: 'rejected', error }),
+      ),
+      new Promise<{ status: 'pending' }>((resolve) =>
+        setTimeout(() => resolve({ status: 'pending' }), 25)),
+    ]);
+    expect(early).toEqual({ status: 'pending' });
+    expect(secondSettled).toBe(false);
+
+    releaseSecond();
+    await expect(destroyPromise).rejects.toThrow('first terminate failed');
+    expect(controlled.destroy()).toBe(destroyPromise);
+    expect(workers.every((worker) => worker.terminationCalls === 1)).toBe(true);
+  });
+
+  it('waits for all termination promises on abort without an unhandled cleanup rejection', async () => {
+    let releaseSecond!: () => void;
+    let secondSettled = false;
+    const secondTermination = new Promise<number>((resolve) => {
+      releaseSecond = () => {
+        secondSettled = true;
+        resolve(0);
+      };
+    });
+    const workers = [
+      new ControlledWorker(async () => { throw new Error('abort terminate failed'); }),
+      new ControlledWorker(() => secondTermination),
+    ];
+    const controlled = await WorkerPool.create(
+      2,
+      (index) => workers[index] as unknown as Worker,
+    );
+    const controller = new AbortController();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+
+    try {
+      const run = controlled.run([task(5, 105), task(6, 106)], { signal: controller.signal });
+      controller.abort();
+      const early = await Promise.race([
+        run.then(
+          () => ({ status: 'resolved' }),
+          (error: unknown) => ({ status: 'rejected', error }),
+        ),
+        new Promise<{ status: 'pending' }>((resolve) =>
+          setTimeout(() => resolve({ status: 'pending' }), 25)),
+      ]);
+      expect(early).toEqual({ status: 'pending' });
+      expect(secondSettled).toBe(false);
+
+      releaseSecond();
+      const outcome = await observedSettlement(run);
+      await expectWorkerPoolAbortError(outcome);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+      await controlled.destroy().catch(() => {});
+    }
   });
 
   it('passes a search-free task to the worker without rewriting the task', async () => {

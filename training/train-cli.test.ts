@@ -788,6 +788,36 @@ Worker.prototype.postMessage = function (task) {
     }
   }, 20_000);
 
+  it('rejects a stale candidate beside a gen-0 no-log boundary without rewriting artifacts', () => {
+    const parent = mkdtempSync(join(tmpdir(), 'tetris-sigint-stale-candidate-'));
+    const outputDir = join(parent, 'output');
+    const checkpointPath = join(outputDir, 'checkpoint.json');
+    const candidatePath = join(outputDir, 'candidate-weights.json');
+    mkdirSync(outputDir);
+    writeFileSync(checkpointPath, JSON.stringify(validCheckpoint(0)));
+    writeFileSync(candidatePath, '{"stale":true}\n');
+    const before = snapshotDirectory(outputDir);
+
+    try {
+      const result = spawnSync(process.execPath, [
+        '--import', 'tsx',
+        resolve(TEMP_REPO_ROOT, 'training/train.ts'),
+        '--resume',
+        '--generations', '0',
+        '--workers', '1',
+        '--output-dir', outputDir,
+      ], { cwd: ROOT, encoding: 'utf8', timeout: 10_000 });
+
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toMatch(/candidate|qualified/i);
+      expect(snapshotDirectory(outputDir)).toEqual(before);
+      const nextOwner = acquireRunLock(TEMP_REPO_ROOT);
+      nextOwner.release();
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     ['one', 1, 0],
     ['two', 2, 1],
