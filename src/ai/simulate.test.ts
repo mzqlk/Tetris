@@ -1,12 +1,14 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   createSimState,
+  createFrozenContinuationState,
   applyAction,
   projectPublicSearchState,
   simulateFromState,
   simulateGame as productionSimulateGame,
   simulateGameWithSearchForTest,
   type SimAction,
+  type FrozenContinuationCapture,
 } from './simulate';
 import { mulberry32 } from './rng';
 import {
@@ -319,8 +321,113 @@ describe('createSimState', () => {
   });
 });
 
+describe('createFrozenContinuationState', () => {
+  const createCapture = (): FrozenContinuationCapture => ({
+    state: {
+      board: boardFrom(['..........', '..........']),
+      current: createPiece(1),
+      next: 2 as PieceType,
+      hold: 3 as PieceType,
+      holdAvailable: false,
+      unseenBagMask: 0b1110000,
+    },
+    score: 1200,
+    lines: 9,
+    level: 1,
+  });
+
+  it('uses only the supplied future prefix and preserves captured public score and level', () => {
+    const capture = createCapture();
+    const state = createFrozenContinuationState(capture, [5, 6, 7, 1, 2]);
+
+    expect(projectPublicSearchState(state)).toEqual(capture.state);
+    expect(state.score).toBe(1200);
+    expect(state.lines).toBe(9);
+    expect(state.level).toBe(1);
+    expect(state.pieces).toBe(0);
+    expect(state.clearCounts).toEqual({ singles: 0, doubles: 0, triples: 0, tetrises: 0 });
+    expect(state.heightSum).toBe(0);
+    expect(state.strategyDiagnosticSum).toEqual(emptyStrategyDiagnostics());
+    expect(state.searchCalls).toBe(0);
+    expect(state.holdActions).toBe(0);
+    expect(state.totalWorkUnitsUsed).toBe(0);
+
+    capture.state.board[0][0] = 9;
+    capture.state.current.position.x = 9;
+    capture.state.hold = null;
+    expect(projectPublicSearchState(state)).not.toEqual(capture.state);
+  });
+
+  it('throws when the supplied frozen future prefix is exhausted', () => {
+    const state = createFrozenContinuationState(createCapture(), [5]);
+
+    applyAction(state, 'hardDrop');
+    expect(() => applyAction(state, 'hardDrop')).toThrow('frozen future stream exhausted');
+  });
+
+  it('rejects an invalid captured level or empty frozen prefix', () => {
+    const capture = createCapture();
+    expect(() => createFrozenContinuationState({ ...capture, level: 2 }, [5]))
+      .toThrow('level must match calculated level');
+    expect(() => createFrozenContinuationState(capture, [])).toThrow('at least one future piece');
+  });
+});
+
 describe('simulateGame', () => {
   const weights = toVector(HANDCRAFTED_WEIGHTS);
+
+  it('observes the first real pre-action decision for each scheduled piece without changing results', () => {
+    const zeroWeights = Array(FEATURE_COUNT).fill(0);
+    const baseline = productionSimulateGame({ weights: zeroWeights, seed: 17, maxPieces: 8 });
+    const observed: number[] = [];
+    const snapshots: unknown[] = [];
+    const state = createSimState(17);
+
+    const result = simulateFromState(state, {
+      weights: zeroWeights,
+      maxPieces: 8,
+      onDecision: (observation) => {
+        observed.push(observation.scheduledPieceNumber);
+        snapshots.push(observation);
+        observation.publicState.board[0][0] = 99;
+        observation.publicState.current.position.x = 99;
+        observation.searchDiagnostics.searchCalls = 99;
+        if (observation.decision.action.kind === 'place') {
+          observation.decision.action.placement.piece.position.x = 99;
+          observation.decision.action.placement.moves.push('left');
+        }
+      },
+    });
+
+    expect(result).toEqual(baseline);
+    expect([...new Set(observed)]).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect((snapshots[0] as { publicState: { board: Board; current: { position: { x: number } } }; searchDiagnostics: { searchCalls: number } }).publicState.board[0][0]).toBe(99);
+    expect(state.board[0][0]).not.toBe(99);
+    expect(state.currentPiece!.position.x).not.toBe(99);
+    expect(state.searchCalls).not.toBe(99);
+  });
+
+  it('permits a D1 consumer to retain only the first observation for a scheduled piece across Hold', () => {
+    const state = createSimState(1);
+    const observed: number[] = [];
+    const firstByScheduledPiece = new Map<number, unknown>();
+
+    const result = simulateFromState(state, {
+      weights,
+      maxPieces: 10,
+      limits: TEST_SEARCH,
+      onDecision: (observation) => {
+        observed.push(observation.scheduledPieceNumber);
+        if (!firstByScheduledPiece.has(observation.scheduledPieceNumber)) {
+          firstByScheduledPiece.set(observation.scheduledPieceNumber, observation);
+        }
+      },
+    });
+
+    expect(result.searchDiagnostics.searchCalls).toBe(12);
+    expect(observed.length).toBeGreaterThan(firstByScheduledPiece.size);
+    expect([...firstByScheduledPiece.keys()]).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  });
 
   // depth-2 search runs ~110 pieces/sec/core (vs. ~3000/sec at depth 1) because
   // it's a long *synchronous* compute loop that blocks this worker's event

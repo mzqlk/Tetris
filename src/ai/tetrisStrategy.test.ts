@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { boardFrom } from './testUtils';
 import {
   diagnosticsFromWell,
+  hasVerticalIBand,
+  summarizeTetrisWellAt,
   summarizeTetrisWell,
 } from './tetrisStrategy';
 
@@ -9,6 +11,14 @@ describe('summarizeTetrisWell', () => {
   it('returns a deterministic zero summary on an empty board', () => {
     expect(summarizeTetrisWell(boardFrom([]))).toEqual({
       column: 0, usableDepth: 0, setupCells: 0, readyRows: 0,
+    });
+  });
+
+  it('summarizes a specified column without searching other wells', () => {
+    expect(summarizeTetrisWellAt(boardFrom([
+      '####.#####', '####.#####', '####.#####', '####.#####',
+    ]), 4)).toEqual({
+      column: 4, usableDepth: 4, setupCells: 36, readyRows: 4,
     });
   });
 
@@ -40,5 +50,18 @@ describe('summarizeTetrisWell', () => {
       meanTetrisSetupProgress: 2,
       meanTetrisReadyRows: 1,
     });
+  });
+
+  it('detects whether a specific column still has a vertical I band', () => {
+    const board = boardFrom([
+      '####.#####', '####.#####', '####.#####', '####.#####',
+    ]);
+    expect(hasVerticalIBand(board, 4)).toBe(true);
+    expect(hasVerticalIBand(board, 3)).toBe(false);
+  });
+
+  it('rejects columns outside the board', () => {
+    expect(() => summarizeTetrisWellAt(boardFrom([]), -1 as 0)).toThrow(/column/i);
+    expect(() => hasVerticalIBand(boardFrom([]), 10 as 0)).toThrow(/column/i);
   });
 });

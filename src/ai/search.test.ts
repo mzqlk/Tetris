@@ -7,11 +7,14 @@ import { cellKey } from './placements';
 import type { PublicSearchState } from './publicState';
 import {
   compareSearchValues,
+  searchHorizonBudgeted,
   searchBudgeted,
   searchFixed,
+  summarizeStrategySlotAccounting,
   selectPlacementBeam,
   type LegacyFixedSearchBudget,
   type SearchDecision,
+  type HorizonSearchLimits,
 } from './search';
 import {
   DEPTH_ONE_REQUIRED_WORK_UNITS,
@@ -38,6 +41,23 @@ function searchLimits(
     maxWorkUnits: Number.MAX_SAFE_INTEGER,
     transpositionCacheEntries: 65_536,
     placementCacheEntries: 16_384,
+  };
+}
+
+function horizonLimits(
+  maxLockedDepth: 1 | 2 | 3 | 4,
+  overrides: Partial<HorizonSearchLimits> = {},
+): HorizonSearchLimits {
+  return {
+    rootScoreSlots: 64,
+    rootStrategySlots: 32,
+    childScoreSlots: 32,
+    childStrategySlots: 16,
+    maxLockedDepth,
+    maxWorkUnits: Number.MAX_SAFE_INTEGER,
+    transpositionCacheEntries: 65_536,
+    placementCacheEntries: 16_384,
+    ...overrides,
   };
 }
 
@@ -277,8 +297,7 @@ describe('budgeted expectimax search', () => {
 
     expect(result).not.toBeNull();
     expect(stripDiagnostics(result)).toEqual(stripDiagnostics(oracle));
-    expect(result!.value.survivalProbability).toBeGreaterThan(0);
-    expect(result!.value.survivalProbability).toBeLessThan(1);
+    expect(result!.value.survivalProbability).toBe(0.5);
     expect(Number.isFinite(result!.value.expectedHeuristicValue)).toBe(true);
     expect(result!.diagnostics.prunedChanceBranches).toBeGreaterThan(0);
     expect(oracle!.diagnostics.prunedChanceBranches).toBe(0);
@@ -348,5 +367,226 @@ describe('budgeted expectimax search', () => {
       );
       expect(result).not.toBeNull();
     }
+  });
+});
+
+describe('bounded horizon expectimax search', () => {
+  it('counts retained strategy and deduplicated both slots directly from the beam', () => {
+    const strategy = {
+      placement: { piece: createPiece(1), path: [] },
+      immediateHeuristic: 0,
+      pending: { board: createEmptyBoard(), current: createPiece(1), hold: null, holdAvailable: true, unseenBagMask: 0 },
+      enumerationIndex: 0,
+      linesCleared: 0,
+      boardAfter: createEmptyBoard(),
+      beamSource: 'strategy' as const,
+      targetWellColumn: 4 as const,
+    };
+    const both = {
+      ...strategy,
+      enumerationIndex: 1,
+      beamSource: 'both' as const,
+      targetWellColumn: 9 as const,
+    };
+    const score = {
+      ...strategy,
+      enumerationIndex: 2,
+      beamSource: 'score' as const,
+      targetWellColumn: null,
+    };
+
+    expect(summarizeStrategySlotAccounting([strategy, both, score], [strategy, both, score]))
+      .toEqual({
+        strategySlotsRetained: 1,
+        strategySlotsDeduplicated: 1,
+        strategySlotsPruned: 0,
+      });
+  });
+
+  it('counts only removed strategy-bearing entries as pruned, not removed score-only entries', () => {
+    const strategy = {
+      placement: { piece: createPiece(1), path: [] },
+      immediateHeuristic: 0,
+      pending: { board: createEmptyBoard(), current: createPiece(1), hold: null, holdAvailable: true, unseenBagMask: 0 },
+      enumerationIndex: 0,
+      linesCleared: 0,
+      boardAfter: createEmptyBoard(),
+      beamSource: 'strategy' as const,
+      targetWellColumn: 4 as const,
+    };
+    const both = {
+      ...strategy,
+      enumerationIndex: 1,
+      beamSource: 'both' as const,
+      targetWellColumn: 9 as const,
+    };
+    const score = {
+      ...strategy,
+      enumerationIndex: 2,
+      beamSource: 'score' as const,
+      targetWellColumn: null,
+    };
+
+    expect(summarizeStrategySlotAccounting([strategy, both, score], [score])).toEqual({
+      strategySlotsRetained: 1,
+      strategySlotsDeduplicated: 1,
+      strategySlotsPruned: 2,
+    });
+  });
+
+  it('commits deterministic complete-depth traces while retaining strategy beam candidates', () => {
+    const searchState = state({
+      board: boardFrom([
+        '####.#####', '####.#####', '####.#####', '####.#####',
+      ]),
+      current: createPiece(1),
+      next: 2,
+      unseenBagMask: 0,
+    });
+    const limits = horizonLimits(2, {
+      rootScoreSlots: 1,
+      rootStrategySlots: 32,
+      childScoreSlots: 1,
+      childStrategySlots: 16,
+    });
+
+    const first = searchHorizonBudgeted(searchState, only('linesCleared'), limits);
+    const second = searchHorizonBudgeted(searchState, only('linesCleared'), limits);
+
+    expect(first).not.toBeNull();
+    expect(first).toEqual(second);
+    expect(first!.trace.completedDepths).toHaveLength(2);
+    expect(first!.trace.completedDepths.map((entry) => entry.depth)).toEqual([1, 2]);
+    expect(first!.trace.strategySlotsRetained).toBeGreaterThan(0);
+    expect(first!.trace.rootStrategyTargetColumns).toContain(4);
+    expect(first!.trace.rootStrategyTargetColumns).toEqual(
+      [...new Set(first!.trace.rootStrategyTargetColumns)].sort((left, right) => left - right),
+    );
+    expect(first!.trace.rootStrategyTargetColumns.every((column) => column >= 0 && column <= 9)).toBe(true);
+  });
+
+  it('does not append a trace entry for an exhausted partial depth', () => {
+    const result = searchHorizonBudgeted(
+      ordinarySurvivingState(),
+      zeros(),
+      horizonLimits(4, { maxWorkUnits: DEPTH_ONE_REQUIRED_WORK_UNITS }),
+    );
+
+    expect(result?.diagnostics).toMatchObject({
+      completedDepth: 1,
+      attemptedDepth: 2,
+      budgetExhausted: true,
+    });
+    expect(result?.trace.completedDepths.map((entry) => entry.depth)).toEqual([1]);
+  });
+
+  it('does not retain cache entries produced by an exhausted horizon depth', () => {
+    const completeDepthOne = searchHorizonBudgeted(
+      ordinarySurvivingState(),
+      zeros(),
+      horizonLimits(1),
+    );
+    const partialDepthTwo = searchHorizonBudgeted(
+      ordinarySurvivingState(),
+      zeros(),
+      horizonLimits(2, { maxWorkUnits: 1_550 }),
+    );
+
+    expect(partialDepthTwo?.trace.completedDepths.map((entry) => entry.depth)).toEqual([1]);
+    expect(partialDepthTwo?.diagnostics).toMatchObject({
+      completedDepth: 1,
+      attemptedDepth: 2,
+      budgetExhausted: true,
+    });
+    expect(partialDepthTwo?.diagnostics.transpositionEntries)
+      .toBe(completeDepthOne?.diagnostics.transpositionEntries);
+    expect(partialDepthTwo?.diagnostics.placementCacheEntries)
+      .toBe(completeDepthOne?.diagnostics.placementCacheEntries);
+  });
+
+  it('keeps Hold external to horizon placement slots and preserves exact chance evaluation', () => {
+    const result = searchHorizonBudgeted(
+      state({
+        board: boardFrom(['.#########']),
+        current: createPiece(2),
+        next: 1,
+        hold: null,
+        holdAvailable: true,
+        unseenBagMask: 0,
+      }),
+      only('linesCleared'),
+      horizonLimits(1),
+    );
+
+    expect(result?.action.kind).toBe('hold');
+    expect(result?.trace.completedDepths[0]).toMatchObject({
+      actionKind: 'hold', beamSource: 'hold', targetWellColumn: null,
+    });
+    expect(result?.value).toEqual({ survivalProbability: 1, expectedHeuristicValue: 1 });
+  });
+
+  it('establishes a well intent before a continuation I-piece Tetris resets it', () => {
+    const result = searchHorizonBudgeted(
+      state({
+        board: boardFrom([
+          '####.#####', '####.#####', '####.#####', '####.#####',
+        ]),
+        current: createPiece(2),
+        next: 1,
+        unseenBagMask: 0,
+      }),
+      zeros(),
+      horizonLimits(2, {
+        rootScoreSlots: 1,
+        rootStrategySlots: 32,
+        childScoreSlots: 1,
+        childStrategySlots: 16,
+      }),
+    );
+
+    expect(result?.trace.targetWellEstablished).toBeGreaterThan(0);
+    expect(result?.trace.targetWellReset).toBeGreaterThan(0);
+  });
+
+  it('chooses the smaller placement enumeration index on an exact value tie', () => {
+    const searchState = state({ holdAvailable: false, unseenBagMask: 0 });
+    const result = searchHorizonBudgeted(searchState, zeros(), horizonLimits(1));
+
+    expect(result?.action.kind).toBe('place');
+    if (result?.action.kind !== 'place') return;
+    expect(cellKey(result.action.placement.piece)).toBe('185,195,205,215');
+    expect(result.value).toEqual({ survivalProbability: 1, expectedHeuristicValue: 0 });
+  });
+
+  it('chooses a placement over Hold on an exact value tie', () => {
+    const searchState = state({ hold: 3, holdAvailable: true, unseenBagMask: 0 });
+    const result = searchHorizonBudgeted(searchState, zeros(), horizonLimits(1));
+
+    expect(result?.action.kind).toBe('place');
+    if (result?.action.kind !== 'place') return;
+    expect(cellKey(result.action.placement.piece)).toBe('185,195,205,215');
+    expect(result.value).toEqual({ survivalProbability: 1, expectedHeuristicValue: 0 });
+  });
+
+  it('keeps the v5 score-only decision and diagnostics fixture exact', () => {
+    const fixture = ordinarySurvivingState();
+    const first = searchBudgeted(fixture, zeros(), DETERMINISTIC_SEARCH_LIMITS);
+    const second = searchBudgeted(fixture, zeros(), DETERMINISTIC_SEARCH_LIMITS);
+
+    expect(first).toEqual(second);
+    expect(first).toMatchObject({
+      action: { kind: 'place' },
+      value: { survivalProbability: 1, expectedHeuristicValue: 0 },
+      diagnostics: {
+        completedDepth: 2,
+        attemptedDepth: 3,
+        workUnitsUsed: 3584,
+        workUnitsLimit: 3584,
+        placementEvaluationUnits: 3170,
+        chanceExpansionUnits: 211,
+        cacheHitUnits: 203,
+        budgetExhausted: true,
+      },
+    });
   });
 });

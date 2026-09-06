@@ -14,6 +14,12 @@
     "bench": "tsx training/bench.ts",
     "bench:paired": "tsx training/pairedBench.ts",
     "calibrate:search": "tsx training/calibrateSearchBudget.ts",
+    "diagnose:horizon": "tsx training/horizonDiagnostic.ts",
+    "diagnose:feature-representation": "tsx training/featureRepresentationGate.ts",
+    "diagnose:feature-representation-challenge": "tsx training/featureRepresentationChallengeGate.ts",
+    "diagnose:action-conditioned-listwise": "tsx training/d1ActionConditionedHeldOutListwise.ts",
+    "diagnose:d2-sharded-listwise": "tsx training/d2ShardedHeldOutListwise.ts",
+    "audit:c0-archived-representatives": "tsx training/archivedRepresentativeAudit.ts",
     "train": "tsx training/train.ts"
   },
   "dependencies": {

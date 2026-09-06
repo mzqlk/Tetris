@@ -7,6 +7,7 @@ import {
 } from './stateTransitions';
 import type { PendingPreviewState, PublicSearchState } from './publicState';
 import type { WorkBudgetLedger } from './searchBudget';
+import type { TargetWellColumn } from './horizonPolicy';
 
 /** @deprecated Protected v1 probe compatibility only. */
 export const MAX_TRANSPOSITION_ENTRIES = 65_536;
@@ -27,6 +28,7 @@ export interface PlacementPrototype {
   placement: Placement;
   enumerationIndex: number;
   immediateHeuristic: number;
+  linesCleared: number;
   boardAfter: Board;
 }
 
@@ -71,6 +73,15 @@ export class CappedCache<V> {
   get hits(): number {
     return this.hitCount;
   }
+
+  snapshotEntries(): [string, V][] {
+    return [...this.values.entries()];
+  }
+
+  restoreEntries(entries: readonly (readonly [string, V])[]): void {
+    this.values.clear();
+    for (const [key, value] of entries) this.values.set(key, value);
+  }
 }
 
 /**
@@ -100,6 +111,7 @@ export function decisionStateKey(
   state: PublicSearchState,
   remainingDepth: number,
   root: boolean,
+  targetWellColumn: TargetWellColumn = null,
 ): string {
   const usesNext = remainingDepth > 1
     || (state.holdAvailable && state.hold === null);
@@ -115,6 +127,8 @@ export function decisionStateKey(
     usesMask ? state.unseenBagMask : '-',
     remainingDepth,
     root ? 1 : 0,
+    'intent',
+    targetWellColumn ?? '-',
   ].join('|');
 }
 
@@ -122,6 +136,7 @@ export function pendingStateKey(
   state: PendingPreviewState,
   remainingDepth: number,
   root: boolean,
+  targetWellColumn: TargetWellColumn = null,
 ): string {
   return [
     'pending',
@@ -134,6 +149,8 @@ export function pendingStateKey(
     // Pending states always feed an exact chance node, so the public mask is
     // relevant even when the revealed preview is not later consumed by Hold.
     state.unseenBagMask,
+    'intent',
+    targetWellColumn ?? '-',
   ].join('|');
 }
 
@@ -141,10 +158,11 @@ export function collapseEquivalentPlacements<T extends {
   pending: PendingPreviewState;
   immediateHeuristic: number;
   enumerationIndex: number;
+  targetWellColumn: TargetWellColumn;
 }>(entries: readonly T[], remainingDepth: number): T[] {
   const dominant = new Map<string, T>();
   for (const entry of entries) {
-    const key = pendingStateKey(entry.pending, remainingDepth, false);
+    const key = pendingStateKey(entry.pending, remainingDepth, false, entry.targetWellColumn);
     const existing = dominant.get(key);
     if (existing === undefined
       || entry.immediateHeuristic > existing.immediateHeuristic
@@ -204,6 +222,7 @@ export class PlacementPrototypeCache {
         placement,
         enumerationIndex,
         immediateHeuristic: evaluated.heuristic,
+        linesCleared: evaluated.linesCleared,
         boardAfter: evaluated.boardAfter,
       }));
     }
@@ -217,6 +236,14 @@ export class PlacementPrototypeCache {
 
   get hits(): number {
     return this.values.hits;
+  }
+
+  snapshotEntries(): [string, readonly PlacementPrototype[]][] {
+    return this.values.snapshotEntries();
+  }
+
+  restoreEntries(entries: readonly (readonly [string, readonly PlacementPrototype[]])[]): void {
+    this.values.restoreEntries(entries);
   }
 }
 

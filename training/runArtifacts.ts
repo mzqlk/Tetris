@@ -69,6 +69,17 @@ export interface RunPaths {
   candidate: string;
 }
 
+export interface CompatibleRunArtifactSnapshot {
+  readonly checkpointBytes: Uint8Array;
+  readonly logBytes: Uint8Array;
+  readonly candidateBytes: Uint8Array | null;
+  readonly labels?: Readonly<{
+    checkpoint: string;
+    log: string;
+    candidate: string;
+  }>;
+}
+
 export function resolveRunPaths(root: string, requested: string | null): RunPaths {
   const outputDir = resolve(root, requested ?? 'public/ai/score-rate-v5');
   return {
@@ -100,7 +111,7 @@ function sameFileIdentity(
   return left.dev === right.dev && left.ino === right.ino;
 }
 
-function readRegularArtifact(path: string, label: string): string {
+function readRegularArtifactBytes(path: string, label: string): Uint8Array {
   let before: BigIntStats;
   try {
     before = lstatSync(path, { bigint: true });
@@ -128,10 +139,14 @@ function readRegularArtifact(path: string, label: string): string {
     ) {
       throw new Error(`${label} at ${path} changed identity while it was opened`);
     }
-    return readFileSync(descriptor, 'utf8');
+    return readFileSync(descriptor);
   } finally {
     closeSync(descriptor);
   }
+}
+
+function decodeArtifactBytes(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString('utf8');
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -383,10 +398,21 @@ function scoreRateEvaluation(
   return result;
 }
 
-export function readCompatibleCheckpoint(path: string): ScoreRateCheckpoint {
-  const value: unknown = JSON.parse(readRegularArtifact(path, 'checkpoint'));
+function parseCompatibleCheckpoint(
+  text: string,
+  label: string,
+): ScoreRateCheckpoint {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error(`checkpoint at ${label} contains invalid JSON`);
+    }
+    throw error;
+  }
   if (typeof value !== 'object' || value === null) {
-    throw new Error(`checkpoint at ${path} is not an object`);
+    throw new Error(`checkpoint at ${label} is not an object`);
   }
   const checkpoint = value as Record<string, unknown>;
   const objective = typeof checkpoint.objective === 'string'
@@ -445,6 +471,13 @@ export function readCompatibleCheckpoint(path: string): ScoreRateCheckpoint {
     bestQualifiedCandidate,
     ...SEARCH_METADATA,
   };
+}
+
+export function readCompatibleCheckpoint(path: string): ScoreRateCheckpoint {
+  return parseCompatibleCheckpoint(
+    decodeArtifactBytes(readRegularArtifactBytes(path, 'checkpoint')),
+    path,
+  );
 }
 
 const GENERATION_KEYS = [
@@ -1038,21 +1071,24 @@ function pathEntryExists(path: string): boolean {
   }
 }
 
-function readCandidateEvaluation(
-  path: string,
+function parseCandidateEvaluation(
+  text: string,
+  label: string,
 ): ScoreRateEvaluation {
   let value: unknown;
   try {
-    value = JSON.parse(readRegularArtifact(path, 'candidate weights'));
+    value = JSON.parse(text);
   } catch (error) {
     if (error instanceof SyntaxError) {
-      throw new Error(`candidate weights at ${path} contain invalid JSON`);
+      throw new Error(`candidate weights at ${label} contain invalid JSON`);
     }
     throw error;
   }
   const parsed = parseCandidateWeights(value);
   if (parsed === null) {
-    throw new Error('candidate weights must match the exact score-rate-v5 version 6 schema');
+    throw new Error(
+      `candidate weights at ${label} must match the exact score-rate-v5 version 6 schema`,
+    );
   }
   return {
     weights: toVector(parsed.weights),
@@ -1074,14 +1110,29 @@ function readCandidateEvaluation(
   };
 }
 
-export function readCompatibleRunArtifacts(paths: RunPaths): ScoreRateCheckpoint {
-  const checkpoint = readCompatibleCheckpoint(paths.checkpoint);
-  const text = readRegularArtifact(paths.log, 'training log');
+export function validateCompatibleRunArtifactSnapshot(
+  snapshot: CompatibleRunArtifactSnapshot,
+): ScoreRateCheckpoint {
+  const checkpointBytes = Uint8Array.from(snapshot.checkpointBytes);
+  const logBytes = Uint8Array.from(snapshot.logBytes);
+  const candidateBytes = snapshot.candidateBytes === null
+    ? null
+    : Uint8Array.from(snapshot.candidateBytes);
+  const labels = snapshot.labels ?? {
+    checkpoint: 'checkpoint snapshot',
+    log: 'training log snapshot',
+    candidate: 'candidate weights snapshot',
+  };
+  const checkpoint = parseCompatibleCheckpoint(
+    decodeArtifactBytes(checkpointBytes),
+    labels.checkpoint,
+  );
+  const text = decodeArtifactBytes(logBytes);
   if (text.length === 0) {
-    throw new Error(`training log at ${paths.log} is empty and cannot establish resume history`);
+    throw new Error(`training log at ${labels.log} is empty and cannot establish resume history`);
   }
   if (text.length > 0 && !text.endsWith('\n')) {
-    throw new Error(`training log at ${paths.log} has a truncated final line`);
+    throw new Error(`training log at ${labels.log} has a truncated final line`);
   }
   const lines = text.length === 0 ? [] : text.slice(0, -1).split('\n');
   const generations: number[] = [];
@@ -1199,19 +1250,43 @@ export function readCompatibleRunArtifacts(paths: RunPaths): ScoreRateCheckpoint
   ) {
     throw new Error('checkpoint bestQualifiedCandidate does not match reevaluation replay');
   }
-  const candidateExists = pathEntryExists(paths.candidate);
+  const candidateExists = candidateBytes !== null;
   const candidateRequired = checkpoint.bestQualifiedCandidate !== null;
   if (candidateExists !== candidateRequired) {
     if (!candidateRequired) {
-      throw new Error('candidate weights file is forbidden without a qualified candidate');
+      throw new Error(
+        `candidate weights at ${labels.candidate} are forbidden without a qualified candidate`,
+      );
     }
-    throw new Error('candidate weights file is required for a qualified candidate');
+    throw new Error(
+      `candidate weights at ${labels.candidate} are required for a qualified candidate`,
+    );
   }
-  if (candidateExists && checkpoint.bestQualifiedCandidate !== null) {
-    const candidate = readCandidateEvaluation(paths.candidate);
+  if (candidateBytes !== null && checkpoint.bestQualifiedCandidate !== null) {
+    const candidate = parseCandidateEvaluation(
+      decodeArtifactBytes(candidateBytes),
+      labels.candidate,
+    );
     if (!sameEvaluation(candidate, checkpoint.bestQualifiedCandidate)) {
-      throw new Error('candidate weights file does not match bestQualifiedCandidate');
+      throw new Error(
+        `candidate weights at ${labels.candidate} do not match bestQualifiedCandidate`,
+      );
     }
   }
   return checkpoint;
+}
+
+export function readCompatibleRunArtifacts(paths: RunPaths): ScoreRateCheckpoint {
+  return validateCompatibleRunArtifactSnapshot({
+    checkpointBytes: readRegularArtifactBytes(paths.checkpoint, 'checkpoint'),
+    logBytes: readRegularArtifactBytes(paths.log, 'training log'),
+    candidateBytes: pathEntryExists(paths.candidate)
+      ? readRegularArtifactBytes(paths.candidate, 'candidate weights')
+      : null,
+    labels: {
+      checkpoint: paths.checkpoint,
+      log: paths.log,
+      candidate: paths.candidate,
+    },
+  });
 }

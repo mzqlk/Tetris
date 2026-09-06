@@ -32,6 +32,13 @@ import {
   WorkBudgetLedger,
   type SearchLimits,
 } from './searchBudget';
+import type { WorkBudgetSnapshot } from './searchBudget';
+import {
+  selectHorizonPlacementBeam,
+  type BeamSource,
+  type HorizonBeamLimits,
+  type TargetWellColumn,
+} from './horizonPolicy';
 
 export { SURVIVAL_EPSILON } from './searchCache';
 /** @deprecated Protected v1 probe compatibility only. */
@@ -88,6 +95,48 @@ export interface SearchDecision {
   diagnostics: SearchDiagnostics;
 }
 
+export interface HorizonSearchLimits extends HorizonBeamLimits {
+  maxLockedDepth: 1 | 2 | 3 | 4;
+  maxWorkUnits: number;
+  transpositionCacheEntries: number;
+  placementCacheEntries: number;
+}
+
+export interface CompletedDepthTrace {
+  depth: 1 | 2 | 3 | 4;
+  actionKind: 'place' | 'hold';
+  beamSource: BeamSource | 'hold';
+  targetWellColumn: TargetWellColumn;
+  value: SearchValue;
+  work: WorkBudgetSnapshot;
+}
+
+export interface HorizonSearchTrace {
+  completedDepths: readonly CompletedDepthTrace[];
+  rootStrategyTargetColumns: readonly number[];
+  strategySlotsRetained: number;
+  strategySlotsDeduplicated: number;
+  strategySlotsPruned: number;
+  targetWellEstablished: number;
+  targetWellReset: number;
+  targetWellInvalidated: number;
+}
+
+interface MutableHorizonTrace {
+  completedDepths: CompletedDepthTrace[];
+  rootStrategyTargetColumns: number[];
+  strategySlotsRetained: number;
+  strategySlotsDeduplicated: number;
+  strategySlotsPruned: number;
+  targetWellEstablished: number;
+  targetWellReset: number;
+  targetWellInvalidated: number;
+}
+
+export interface HorizonSearchDecision extends SearchDecision {
+  trace: HorizonSearchTrace;
+}
+
 /** @deprecated Protected v1 caller compatibility only. */
 export interface LegacySearchDiagnostics {
   completedDepth: number;
@@ -133,7 +182,12 @@ interface SearchContext {
   ledger: WorkBudgetLedger;
   cache: CappedCache<SearchValue>;
   placementCache: PlacementPrototypeCache;
+  policy: SearchPolicy;
 }
+
+type SearchPolicy =
+  | { kind: 'score-only'; root: number; child: number }
+  | { kind: 'horizon'; limits: HorizonBeamLimits; trace: MutableHorizonTrace };
 
 interface InternalSearchBudget {
   maxRootPlacements: number;
@@ -149,6 +203,9 @@ interface NodeResult {
   completed: boolean;
   action: SearchAction | null;
   dominated?: boolean;
+  enumerationIndex?: number;
+  beamSource?: BeamSource;
+  targetWellColumn?: TargetWellColumn;
 }
 
 interface RankedPlacement {
@@ -156,6 +213,26 @@ interface RankedPlacement {
   immediateHeuristic: number;
   pending: PendingPreviewState;
   enumerationIndex: number;
+  linesCleared: number;
+  boardAfter: Board;
+  beamSource: BeamSource;
+  targetWellColumn: TargetWellColumn;
+}
+
+export function summarizeStrategySlotAccounting<T extends { beamSource: BeamSource }>(
+  beam: readonly T[],
+  reduced: readonly T[],
+): {
+  strategySlotsRetained: number;
+  strategySlotsDeduplicated: number;
+  strategySlotsPruned: number;
+} {
+  return {
+    strategySlotsRetained: beam.filter((entry) => entry.beamSource === 'strategy').length,
+    strategySlotsDeduplicated: beam.filter((entry) => entry.beamSource === 'both').length,
+    strategySlotsPruned: beam.filter((entry) =>
+      (entry.beamSource === 'strategy' || entry.beamSource === 'both') && !reduced.includes(entry)).length,
+  };
 }
 
 export interface PlacementBeamEntry {
@@ -187,13 +264,8 @@ export function compareSearchValues(a: SearchValue, b: SearchValue): number {
   return a.expectedHeuristicValue - b.expectedHeuristicValue;
 }
 
-function validateLimits(budget: SearchLimits): void {
-  if (!Number.isInteger(budget.maxRootPlacements) || budget.maxRootPlacements < 1) {
-    throw new Error('maxRootPlacements must be a positive integer');
-  }
-  if (!Number.isInteger(budget.maxChildPlacements) || budget.maxChildPlacements < 1) {
-    throw new Error('maxChildPlacements must be a positive integer');
-  }
+function validateLimits(budget: Pick<SearchLimits,
+  'maxLockedDepth' | 'maxWorkUnits' | 'transpositionCacheEntries' | 'placementCacheEntries'>): void {
   if (![1, 2, 3, 4].includes(budget.maxLockedDepth)) {
     throw new Error('maxLockedDepth must be between 1 and 4');
   }
@@ -210,6 +282,15 @@ function validateLimits(budget: SearchLimits): void {
     if (!Number.isSafeInteger(value) || value < 0) {
       throw new Error(`${name} must be a non-negative safe integer`);
     }
+  }
+}
+
+function validateScorePolicy(policy: Extract<SearchPolicy, { kind: 'score-only' }>): void {
+  if (!Number.isInteger(policy.root) || policy.root < 1) {
+    throw new Error('maxRootPlacements must be a positive integer');
+  }
+  if (!Number.isInteger(policy.child) || policy.child < 1) {
+    throw new Error('maxChildPlacements must be a positive integer');
   }
 }
 
@@ -240,6 +321,7 @@ function rankPlacements(
   context: SearchContext,
   root: boolean,
   remainingDepth: number,
+  currentIntent: TargetWellColumn,
 ): RankedPlacement[] | null {
   const lookup = context.placementCache.get(state, context.ledger);
   if (lookup.kind === 'exhausted') return null;
@@ -248,11 +330,66 @@ function rankPlacements(
     immediateHeuristic: prototype.immediateHeuristic,
     pending: materializePending(prototype, state),
     enumerationIndex: prototype.enumerationIndex,
+    linesCleared: prototype.linesCleared,
+    boardAfter: prototype.boardAfter,
   }));
-  const beam = selectPlacementBeam(entries, root, context.budget);
+  const beam: RankedPlacement[] = context.policy.kind === 'score-only'
+    ? selectPlacementBeam(entries, root, {
+      maxRootPlacements: context.policy.root,
+      maxChildPlacements: context.policy.child,
+    }).map((entry) => ({ ...entry, beamSource: 'score' as const, targetWellColumn: null }))
+    : selectHorizonPlacementBeam(
+      entries.map((entry) => ({
+        value: entry,
+        enumerationIndex: entry.enumerationIndex,
+        immediateHeuristic: entry.immediateHeuristic,
+        linesCleared: entry.linesCleared,
+        boardAfter: entry.boardAfter,
+      })),
+      state.board,
+      root,
+      currentIntent,
+      context.policy.limits,
+    ).map((entry) => ({
+      ...entry.value,
+      beamSource: entry.beamSource,
+      targetWellColumn: entry.targetWellColumn,
+    }));
+  if (context.policy.kind === 'horizon') {
+    const trace = context.policy.trace;
+    if (root) {
+      for (const column of beam
+        .filter((entry) =>
+          (entry.beamSource === 'strategy' || entry.beamSource === 'both')
+          && entry.targetWellColumn !== null)
+        .map((entry) => entry.targetWellColumn as number)) {
+        if (!trace.rootStrategyTargetColumns.includes(column)) {
+          trace.rootStrategyTargetColumns.push(column);
+          trace.rootStrategyTargetColumns.sort((left, right) => left - right);
+        }
+      }
+    }
+    const unprunedAccounting = summarizeStrategySlotAccounting(beam, beam);
+    trace.strategySlotsRetained += unprunedAccounting.strategySlotsRetained;
+    trace.strategySlotsDeduplicated += unprunedAccounting.strategySlotsDeduplicated;
+    for (const entry of beam) {
+      if (currentIntent === null && entry.targetWellColumn !== null) {
+        trace.targetWellEstablished++;
+      } else if (currentIntent !== null && entry.targetWellColumn === null) {
+        if (entry.linesCleared === 4) trace.targetWellReset++;
+        else trace.targetWellInvalidated++;
+      }
+    }
+  }
   if (context.budget.cacheEnabled === false) return beam;
   const reduced = collapseEquivalentPlacements(beam, remainingDepth);
   context.diagnostics.equivalentPlacementsRemoved += beam.length - reduced.length;
+  if (context.policy.kind === 'horizon') {
+    context.policy.trace.strategySlotsPruned += summarizeStrategySlotAccounting(
+      beam,
+      reduced,
+    ).strategySlotsPruned;
+  }
   return reduced;
 }
 
@@ -281,8 +418,20 @@ function addImmediate(immediateHeuristic: number, future: SearchValue): SearchVa
   };
 }
 
-function betterResult(candidate: NodeResult, best: NodeResult | null): boolean {
-  return best === null || compareSearchValues(candidate.value, best.value) > 0;
+function betterResult(
+  candidate: NodeResult,
+  best: NodeResult | null,
+  context: SearchContext,
+): boolean {
+  if (best === null) return true;
+  const comparison = compareSearchValues(candidate.value, best.value);
+  if (comparison !== 0) return comparison > 0;
+  if (context.policy.kind === 'score-only') return false;
+  if (candidate.action?.kind !== 'place') return false;
+  if (best.action?.kind === 'hold') return true;
+  return best.action?.kind === 'place'
+    && (candidate.enumerationIndex ?? Number.MAX_SAFE_INTEGER)
+      < (best.enumerationIndex ?? Number.MAX_SAFE_INTEGER);
 }
 
 function searchChance(
@@ -290,9 +439,10 @@ function searchChance(
   remainingDepth: number,
   root: boolean,
   context: SearchContext,
+  currentIntent: TargetWellColumn,
   incumbentSurvival: number | null = null,
 ): NodeResult {
-  const key = `chance|${pendingStateKey(pending, remainingDepth, root)}`;
+  const key = `chance|${pendingStateKey(pending, remainingDepth, root, currentIntent)}`;
   const cached = cachedResult(context, key);
   if (cached !== null) return cached;
 
@@ -305,7 +455,7 @@ function searchChance(
     const revealed = revealPreview(pending, outcome.piece);
     const child = revealed === null
       ? { value: TERMINAL_VALUE, completed: true, action: null }
-      : searchDecision(revealed, remainingDepth, root, context);
+      : searchDecision(revealed, remainingDepth, root, context, currentIntent);
     if (!child.completed) return child;
     survivalProbability += outcome.probability * child.value.survivalProbability;
     expectedHeuristicValue += outcome.probability * child.value.expectedHeuristicValue;
@@ -336,8 +486,9 @@ function searchPendingLeaf(
   pending: PendingPreviewState,
   root: boolean,
   context: SearchContext,
+  currentIntent: TargetWellColumn,
 ): NodeResult {
-  const key = `pending-leaf|${pendingStateKey(pending, 1, root)}`;
+  const key = `pending-leaf|${pendingStateKey(pending, 1, root, currentIntent)}`;
   const cached = cachedResult(context, key);
   if (cached !== null) return cached;
 
@@ -349,7 +500,7 @@ function searchPendingLeaf(
     next: pending.current.type,
   };
   let best: NodeResult | null = null;
-  const rankedPlacements = rankPlacements(syntheticState, context, root, 1);
+  const rankedPlacements = rankPlacements(syntheticState, context, root, 1, currentIntent);
   if (rankedPlacements === null) return budgetExhaustedResult(context);
   for (const ranked of rankedPlacements) {
     const candidate: NodeResult = {
@@ -359,8 +510,11 @@ function searchPendingLeaf(
       },
       completed: true,
       action: { kind: 'place', placement: ranked.placement },
+      enumerationIndex: ranked.enumerationIndex,
+      beamSource: ranked.beamSource,
+      targetWellColumn: ranked.targetWellColumn,
     };
-    if (betterResult(candidate, best)) best = candidate;
+    if (betterResult(candidate, best, context)) best = candidate;
   }
 
   const result = best ?? { value: TERMINAL_VALUE, completed: true, action: null };
@@ -373,14 +527,15 @@ function searchDecision(
   remainingDepth: number,
   root: boolean,
   context: SearchContext,
+  currentIntent: TargetWellColumn,
 ): NodeResult {
-  const key = decisionStateKey(state, remainingDepth, root);
+  const key = decisionStateKey(state, remainingDepth, root, currentIntent);
   const cached = cachedResult(context, key);
   if (cached !== null) return cached;
 
   context.diagnostics.expandedDecisionNodes++;
   let best: NodeResult | null = null;
-  const rankedPlacements = rankPlacements(state, context, root, remainingDepth);
+  const rankedPlacements = rankPlacements(state, context, root, remainingDepth, currentIntent);
   if (rankedPlacements === null) return budgetExhaustedResult(context);
   for (const ranked of rankedPlacements) {
     let future: NodeResult;
@@ -396,6 +551,7 @@ function searchDecision(
         remainingDepth - 1,
         false,
         context,
+        ranked.targetWellColumn,
         best?.value.survivalProbability ?? null,
       );
     }
@@ -406,23 +562,27 @@ function searchDecision(
       value: addImmediate(ranked.immediateHeuristic, future.value),
       completed: true,
       action: { kind: 'place', placement: ranked.placement },
+      enumerationIndex: ranked.enumerationIndex,
+      beamSource: ranked.beamSource,
+      targetWellColumn: ranked.targetWellColumn,
     };
-    if (betterResult(candidate, best)) best = candidate;
+    if (betterResult(candidate, best, context)) best = candidate;
   }
 
   const hold = applyHold(state);
   if (hold.kind !== 'unavailable') {
     let held: NodeResult;
     if (hold.kind === 'ready') {
-      held = searchDecision(hold.state, remainingDepth, root, context);
+      held = searchDecision(hold.state, remainingDepth, root, context, currentIntent);
     } else if (remainingDepth === 1) {
-      held = searchPendingLeaf(hold.state, root, context);
+      held = searchPendingLeaf(hold.state, root, context, currentIntent);
     } else {
       held = searchChance(
         hold.state,
         remainingDepth,
         root,
         context,
+        currentIntent,
         best?.value.survivalProbability ?? null,
       );
     }
@@ -437,7 +597,7 @@ function searchDecision(
       completed: true,
       action: { kind: 'hold' },
     };
-    if (betterResult(candidate, best)) best = candidate;
+    if (betterResult(candidate, best, context)) best = candidate;
   }
 
   const result = best ?? { value: TERMINAL_VALUE, completed: true, action: null };
@@ -472,6 +632,7 @@ function createSearchContext(
   budget: InternalSearchBudget,
   ledger: WorkBudgetLedger,
   diagnostics: SearchDiagnostics,
+  policy: SearchPolicy,
 ): SearchContext {
   return {
     budget,
@@ -483,6 +644,7 @@ function createSearchContext(
       budget.cacheEnabled,
       budget.placementCacheEntries,
     ),
+    policy,
   };
 }
 
@@ -523,7 +685,10 @@ export function searchFixed(
     shouldAbort: () => false,
   },
 ): SearchDecision | null {
-  return runBudgeted(state, weights, legacyLimits(budget), budget.cacheEnabled !== false);
+  const limits = legacyLimits(budget);
+  return runBudgeted(state, weights, limits, budget.cacheEnabled !== false, {
+    kind: 'score-only', root: limits.maxRootPlacements, child: limits.maxChildPlacements,
+  });
 }
 
 /** Browser entry point: progressively deepen and publish only complete depths. */
@@ -532,33 +697,78 @@ export function searchBudgeted(
   weights: number[],
   limits: SearchLimits = DETERMINISTIC_SEARCH_LIMITS,
 ): SearchDecision | null {
-  return runBudgeted(state, weights, limits, true);
+  return runBudgeted(state, weights, limits, true, {
+    kind: 'score-only', root: limits.maxRootPlacements, child: limits.maxChildPlacements,
+  });
+}
+
+export function searchHorizonBudgeted(
+  state: PublicSearchState,
+  weights: number[],
+  limits: HorizonSearchLimits,
+): HorizonSearchDecision | null {
+  const trace: MutableHorizonTrace = {
+    completedDepths: [],
+    rootStrategyTargetColumns: [],
+    strategySlotsRetained: 0,
+    strategySlotsDeduplicated: 0,
+    strategySlotsPruned: 0,
+    targetWellEstablished: 0,
+    targetWellReset: 0,
+    targetWellInvalidated: 0,
+  };
+  const decision = runBudgeted(state, weights, limits, true, {
+    kind: 'horizon', limits, trace,
+  });
+  return decision === null ? null : {
+    ...decision,
+    trace: {
+      ...trace,
+      completedDepths: [...trace.completedDepths],
+      rootStrategyTargetColumns: [...trace.rootStrategyTargetColumns],
+    },
+  };
 }
 
 function runBudgeted(
   state: PublicSearchState,
   weights: number[],
-  limits: SearchLimits,
+  limits: Pick<SearchLimits,
+    'maxLockedDepth' | 'maxWorkUnits' | 'transpositionCacheEntries' | 'placementCacheEntries'>,
   cacheEnabled: boolean,
+  policy: SearchPolicy,
 ): SearchDecision | null {
   assertPublicSearchState(state);
   validateLimits(limits);
   validateWeights(weights);
+  if (policy.kind === 'score-only') {
+    validateScorePolicy(policy);
+  } else {
+    selectHorizonPlacementBeam([], state.board, true, null, policy.limits);
+  }
 
   const diagnostics = emptySearchDiagnostics();
   const context = createSearchContext(weights, {
-    maxRootPlacements: limits.maxRootPlacements,
-    maxChildPlacements: limits.maxChildPlacements,
+    maxRootPlacements: policy.kind === 'score-only' ? policy.root : 0,
+    maxChildPlacements: policy.kind === 'score-only' ? policy.child : 0,
     maxLockedDepth: limits.maxLockedDepth,
     transpositionCacheEntries: limits.transpositionCacheEntries,
     placementCacheEntries: limits.placementCacheEntries,
     cacheEnabled,
-  }, new WorkBudgetLedger(limits.maxWorkUnits), diagnostics);
+  }, new WorkBudgetLedger(limits.maxWorkUnits), diagnostics, policy);
   let committed: SearchDecision | null = null;
   for (let depth = 1; depth <= limits.maxLockedDepth; depth++) {
+    const cacheCheckpoint = policy.kind === 'horizon' ? {
+      transposition: context.cache.snapshotEntries(),
+      placement: context.placementCache.snapshotEntries(),
+    } : null;
     diagnostics.attemptedDepth = depth as 1 | 2 | 3 | 4;
-    const result = searchDecision(state, depth, true, context);
+    const result = searchDecision(state, depth, true, context, null);
     if (!result.completed) {
+      if (cacheCheckpoint !== null) {
+        context.cache.restoreEntries(cacheCheckpoint.transposition);
+        context.placementCache.restoreEntries(cacheCheckpoint.placement);
+      }
       diagnostics.budgetExhausted = true;
       if (depth === 1) throw new Error('depth-one work budget invariant violated');
       break;
@@ -566,6 +776,16 @@ function runBudgeted(
     diagnostics.completedDepth = depth as 1 | 2 | 3 | 4;
     if (result.action !== null) {
       committed = { action: result.action, value: result.value, diagnostics };
+      if (policy.kind === 'horizon') {
+        policy.trace.completedDepths.push({
+          depth: depth as 1 | 2 | 3 | 4,
+          actionKind: result.action.kind,
+          beamSource: result.action.kind === 'hold' ? 'hold' : result.beamSource ?? 'score',
+          targetWellColumn: result.action.kind === 'hold' ? null : result.targetWellColumn ?? null,
+          value: result.value,
+          work: context.ledger.snapshot(),
+        });
+      }
     }
   }
   finishDiagnostics(context);

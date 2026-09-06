@@ -10,7 +10,9 @@ import {
   PlacementPrototypeCache,
   chanceSurvivalUpperBound,
   collapseEquivalentPlacements,
+  decisionStateKey,
   occupancyBoardKey,
+  pendingStateKey,
   placementPrototypeKey,
   materializePending,
   shouldPruneChance,
@@ -55,8 +57,9 @@ function entry(
   pending: PendingPreviewState,
   immediateHeuristic: number,
   enumerationIndex: number,
+  targetWellColumn: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | null = null,
 ) {
-  return { pending, immediateHeuristic, enumerationIndex };
+  return { pending, immediateHeuristic, enumerationIndex, targetWellColumn };
 }
 
 describe('search cache primitives', () => {
@@ -83,6 +86,16 @@ describe('search cache primitives', () => {
         position: { ...current.position, x: current.position.x + 1 },
       }),
     );
+  });
+
+  it('keeps continuation intent in decision and pending cache identities', () => {
+    const decision = publicState();
+    const pending = pendingState();
+
+    expect(decisionStateKey(decision, 3, false, 4))
+      .not.toBe(decisionStateKey(decision, 3, false, null));
+    expect(pendingStateKey(pending, 2, false, 4))
+      .not.toBe(pendingStateKey(pending, 2, false, 5));
   });
 
   it('reuses geometry and features across visible preview changes', () => {
@@ -195,6 +208,13 @@ describe('search cache primitives', () => {
     expect(collapseEquivalentPlacements([
       entry(shared, 5, 2), entry(shared, 5, 1),
     ], 3)[0].enumerationIndex).toBe(1);
+  });
+
+  it('does not collapse placements with distinct continuation intents', () => {
+    const shared = pendingState();
+    expect(collapseEquivalentPlacements([
+      entry(shared, 5, 1, 4), entry(shared, 5, 2, 5),
+    ], 3)).toHaveLength(2);
   });
 
   it('prunes only a strictly worse survival upper bound', () => {

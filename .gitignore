@@ -39,3 +39,8 @@ public/ai/
 # Retired training runs, kept for forensics. NOT under public/ — Vite copies
 # that directory verbatim into dist, and a dead run has no business shipping.
 training-archive/
+
+# D2 diagnostic evidence. Run-scoped receipts, manifests and run records; the
+# whole directory, because the run id is derived per protocol/input identity.
+# NOT under public/ — Vite copies that directory verbatim into dist.
+diagnostics/

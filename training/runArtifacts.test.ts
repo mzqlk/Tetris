@@ -16,6 +16,8 @@ import {
   readCompatibleCheckpoint,
   readCompatibleRunArtifacts,
   resolveRunPaths,
+  validateCompatibleRunArtifactSnapshot,
+  type CompatibleRunArtifactSnapshot,
 } from './runArtifacts';
 
 const dirs: string[] = [];
@@ -25,6 +27,15 @@ const temp = () => {
   return dir;
 };
 const copy = <T>(value: T): T => structuredClone(value);
+const errorMessage = (action: () => unknown): string => {
+  try {
+    action();
+  } catch (error) {
+    if (error instanceof Error) return error.message;
+    throw error;
+  }
+  throw new Error('expected action to throw');
+};
 
 const EXPECTED_SEARCH_METADATA = {
   searchContract: 'bag-expectimax-hold-v2',
@@ -314,6 +325,17 @@ const CANDIDATE_FILE = {
   trainedAt: '2026-08-11T00:00:00.000Z',
 };
 
+const bytes = (text: string): Uint8Array => Buffer.from(text, 'utf8');
+const snapshot = (
+  checkpoint: unknown,
+  records: readonly unknown[],
+  candidate: unknown | null,
+): CompatibleRunArtifactSnapshot => ({
+  checkpointBytes: bytes(JSON.stringify(checkpoint)),
+  logBytes: bytes(`${records.map((record) => JSON.stringify(record)).join('\n')}\n`),
+  candidateBytes: candidate === null ? null : bytes(JSON.stringify(candidate)),
+});
+
 const writeRun = (
   checkpoint: unknown,
   records: unknown[],
@@ -328,6 +350,20 @@ const writeRun = (
   if (candidate !== null) writeFileSync(paths.candidate, JSON.stringify(candidate));
   return paths;
 };
+
+const captureRunSnapshot = (
+  paths: ReturnType<typeof resolveRunPaths>,
+  candidatePresent: boolean,
+): CompatibleRunArtifactSnapshot => ({
+  checkpointBytes: readFileSync(paths.checkpoint),
+  logBytes: readFileSync(paths.log),
+  candidateBytes: candidatePresent ? readFileSync(paths.candidate) : null,
+  labels: {
+    checkpoint: paths.checkpoint,
+    log: paths.log,
+    candidate: paths.candidate,
+  },
+});
 
 afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -469,6 +505,222 @@ describe('readCompatibleCheckpoint', () => {
     writeFileSync(target, JSON.stringify(CHECKPOINT));
     symlinkSync(target, path, 'file');
     expect(() => readCompatibleCheckpoint(path)).toThrow(/symbolic|reparse|regular/i);
+  });
+});
+
+describe('validateCompatibleRunArtifactSnapshot snapshot validation', () => {
+  const NO_CANDIDATE_CHECKPOINT = {
+    ...copy(CHECKPOINT),
+    gen: 1,
+    maxPieces: 600,
+    publishedBaseline: null,
+    bestQualifiedCandidate: null,
+  };
+
+  it('accepts an absent-candidate snapshot with the same result as the path wrapper', () => {
+    const expected = readCompatibleRunArtifacts(writeRun(NO_CANDIDATE_CHECKPOINT, [GEN_0]));
+
+    expect(validateCompatibleRunArtifactSnapshot(
+      snapshot(NO_CANDIDATE_CHECKPOINT, [GEN_0], null),
+    )).toEqual(expected);
+  });
+
+  it('accepts a qualified-candidate snapshot with the same result as the path wrapper', () => {
+    const expected = readCompatibleRunArtifacts(
+      writeRun(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2], CANDIDATE_FILE),
+    );
+
+    expect(validateCompatibleRunArtifactSnapshot(
+      snapshot(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2], CANDIDATE_FILE),
+    )).toEqual(expected);
+  });
+
+  it('rejects a truncated snapshot log and names its literal diagnostic label', () => {
+    const invalid = {
+      ...snapshot(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2], CANDIDATE_FILE),
+      logBytes: bytes(
+        [GEN_0, GEN_1, REEVALUATION_2].map((record) => JSON.stringify(record)).join('\n'),
+      ),
+      labels: {
+        checkpoint: 'literal checkpoint snapshot',
+        log: 'literal truncated log snapshot',
+        candidate: 'literal candidate snapshot',
+      },
+    };
+
+    expect(() => validateCompatibleRunArtifactSnapshot(invalid))
+      .toThrow(/literal truncated log snapshot.*truncated/i);
+  });
+
+  it('rejects forbidden candidate bytes and names the candidate snapshot label', () => {
+    const invalid = {
+      ...snapshot(NO_CANDIDATE_CHECKPOINT, [GEN_0], CANDIDATE_FILE),
+      labels: {
+        checkpoint: 'literal checkpoint snapshot',
+        log: 'literal log snapshot',
+        candidate: 'literal forbidden candidate snapshot',
+      },
+    };
+
+    expect(() => validateCompatibleRunArtifactSnapshot(invalid))
+      .toThrow(/literal forbidden candidate snapshot.*forbidden/i);
+  });
+
+  it('rejects an absent required candidate and names the candidate snapshot label', () => {
+    const invalid = {
+      ...snapshot(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2], null),
+      labels: {
+        checkpoint: 'literal checkpoint snapshot',
+        log: 'literal log snapshot',
+        candidate: 'literal required candidate snapshot',
+      },
+    };
+
+    expect(() => validateCompatibleRunArtifactSnapshot(invalid))
+      .toThrow(/literal required candidate snapshot.*required/i);
+  });
+
+  it('rejects mismatched candidate bytes and names the candidate snapshot label', () => {
+    const invalidCandidate = { ...CANDIDATE_FILE, meanScore: 30_001 };
+    const invalid = {
+      ...snapshot(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2], invalidCandidate),
+      labels: {
+        checkpoint: 'literal checkpoint snapshot',
+        log: 'literal log snapshot',
+        candidate: 'literal mismatched candidate snapshot',
+      },
+    };
+
+    expect(() => validateCompatibleRunArtifactSnapshot(invalid))
+      .toThrow(/literal mismatched candidate snapshot.*bestQualifiedCandidate/i);
+  });
+
+  it('owns a captured snapshot after every originating artifact path is replaced', () => {
+    const paths = writeRun(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2], CANDIDATE_FILE);
+    const captured = captureRunSnapshot(paths, true);
+    const expected = validateCompatibleRunArtifactSnapshot(captured);
+    for (const path of [paths.checkpoint, paths.log, paths.candidate]) {
+      renameSync(path, `${path}.original`);
+      writeFileSync(path, 'replacement');
+    }
+
+    expect(validateCompatibleRunArtifactSnapshot(captured)).toEqual(expected);
+  });
+
+  it('does not write files while validating a pure snapshot', () => {
+    const outputDir = temp();
+
+    validateCompatibleRunArtifactSnapshot(
+      snapshot(NO_CANDIDATE_CHECKPOINT, [GEN_0], null),
+    );
+
+    expect(readdirSync(outputDir)).toEqual([]);
+  });
+
+  it('preserves path-bearing empty-log rejection parity with the wrapper', () => {
+    const paths = writeRun(NO_CANDIDATE_CHECKPOINT, [GEN_0]);
+    writeFileSync(paths.log, '');
+    const captured = captureRunSnapshot(paths, false);
+
+    const wrapperMessage = errorMessage(() => readCompatibleRunArtifacts(paths));
+    expect(errorMessage(() => validateCompatibleRunArtifactSnapshot(captured)))
+      .toBe(wrapperMessage);
+    expect(wrapperMessage).toContain(paths.log);
+    expect(wrapperMessage).toMatch(/empty/i);
+  });
+
+  it('preserves path-bearing truncated-log rejection parity with the wrapper', () => {
+    const paths = writeRun(
+      CHECKPOINT,
+      [GEN_0, GEN_1, REEVALUATION_2],
+      CANDIDATE_FILE,
+      false,
+    );
+    const captured = captureRunSnapshot(paths, true);
+
+    const wrapperMessage = errorMessage(() => readCompatibleRunArtifacts(paths));
+    expect(errorMessage(() => validateCompatibleRunArtifactSnapshot(captured)))
+      .toBe(wrapperMessage);
+    expect(wrapperMessage).toContain(paths.log);
+    expect(wrapperMessage).toMatch(/truncated/i);
+  });
+
+  it('preserves path-bearing candidate-mismatch rejection parity with the wrapper', () => {
+    const mismatch = { ...CANDIDATE_FILE, meanScore: 30_001 };
+    const paths = writeRun(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2], mismatch);
+    const captured = captureRunSnapshot(paths, true);
+
+    const wrapperMessage = errorMessage(() => readCompatibleRunArtifacts(paths));
+    expect(errorMessage(() => validateCompatibleRunArtifactSnapshot(captured)))
+      .toBe(wrapperMessage);
+    expect(wrapperMessage).toContain(paths.candidate);
+    expect(wrapperMessage).toMatch(/bestQualifiedCandidate/i);
+  });
+
+  it('preserves path-bearing required-candidate rejection parity with the wrapper', () => {
+    const paths = writeRun(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2]);
+    const captured = captureRunSnapshot(paths, false);
+
+    const wrapperMessage = errorMessage(() => readCompatibleRunArtifacts(paths));
+    expect(errorMessage(() => validateCompatibleRunArtifactSnapshot(captured)))
+      .toBe(wrapperMessage);
+    expect(wrapperMessage).toContain(paths.candidate);
+    expect(wrapperMessage).toMatch(/required/i);
+  });
+
+  it('preserves path-bearing forbidden-candidate rejection parity with the wrapper', () => {
+    const paths = writeRun(NO_CANDIDATE_CHECKPOINT, [GEN_0], CANDIDATE_FILE);
+    const captured = captureRunSnapshot(paths, true);
+
+    const wrapperMessage = errorMessage(() => readCompatibleRunArtifacts(paths));
+    expect(errorMessage(() => validateCompatibleRunArtifactSnapshot(captured)))
+      .toBe(wrapperMessage);
+    expect(wrapperMessage).toContain(paths.candidate);
+    expect(wrapperMessage).toMatch(/forbidden/i);
+  });
+
+  it('rejects UTF-8 BOM-prefixed checkpoint bytes with path-wrapper parity', () => {
+    const paths = writeRun(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2], CANDIDATE_FILE);
+    writeFileSync(
+      paths.checkpoint,
+      bytes(`\uFEFF${JSON.stringify(CHECKPOINT)}`),
+    );
+    const captured = captureRunSnapshot(paths, true);
+
+    const wrapperMessage = errorMessage(() => readCompatibleRunArtifacts(paths));
+    expect(errorMessage(() => validateCompatibleRunArtifactSnapshot(captured)))
+      .toBe(wrapperMessage);
+    expect(wrapperMessage).toContain(paths.checkpoint);
+    expect(wrapperMessage).toMatch(/invalid JSON/i);
+  });
+
+  it('rejects a UTF-8 BOM on the first log line with wrapper-message parity', () => {
+    const paths = writeRun(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2], CANDIDATE_FILE);
+    const records = [GEN_0, GEN_1, REEVALUATION_2]
+      .map((record) => JSON.stringify(record))
+      .join('\n');
+    writeFileSync(paths.log, bytes(`\uFEFF${records}\n`));
+    const captured = captureRunSnapshot(paths, true);
+
+    const wrapperMessage = errorMessage(() => readCompatibleRunArtifacts(paths));
+    expect(errorMessage(() => validateCompatibleRunArtifactSnapshot(captured)))
+      .toBe(wrapperMessage);
+    expect(wrapperMessage).toMatch(/training log line 1.*invalid JSON/i);
+  });
+
+  it('rejects UTF-8 BOM-prefixed candidate bytes with path-wrapper parity', () => {
+    const paths = writeRun(CHECKPOINT, [GEN_0, GEN_1, REEVALUATION_2], CANDIDATE_FILE);
+    writeFileSync(
+      paths.candidate,
+      bytes(`\uFEFF${JSON.stringify(CANDIDATE_FILE)}`),
+    );
+    const captured = captureRunSnapshot(paths, true);
+
+    const wrapperMessage = errorMessage(() => readCompatibleRunArtifacts(paths));
+    expect(errorMessage(() => validateCompatibleRunArtifactSnapshot(captured)))
+      .toBe(wrapperMessage);
+    expect(wrapperMessage).toContain(paths.candidate);
+    expect(wrapperMessage).toMatch(/invalid JSON/i);
   });
 });
 
@@ -762,7 +1014,11 @@ describe('readCompatibleRunArtifacts', () => {
     const target = join(paths.outputDir, 'target.jsonl');
     renameSync(paths.log, target);
     symlinkSync(target, paths.log, 'file');
-    expect(() => readCompatibleRunArtifacts(paths)).toThrow(/symbolic|reparse|regular/i);
+    try {
+      expect(() => readCompatibleRunArtifacts(paths)).toThrow(/symbolic|reparse|regular/i);
+    } finally {
+      rmSync(paths.log);
+    }
   });
 });
 

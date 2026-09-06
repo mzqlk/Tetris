@@ -70,6 +70,17 @@ function currentEntry(
   }
 }
 
+/**
+ * Where this repository's trainer lock lives, without acquiring anything.
+ *
+ * A read-only consumer — the D2 diagnostic checks it before starting, because
+ * running a 261-shard job beside a live trainer would have them fight for every
+ * core — needs the path but must never create or remove the file.
+ */
+export function trainerLockPathFor(repositoryRoot: string): string {
+  return lockPathFor(canonicalRepositoryIdentity(repositoryRoot));
+}
+
 export function acquireRunLock(repositoryRoot: string): RunLock {
   const repositoryIdentity = canonicalRepositoryIdentity(repositoryRoot);
   const lockPath = lockPathFor(repositoryIdentity);

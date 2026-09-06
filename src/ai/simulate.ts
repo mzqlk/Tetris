@@ -13,11 +13,13 @@ import {
 import { mulberry32 } from './rng';
 import {
   searchBudgeted,
+  type SearchDecision,
   type SearchDiagnostics,
 } from './search';
 import { DETERMINISTIC_SEARCH_LIMITS, type SearchLimits } from './searchBudget';
 
 import {
+  assertPublicSearchState,
   initialUnseenBagMask,
   revealPiece,
   type BagMask,
@@ -55,6 +57,23 @@ export interface SimulationSearchDiagnostics {
   cacheHits: number;
 }
 
+export interface SimulationDecisionObservation {
+  publicState: PublicSearchState;
+  decision: SearchDecision;
+  scheduledPieceNumber: number;
+  score: number;
+  lines: number;
+  level: number;
+  searchDiagnostics: SimulationSearchDiagnostics;
+}
+
+export interface SimulateFromStateOptions {
+  weights: number[];
+  maxPieces: number;
+  limits?: SearchLimits;
+  onDecision?: (observation: SimulationDecisionObservation) => void;
+}
+
 export interface SimState {
   board: Board;
   currentPiece: Piece | null;
@@ -88,6 +107,13 @@ export interface SimState {
   expandedChanceNodes: number;
   cacheHits: number;
   rng: () => number;
+}
+
+export interface FrozenContinuationCapture {
+  state: PublicSearchState;
+  score: number;
+  lines: number;
+  level: number;
 }
 
 export interface SimResult {
@@ -170,6 +196,68 @@ export function createSimState(seed: number): SimState {
   if (isGameOver(state.board, state.currentPiece)) state.status = 'gameover';
 
   return state;
+}
+
+function assertNonNegativeInteger(value: number, name: string): void {
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+    throw new Error(`${name} must be a finite non-negative integer`);
+  }
+}
+
+function assertFrozenPieceType(value: number, name: string): asserts value is PieceType {
+  if (!Number.isInteger(value) || value < 1 || value > 7) {
+    throw new Error(`${name} must be a piece type`);
+  }
+}
+
+export function createFrozenContinuationState(
+  capture: FrozenContinuationCapture,
+  futurePieces: readonly PieceType[],
+): SimState {
+  assertPublicSearchState(capture.state);
+  assertNonNegativeInteger(capture.score, 'score');
+  assertNonNegativeInteger(capture.lines, 'lines');
+  assertNonNegativeInteger(capture.level, 'level');
+  if (capture.level !== calculateLevel(capture.lines)) {
+    throw new Error('level must match calculated level');
+  }
+  if (futurePieces.length === 0) throw new Error('at least one future piece is required');
+  futurePieces.forEach((piece, index) => assertFrozenPieceType(piece, `future piece ${index}`));
+
+  const board = capture.state.board.map((row) => [...row]);
+  const currentPiece = clonePiece(capture.state.current);
+  return {
+    board,
+    currentPiece,
+    nextPiece: createPiece(capture.state.next),
+    holdPiece: capture.state.hold,
+    holdAvailable: capture.state.holdAvailable,
+    unseenBagMask: capture.state.unseenBagMask,
+    bag: [...futurePieces],
+    score: capture.score,
+    level: capture.level,
+    lines: capture.lines,
+    clearCounts: emptyLineClearCounts(),
+    status: isGameOver(board, currentPiece) ? 'gameover' : 'playing',
+    pieces: 0,
+    heightSum: 0,
+    strategyDiagnosticSum: emptyStrategyDiagnostics(),
+    searchCalls: 0,
+    holdActions: 0,
+    completedDepthSum: 0,
+    minCompletedDepth: 0,
+    completedDepthHistogram: [0, 0, 0, 0, 0],
+    totalWorkUnitsUsed: 0,
+    maxWorkUnitsUsed: 0,
+    budgetExhaustedSearches: 0,
+    placementEvaluationUnits: 0,
+    chanceExpansionUnits: 0,
+    cacheHitUnits: 0,
+    expandedDecisionNodes: 0,
+    expandedChanceNodes: 0,
+    cacheHits: 0,
+    rng: () => { throw new Error('frozen future stream exhausted'); },
+  };
 }
 
 /** Mirrors gameStore's lockAndSpawn: lock, clear, score, promote the preview. */
@@ -300,6 +388,34 @@ function recordSearchDiagnostics(state: SimState, diagnostics: SearchDiagnostics
   state.cacheHits += diagnostics.cacheHits;
 }
 
+function clonePiece(piece: Piece): Piece {
+  return { ...piece, position: { ...piece.position } };
+}
+
+function clonePublicSearchState(state: PublicSearchState): PublicSearchState {
+  return {
+    ...state,
+    board: state.board.map((row) => [...row]),
+    current: clonePiece(state.current),
+  };
+}
+
+function cloneSearchDecision(decision: SearchDecision): SearchDecision {
+  return {
+    action: decision.action.kind === 'hold'
+      ? { kind: 'hold' }
+      : {
+        kind: 'place',
+        placement: {
+          piece: clonePiece(decision.action.placement.piece),
+          moves: [...decision.action.placement.moves],
+        },
+      },
+    value: { ...decision.value },
+    diagnostics: { ...decision.diagnostics },
+  };
+}
+
 function simulationSearchDiagnostics(state: SimState): SimulationSearchDiagnostics {
   return {
     searchCalls: state.searchCalls,
@@ -331,21 +447,29 @@ function simulationSearchDiagnostics(state: SimState): SimulationSearchDiagnosti
  */
 export function simulateFromState(
   state: SimState,
-  opts: { weights: number[]; maxPieces: number; limits?: SearchLimits },
+  opts: SimulateFromStateOptions,
 ): SimResult {
   if (opts.weights.length !== FEATURE_COUNT) {
     throw new Error(`expected ${FEATURE_COUNT} weights, got ${opts.weights.length}`);
   }
 
   while (state.status === 'playing' && state.pieces < opts.maxPieces) {
-    const decision = searchBudgeted(
-      projectPublicSearchState(state), opts.weights, opts.limits ?? DETERMINISTIC_SEARCH_LIMITS,
-    );
+    const publicState = projectPublicSearchState(state);
+    const decision = searchBudgeted(publicState, opts.weights, opts.limits ?? DETERMINISTIC_SEARCH_LIMITS);
     if (decision === null) {
       state.status = 'gameover';
       break;
     }
     recordSearchDiagnostics(state, decision.diagnostics);
+    opts.onDecision?.({
+      publicState: clonePublicSearchState(publicState),
+      decision: cloneSearchDecision(decision),
+      scheduledPieceNumber: state.pieces + 1,
+      score: state.score,
+      lines: state.lines,
+      level: state.level,
+      searchDiagnostics: simulationSearchDiagnostics(state),
+    });
     if (decision.action.kind === 'hold') {
       applyAction(state, 'hold');
       // Count only Holds that complete a valid decision cycle. A Hold may
