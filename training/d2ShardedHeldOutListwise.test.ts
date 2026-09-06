@@ -1291,3 +1291,35 @@ describe("a D1 runtime error keeps its name and its words", () => {
     expect((ends[0] as { failureDetail: string | null }).failureDetail).toBeNull();
   });
 });
+
+describe("runProvenance describes the episode that ended the run", () => {
+  it('reports as many causes and durations as episodes', async () => {
+    // `finish` writes the terminating episode's `episode-end` only after the
+    // verdict document exists, so reading the run record alone gave
+    // `episodes: n` beside `n - 1` causes. The real run shipped a verdict
+    // saying `episodes: 2` with a single `["episode-incomplete"]` -- the
+    // provenance block omitting the very episode that produced it.
+    const { outcome } = await runToCompletion();
+    const doc = JSON.parse(outcome.stdout) as {
+      runProvenance: {
+        episodes: number;
+        terminationCauses: string[];
+        durationsMs: number[];
+      };
+    };
+    const p = doc.runProvenance;
+    expect(p.terminationCauses).toHaveLength(p.episodes);
+    expect(p.durationsMs).toHaveLength(p.episodes);
+    expect(p.terminationCauses.at(-1)).toBe('completed');
+  });
+
+  it('keeps runProvenance out of resultDigest', async () => {
+    // The append must not leak into the canonical projection, or the
+    // partition-invariance of `resultDigest` would break.
+    const { outcome } = await runToCompletion();
+    const doc = JSON.parse(outcome.stdout) as Record<string, unknown>;
+    const { resultDigest, runProvenance, ...canonical } = doc;
+    expect(runProvenance).toBeDefined();
+    expect(resultDigest).toBe(digestOf(canonical));
+  });
+});

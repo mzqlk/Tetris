@@ -634,8 +634,11 @@ describe('process and lock predicates', () => {
    * pass while the shipped binary refused its own resume.
    */
   const MARKER = 'training/d2ShardedHeldOutListwise.ts';
-  const table = (...rows: [number, number, string][]) =>
-    rows.map(([pid, ppid, commandLine]) => ({ pid, ppid, commandLine }));
+  // A fourth element gives the row a creation time; omitted, every row shares
+  // one, which is the "parents are not younger than their children" case.
+  const table = (...rows: ([number, number, string] | [number, number, string, number])[]) =>
+    rows.map(([pid, ppid, commandLine, startedAtTicks = 0]) =>
+      ({ pid, ppid, commandLine, startedAtTicks }));
 
   it('does not mistake its own tsx launcher for another D2 process', () => {
     // The production topology: npm -> tsx supervisor -> orchestrator, with the
@@ -678,6 +681,38 @@ describe('process and lock predicates', () => {
     // produce; neither may hang the walk or crash it.
     expect(anyD2ProcessRunning(table([300, 999, `node --import tsx ${MARKER}`]), 300)).toBe(false);
     expect(anyD2ProcessRunning(table([300, 300, `node --import tsx ${MARKER}`]), 300)).toBe(false);
+  });
+
+  it('does not adopt a recycled pid that started after its own child', () => {
+    // Windows leaves `ParentProcessId` pointing at a number, not a process.
+    // Once that number is recycled the "parent" is a stranger, and adopting it
+    // pulls its whole subtree into `kin` -- which is how a genuinely live
+    // second diagnostic could be mistaken for part of this run and allowed to
+    // proceed concurrently.
+    expect(anyD2ProcessRunning(table(
+      [300, 200, `node --import tsx ${MARKER}`, 5_000],
+      [200, 100, `node --import tsx ${MARKER}`, 9_000],
+    ), 300)).toBe(true);
+  });
+
+  it('still adopts a parent that genuinely predates its child', () => {
+    // The other direction, so the guard cannot pass by refusing everything: a
+    // real launcher chain is older at every step and stays out of the answer.
+    expect(anyD2ProcessRunning(table(
+      [300, 200, `node --import tsx ${MARKER}`, 9_000],
+      [200, 100, `node tsx/dist/cli.mjs ${MARKER}`, 5_000],
+      [100, 1, 'npm run diagnose:d2-sharded-listwise', 1_000],
+    ), 300)).toBe(false);
+  });
+
+  it('treats an unknown creation time as no evidence and stops the walk', () => {
+    // `CreationDate` is absent on some processes. "I could not check" is not
+    // evidence of kinship any more than it is evidence that nothing is
+    // running, so the walk stops and the marker refuses the takeover.
+    expect(anyD2ProcessRunning(table(
+      [300, 200, `node --import tsx ${MARKER}`, 5_000],
+      [200, 100, `node --import tsx ${MARKER}`, Number.NaN],
+    ), 300)).toBe(true);
   });
 
   it('answers from the live table without throwing', () => {
@@ -787,10 +822,13 @@ describe('a command line that spans lines does not become a phantom process', ()
    * way a wrapped line usually looks.
    */
   const WRAPPED = [
-    '100|1|npm run diagnose',
-    '200|100|node tsx/dist/cli.mjs --title',
-    'D2|run|node --import tsx training/d2ShardedHeldOutListwise.ts',
-    '300|200|node --import tsx training/d2ShardedHeldOutListwise.ts',
+    '100|1|1000|npm run diagnose',
+    '200|100|2000|node tsx/dist/cli.mjs --title',
+    // The continuation that bites: it carries pipes, so a naive split parses it
+    // as a row of its own. It still cannot match `pid|ppid|ticks|`, because
+    // `D2` is not digits.
+    'D2|run|x|node --import tsx training/d2ShardedHeldOutListwise.ts',
+    '300|200|3000|node --import tsx training/d2ShardedHeldOutListwise.ts',
   ].join('\n');
 
   it('folds a continuation back into the row it belongs to', () => {

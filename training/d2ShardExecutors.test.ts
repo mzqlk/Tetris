@@ -553,12 +553,22 @@ describe('real D1 chain through the orchestrator', () => {
       runProvenance: { episodes: number; terminationCauses: string[] };
     }).runProvenance;
     expect(provenance.episodes).toBe(5);
-    // Four causes, not five: the verdict document is assembled before the
-    // finishing episode writes its own `episode-end`, so `episodes` counts it
-    // but `terminationCauses` cannot. That asymmetry is why this field is
-    // outside the canonical projection and the digest.
+    // Five causes for five episodes, the last of them `completed`.
+    //
+    // This assertion previously expected four, with a comment explaining that
+    // the verdict document is assembled before the finishing episode writes its
+    // own `episode-end` and so cannot name it. That was a description of a
+    // defect, written as though it were a design property: it shipped a real
+    // verdict reporting `episodes: 2` beside a single cause, with the
+    // provenance block silently omitting the episode that produced the run's
+    // result -- the one a reader wants most. `buildVerdictDocument` now takes
+    // the terminating episode explicitly, so the two agree.
+    //
+    // Being outside the canonical projection is why this field is *allowed* to
+    // vary with the partition; it was never a reason for it to be wrong.
     expect(provenance.terminationCauses).toEqual([
       'episode-incomplete', 'episode-incomplete', 'episode-incomplete', 'episode-incomplete',
+      'completed',
     ]);
     expect((JSON.parse(whole.outcome.stdout) as { runProvenance: { episodes: number } })
       .runProvenance.episodes).toBe(1);

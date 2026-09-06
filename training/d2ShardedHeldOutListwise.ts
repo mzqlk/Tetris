@@ -1136,6 +1136,11 @@ async function runShards(input: {
     stage1Digest: input.manifestDigest,
     stage2Digest: stage2 === null ? null : digestOf(stage2),
     runRecord: readRunRecord(input.fs, input.dir),
+    // An aggregate verdict is reached only by an episode that completed.
+    currentEpisode: {
+      terminationCause: 'completed',
+      durationMs: input.now() - input.startedAtMs,
+    },
     workerCount: input.workerCount,
   });
   return {
@@ -1212,6 +1217,17 @@ export function buildVerdictDocument(input: {
   readonly stage1Digest: string;
   readonly stage2Digest: string | null;
   readonly runRecord: readonly D2RunRecordEntry[];
+  /**
+   * The episode being terminated by this very verdict. It is not in
+   * `runRecord`: `finish` writes its `episode-end` only after this document
+   * exists, so reading the record alone yields `episodes: n` alongside `n - 1`
+   * causes and durations, and the block describing a run's history silently
+   * omits the episode that ended it -- the one a reader is most likely to want.
+   */
+  readonly currentEpisode: {
+    readonly terminationCause: D2TerminationCause;
+    readonly durationMs: number;
+  };
   readonly workerCount: number;
 }): Record<string, unknown> {
   const phaseCounts: Record<string, number> = {};
@@ -1241,9 +1257,14 @@ export function buildVerdictDocument(input: {
     ...canonical,
     resultDigest: digestOf(canonical),
     runProvenance: {
+      // `episode-start` for the current episode *is* on disk, so the count is
+      // already right; only the ends are short by one until it is appended.
       episodes: input.runRecord.filter((entry) => entry.kind === 'episode-start').length,
-      terminationCauses: episodeEnds.map((entry) => entry.terminationCause),
-      durationsMs: episodeEnds.map((entry) => entry.durationMs),
+      terminationCauses: [
+        ...episodeEnds.map((entry) => entry.terminationCause),
+        input.currentEpisode.terminationCause,
+      ],
+      durationsMs: [...episodeEnds.map((entry) => entry.durationMs), input.currentEpisode.durationMs],
       workerCount: input.workerCount,
     },
   };

@@ -189,6 +189,14 @@ const D2_ENTRY_MARKER = 'd2ShardedHeldOutListwise.ts';
 export interface D2ProcessRow {
   readonly pid: number;
   readonly ppid: number;
+  /**
+   * `CreationDate` in ticks, or `NaN` when Windows did not report one. Windows
+   * does not clear `ParentProcessId` when a parent exits, so a recycled pid can
+   * name an unrelated process as its parent; without a clock the ancestor walk
+   * would graft that stranger's whole subtree onto the run's own kin and could
+   * mistake a genuinely live second diagnostic for itself.
+   */
+  readonly startedAtTicks: number;
   readonly commandLine: string;
 }
 
@@ -206,7 +214,7 @@ function readWin32ProcessTable(): readonly D2ProcessRow[] | null {
     const output = execFileSync('powershell', [
       '-NoProfile', '-NonInteractive', '-Command',
       'Get-CimInstance Win32_Process | ForEach-Object '
-      + '{ "$($_.ProcessId)|$($_.ParentProcessId)|'
+      + '{ "$($_.ProcessId)|$($_.ParentProcessId)|$($_.CreationDate.Ticks)|'
       + "$($_.CommandLine -replace '[\\r\\n]+', ' ')\" }",
     ], { encoding: 'utf8', windowsHide: true, timeout: 30_000, maxBuffer: 16 * 1024 * 1024 });
     return parseWin32ProcessTable(output);
@@ -229,7 +237,7 @@ export function parseWin32ProcessTable(output: string): readonly D2ProcessRow[] 
   const rows: D2ProcessRow[] = [];
   for (const line of output.split('\n')) {
     const text = line.trimEnd();
-    const match = /^(\d+)\|(\d+)\|([\s\S]*)$/.exec(text.trimStart());
+    const match = /^(\d+)\|(\d+)\|(\d*)\|([\s\S]*)$/.exec(text.trimStart());
     if (match === null) {
       const previous = rows.at(-1);
       if (previous !== undefined && text.trim().length > 0) {
@@ -237,7 +245,13 @@ export function parseWin32ProcessTable(output: string): readonly D2ProcessRow[] 
       }
       continue;
     }
-    rows.push({ pid: Number(match[1]), ppid: Number(match[2]), commandLine: match[3]!.trim() });
+    rows.push({
+      pid: Number(match[1]),
+      ppid: Number(match[2]),
+      // Absent on some system processes; `NaN` means "unknown", never "old".
+      startedAtTicks: match[3] === '' ? Number.NaN : Number(match[3]),
+      commandLine: match[4]!.trim(),
+    });
   }
   return rows;
 }
@@ -273,8 +287,17 @@ export function anyD2ProcessRunning(
   const kin = new Set<number>([selfPid]);
   for (let cursor = byPid.get(selfPid); cursor !== undefined;) {
     if (kin.has(cursor.ppid)) break;
+    const parent = byPid.get(cursor.ppid);
+    // A parent cannot have started after its child. When one appears to have,
+    // the pid was recycled and this row is a stranger that merely inherited the
+    // number; adopting it would pull its whole subtree into `kin` and could
+    // hide a genuinely live second diagnostic. An unknown creation time is not
+    // evidence either, and stopping is the fail-closed direction: the walk
+    // ends, the stranger stays outside `kin`, and a marker on it refuses the
+    // takeover rather than silently permitting a concurrent run.
+    if (parent !== undefined && !(parent.startedAtTicks <= cursor.startedAtTicks)) break;
     kin.add(cursor.ppid);
-    cursor = byPid.get(cursor.ppid);
+    cursor = parent;
   }
   return rows.some((row) => !kin.has(row.pid) && row.commandLine.includes(D2_ENTRY_MARKER));
 }

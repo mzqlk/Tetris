@@ -640,7 +640,12 @@ describe('D1 canonical context materialization', () => {
       reason: projection.reason,
       searchDiagnostics: projection.searchDiagnostics,
     }));
-  }, 45_000);
+  // 120s, matching the other heavy cases in this file. The 45s budget was
+  // measured against a quiet machine: this case builds 4,884 tasks and
+  // compares them tuple by tuple, taking 23.8s alone but 47.3s under full-suite
+  // contention, so it began timing out once the D2 suites landed beside it.
+  // The work is unchanged; only the machine got busier.
+}, 120_000);
 
   it('rejects caller-forged legal-universe evidence before materializing any task', () => {
     const fixture = canonicalTaskFixture();
