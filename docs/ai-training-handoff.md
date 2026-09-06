@@ -1,6 +1,6 @@
 # Tetris AI 训练系统 — 交接文档
 
-**写于**：2026-07-28；**更新于**：2026-08-20（score-rate-v5 operator contract；本次未运行训练、benchmark 或 paired benchmark）
+**写于**：2026-07-28；**更新于**：2026-09-06（D1/D2 action-conditioned listwise 诊断已完结，裁决 FAIL；本次未运行训练、benchmark 或 paired benchmark，未改动任何已发布产物）
 **当前状态的读取方式**：每次先运行 `git status` / `git log`，检查 `public/ai/` 产物与训练进程，再决定操作。旧 HEAD、未推送状态和固定测试数都只是历史快照，不是本交接的持久指令。
 **验证**：分别运行当前 `npm test`、`npm run lint`、`npm run build` 与 `npm run typecheck:train`；以实际输出为准。
 **当前 score-rate-v5 设计**：[`2026-08-14 bag-aware deterministic budget search design`](superpowers/specs/2026-08-14-bag-aware-deterministic-budget-search-design.md)
@@ -41,6 +41,46 @@ fitness = meanScore / maxPieces
 - 当前可审计 `benchmark-inputs` 只包含 v1/gen-20 基线，未找到 gen-40 相对 gen-20 的独立 paired benchmark。因而目前可以确认“gen-40 已发布且固定复评更高分”，不能把它扩写成“已完成独立配对验收”。
 
 发布权重由提交 `99a796a feat(ai): publish gen-40 score-rate-v2 weights` 纳入 Git。该 SHA、哈希和产物内容是 2026-08-11 快照；接手时仍须现场核实。
+
+### action-conditioned listwise 诊断：已完结，裁决 FAIL（2026-09-04）
+
+**结论先行：不要采用 action24 表示，也不要按这个结果去重跑 D2。**
+
+D2 分片诊断 `d2-a4b01fc869c486c1` 跑完 261/261 shard，裁决
+`fail-joint-selection-not-shown`，`resultDigest`
+`955f5ec9c89b41a8259dfa66b598616f8c641ef69959b8ff0d566d21460a1b62`。48 个
+held-out subset 上，action24 的 `sumScore` 13,834,700 对 afterstate13 的
+13,884,400（−0.36 %），`tetrisShare` 0.06097 对 0.06409（相对 −4.9 %），
+front hits **打平 19:19**。
+
+按设计 §10.3(a)，这个裁决**关闭 action-conditioned representation 假设**，且
+预注册地禁止事后修改 placements / subsets / splits / features / lambda grid /
+cardinality / thresholds 去追一个 PASS。
+
+**但要按字面读，不要读过头。** 裁决名就是准确的概括：**not shown**，不是
+"更差"。设计 §9 明确不宣称 p-value 或置信区间，而该门要求在 score 与
+tetris share 上**严格**更优——真实差异为零的表示也会有约一半的概率过不了。
+真正有信息量的一条是 19:19 那个平局：两个模型选出的 placement 基本相同，
+多出来的 11 个 action-conditioned 特征很少改变决策，因此这次实验在任何方向上
+都难以测出差异。
+
+**七个门里有四个本来就无法判别**（这一点在裁决产生**之前**就已记录）：
+
+- 两个 survival 门是饱和的。2,208 个 test label 里 2,203 个撑满 128 手，
+  每个候选的 survival tuple 几乎都是 `(4, 128, 512)`，subset oracle 与它们相等。
+  这两个门只能惩罚、无法奖励。
+- 36/48 的 front-hit floor 够不到：两个表示都是 19，**任何结果都过不了这个门**。
+- `+8` 的 gain 随之落空：从 19:19 出发需要 27 对 19。
+
+**这就是本项目已经退役过一次的封顶问题**（见 §"历史根因：消行数封顶"），只是
+上移了一层：那次是精英并列在 `0.4 × cap`，这次是候选并列在 `(4, 128, 512)`。
+**抬 cap 同样无效**，理由与当年完全一致。
+
+完整报告（含每个门的取值、post-flight 27 项、以及运行跨两个代码版本的说明）见
+`.superpowers/sdd/2026-09-02-score-rate-v5-d2-sharded-held-out-listwise/final-report.md`。
+
+诊断证据在 `diagnostics/d2-a4b01fc869c486c1/`（已 gitignore）。本次运行未创建
+仓库 trainer lock，未生成 candidate，四个产物哈希与运行前逐字节相同。
 
 ### gen-20 发布依据（历史）
 
@@ -360,5 +400,6 @@ CEM 是搜索式演化，「模型」当前有 13 个浮点数，算力全花在
 3. **历史 v4 交接记录（不可作为当前指令）**：当时获准运行 v4 时须先明确 resume 或隔离新跑，默认 output dir 为 `public/ai/score-rate-v4/`；resume 仅可指向经完整校验的 score-rate-v4 schema 5 checkpoint。当前 v5 不恢复或追加此类产物。
 4. 运行当前 `npm run lint`、`npm test`、`npm run typecheck:train` 和 `npm run build`；不要继承旧测试数或成功结论。
 5. **按独立授权门推进**——两代信号 smoke、正式训练、固定复评 candidate 产出、独立 paired 验收、发布、push 与浏览器/runtime 验收不能合并；`bench:paired` CLI 已存在，但本次未运行。
+6. **action-conditioned 假设已按 §10.3(a) 关闭，不要重跑 D2**——也不要把它写成"已被证伪"。若要问一个**新的**问题，先修测量再谈假设：需要一个称职玩家真的会死的 horizon（抬 cap 无效）、按可达范围重新校准的阈值、以及事前而非事后的效力论证；这些都要走自己的设计门。
 6. 浏览器验收时区分 bundled 与 runtime：bundled 来自 tracked JSON，runtime 来自 `/ai/best-weights.json`；二者可以同内容但来源标签不同。当前 gen-40 v2 只在内存中补三个 v3 零值，未经过本次浏览器/runtime 验收。
 7. 让 `searchDepth` 元数据真正起作用：权重文件的深度与 UI 当前深度不一致时给出提示。
