@@ -248,7 +248,7 @@ targetLaneReadyRowsDelta = clamp((after.readyRows-before.readyRows)/4,-1,1)
 - `futureIAccessProbabilityAfterAction`：在 placement后的 exact public chance branches上，下一 decision 可立即使用 current/standard Hold取得 I 的总概率，重复事件去重，范围 `[0,1]`；
 - `readyRowsTimesFutureIAccess`：`clamp(after.readyRows/4,0,1) * branchFutureIAccess` 的概率期望；
 - `setupProgressTimesFutureIAccess`：`clamp(after.setupCells/36,0,1) * branchFutureIAccess` 的概率期望；
-- `nextDecisionLegalActionProbability`：在 post-placement public chance branches上，下一 decision 至少存在一个合法 current placement或 standard-Hold continuation 的精确概率。
+- `nextDecisionLegalActionProbability`：在 post-placement public chance branches上，先以共享 `revealPreview` materialize 下一 decision；若 `revealPreview` 返回 `null`，该 branch 已按共享 simulator/runtime 语义 game-over，合法动作贡献严格为 0，禁止在其后合成 state 再尝试 Hold。仅对成功 materialize 的 branch，下一 decision 至少存在一个合法 current placement或 standard-Hold continuation 时记为 legal，并按 branch probability 精确汇总。
 
 这 11 项只使用 board-before、placement、board-after 与 exact public bag/Hold branches；禁止 seed、hidden order、RNG、labels、split、behavior identity 或 continuation result。所有值必须 finite，delta 位于 `[-1,1]`，其余位于 `[0,1]`。输入 board rows 不得原地修改。
 

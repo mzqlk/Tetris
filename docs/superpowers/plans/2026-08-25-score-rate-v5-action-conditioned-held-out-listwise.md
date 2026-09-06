@@ -40,6 +40,7 @@
 | `training/d1ActionConditionedHeldOutListwiseCore.test.ts` | Create | Source/vector/seed/capture/fingerprint/subset/SRS/feature/range/no-leak/no-mutation tests |
 | `training/d1ActionConditionedHeldOutListwiseLabels.ts` | Create | Compatible future streams, frozen context tasks, exact outcomes, survival tier, Pareto front, and uniform listwise target |
 | `training/d1ActionConditionedHeldOutListwiseLabels.test.ts` | Create | Shuffle/digest/draw/Hold/reveal/context/outcome/front tests with real shared transitions and injected search |
+| `training/d1ActionConditionedHeldOutListwiseFitInternals.ts` | Create | Task-5-private, production-used Newton direction/controller seam for exact numeric guards and iteration control; imported only by Fit and Fit.test, never re-exported by Fit or consumed downstream |
 | `training/d1ActionConditionedHeldOutListwiseFit.ts` | Create | Exact normalization, softmax, damped Newton, lambda selection, immutable freeze record, held-out metrics, verdict, and digests |
 | `training/d1ActionConditionedHeldOutListwiseFit.test.ts` | Create | Binary64 recurrence, zero variance, pivot/tie/Armijo/non-convergence, freeze boundary, held-out gates, and precedence |
 | `training/d1ActionConditionedHeldOutListwiseWorker.ts` | Create | Worker entry that accepts one frozen continuation task and returns one canonical result; no source/file/fit/verdict authority |
@@ -50,6 +51,15 @@
 ## Frozen Cross-Task Interfaces
 
 Use these exact public names. A later task may add private helpers but must not rename or widen these boundaries.
+
+Interface ownership is frozen per symbol:
+
+- `training/d1ActionConditionedHeldOutListwiseCore.ts` exports `D1_REPRESENTATIONS` and `D1RepresentationId`.
+- `training/d1ActionConditionedHeldOutListwiseLabels.ts` exports `D1FitSubset`.
+- `training/d1ActionConditionedHeldOutListwiseFit.ts` (Task 5) exports `D1_LAMBDAS`, `D1Normalization`, `D1NormalizedRows`, `D1ModelFreezeRecord`, `D1FinalModel`, `D1FitInput`, and `D1FitResult`.
+- `training/d1ActionConditionedHeldOutListwiseFit.ts` (Task 6) exports `D1FinalModelBundle` and `D1ValidationSelection`.
+- `D1RuntimeError` is private to the Fit implementation and is not a cross-task interface. It may be defined/exported only inside `d1ActionConditionedHeldOutListwiseFitInternals.ts` so Fit and Fit.test can share the real error path; Fit must not re-export it and downstream maps optimizer exceptions to `D1RuntimeFailureReason` `optimizer-failure`.
+- `training/d1ActionConditionedHeldOutListwiseFitInternals.ts` is a Task-5-private module boundary. Its production-used numeric symbols may be imported only by Fit and Fit.test; Fit must not re-export them and Tasks 6–8 must not treat them as cross-task interfaces.
 
 ```ts
 export const D1_MODE = 'd1-action-conditioned-held-out-listwise-v1' as const;
@@ -584,11 +594,11 @@ export const D1_ACTION_FEATURE_NAMES = [
 ] as const;
 ```
 
-Tests must cover null pre-lane producing eleven zeros, same-column deltas, vertical I, exact chance probability for empty/non-empty Hold, illegal next-current but legal Hold continuation, bounds, finite values, and unchanged input rows.
+Tests must cover a null pre-lane forcing only the lane-dependent additions to zero: the three deltas, `targetLanePlacedCellFraction`, `verticalIInTargetLane`, `targetLaneRemainsUsable`, `readyRowsTimesFutureIAccess`, and `setupProgressTimesFutureIAccess`. In that same case, `placedPieceIsI` still follows the placed type, while `futureIAccessProbabilityAfterAction` and `nextDecisionLegalActionProbability` still use the exact public post-placement branches. Also cover same-column deltas, vertical I, exact chance probability for empty/non-empty Hold, a blocked promoted current causing shared `revealPreview` to return `null` and contribute zero legal-action probability without a synthetic Hold rescue, bounds, finite values, and unchanged input rows.
 
 - [ ] **Step 7: Implement the pure diagnostic extractor**
 
-Compute base 13 with existing `extractFeatures`. Freeze the pre-state lane; never switch columns after placement. Enumerate exact post-placement preview branches with `enumerateBagOutcomes` and shared `revealPreview`/`applyHold`. A next decision is legal when either current placements exist or a standard-Hold continuation has a legal placement; do not run search and do not read labels/seeds/behavior identity.
+Compute base 13 with existing `extractFeatures`. Freeze the pre-state lane; never switch columns after placement. Enumerate exact post-placement preview branches with `enumerateBagOutcomes` and shared `revealPreview`/`applyHold`. Materialize each branch with shared `revealPreview` first: a `null` result is runtime game-over and contributes zero legal-action probability, with no synthesized post-null state and no Hold attempt. For a materialized branch, a next decision is legal when either current placements exist or a standard-Hold continuation has a legal placement; do not run search and do not read labels/seeds/behavior identity.
 
 - [ ] **Step 8: Freeze the pre-label manifest digest and run GREEN**
 
@@ -694,7 +704,11 @@ Expected: FAIL because context task/materialization APIs do not exist.
 
 Build task IDs in split `[train,validation,test]`, group ordinal, behavior vector, capture slot, placement ID, continuation vector `[gen6-best,gen10-mu]`, stream `[0,1]` order. Require exactly `160*12*2*2 = 7680` unique tasks.
 
-`runD1Context` must create a fresh frozen continuation state, assign the selected placement pose to `currentPiece`, call the shared hard-drop transition once, then call the shared active-v5 simulator to a total cap of 128. Project only score delta from capture, per-context pieces/clear counts/reason/search diagnostics, and canonical identifiers. It must never call a label seed generator, filesystem API, or subset selector.
+The source-side builder must validate split, group ordinal, behavior vector, capture slot, subset identity, and canonical source order before deriving each task ID. Those provenance fields remain controller-local validation inputs and are not members of `D1ContextTask` or `D1ContextProjection`. For this step, canonical identifiers means exactly `taskId`, `subsetId`, `placementId`, `continuationVectorId`, and `streamIndex`.
+
+For each source subset, the builder must explicitly deep-copy and recursively freeze one exact `D1ContinuationCapture` projection `{ state, score, lines, level }`; its 48 immutable tasks may share that sanitized projection. It must not retain, spread, or structurally clone the complete `D1CapturedState`; the copied public state and every copied board row must have independent identities from the source capture.
+
+`runD1Context` must create a fresh frozen continuation state, assign the selected placement pose to `currentPiece`, call the shared hard-drop transition once, then call the shared active-v5 simulator to a total cap of 128. Project only score delta from capture, per-context pieces/clear counts/reason/search diagnostics, and the five canonical identifiers above. It must never call a label seed generator, filesystem API, or subset selector.
 
 - [ ] **Step 7: Write outcome/front REDs**
 
@@ -724,26 +738,60 @@ Expected: all selected tests PASS; no real search trajectory longer than the tin
 
 Review must cover exact seed/order/prefix/digest, cross-bag RNG continuity, preview/Hold consumption, context cursor isolation, forced placement count, no early stop/retry/replacement, scheduled denominator, survival lexicography, integer Tetris comparison, non-empty uniform target, and worker-ready immutable payloads.
 
+#### Approved Task 4 sanitized worker-payload corrective gate
+
+This is a separately approved correction discovered by Task 7 and is not a sixth round of the historical Task 4 breaker. It must complete before Task 7 resumes. Its implementation-owned repository scope is exactly:
+
+- `training/d1ActionConditionedHeldOutListwiseLabels.ts`
+- `training/d1ActionConditionedHeldOutListwiseLabels.test.ts`
+
+The implementer must also append its evidence to this plan's git-ignored SDD report artifact. That bookkeeping file is not an implementation-owned repository path and grants no authority to edit another repository file.
+
+The Frozen Cross-Task Interfaces are authoritative. Restore `D1ContinuationCapture`, `D1ContextTask`, and `D1ContextProjection` to their exact frozen shapes. Do not add a Task-7-private payload adapter and do not allow provenance fields into the worker payload. `buildD1ContextTasks` must still validate the full source provenance and canonical order before dispatch, but no returned task/projection may serialize `split`, `groupOrdinal`, `behaviorVectorId`, `captureSlot`, behavior/label seeds or digests, source diagnostics, state fingerprints, source paths, fit/lambda/q, or verdict data.
+
+- [ ] Write one focused real-behavior RED that recursively walks a materialized task and fails on the current provenance-bearing payload. It must require exact top-level task keys in interface order; exact capture keys `state/score/lines/level`; no forbidden key substring; no source capture/state/board-row identity reuse; and recursive freezing of task, capture, public state, board array, and every board row.
+- [ ] In the same RED, preserve association independently: require all 7,680 unique task IDs, exact first/final five canonical identifiers, and SHA-256 `d7898196a14057566b7978343685194ef9717b8668670e49c0d9eebd265dd423` over ordered tuples `[taskId,subsetId,placementId,continuationVectorId,streamIndex]`. This literal was derived before the correction from the already reviewed canonical fixture and does not include forbidden provenance.
+- [ ] Run only the Labels-focused test command and observe the expected payload-shape/identity failure before production edits.
+- [ ] Implement the minimum correction: remove the widened task/projection properties; construct one new capture object per source subset from the four allowed fields; deep-copy the public state, including independent board rows and piece positions; recursively freeze the copied graph; allow only that subset's 48 immutable tasks to share the sanitized capture; remove provenance fields from `runD1Context` output and projection digest. Do not weaken any existing source association validation.
+- [ ] Run focused GREEN, then the exact Task 4 six-file suite, exact two-file ESLint, safe explicit-root typecheck proving protected probes zero, exact two owned baseline/current diff checks, and real-index-empty check. Do not run Task 7, operational D1, training, calibration, benchmark, or any other gate during this correction.
+- [ ] Require a fresh independent corrective review with explicit `spec-compliance` and `code-quality` verdicts. Every Critical/Important finding enters its own focused RED/minimum GREEN/scoped re-review before Task 7 resumes.
+
 ---
 
 ### Task 5: Implement deterministic normalization and the damped Newton solver
 
 **Files:**
-- Create: `training/d1ActionConditionedHeldOutListwiseFit.ts`
-- Create: `training/d1ActionConditionedHeldOutListwiseFit.test.ts`
-- Use types from: `training/d1ActionConditionedHeldOutListwiseCore.ts`, `training/d1ActionConditionedHeldOutListwiseLabels.ts`
+- Previously modified, additive contract complete; do not re-edit or redo TDD absent a review finding: `training/d1ActionConditionedHeldOutListwiseCore.ts`
+- Previously modified, additive contract complete; do not re-edit or redo TDD absent a review finding: `training/d1ActionConditionedHeldOutListwiseCore.test.ts`
+- Previously modified, additive contract complete; do not re-edit or redo TDD absent a review finding: `training/d1ActionConditionedHeldOutListwiseLabels.ts`
+- Previously modified, additive contract complete; do not re-edit or redo TDD absent a review finding: `training/d1ActionConditionedHeldOutListwiseLabels.test.ts`
+- Create: `training/d1ActionConditionedHeldOutListwiseFitInternals.ts`
+- Continue modifying the existing partial Task 5 implementation: `training/d1ActionConditionedHeldOutListwiseFit.ts`
+- Continue modifying the existing partial Task 5 tests: `training/d1ActionConditionedHeldOutListwiseFit.test.ts`
+
+Import `D1RepresentationId` from Core and `D1FitSubset` from Labels. Define and export the Task-5-owned fit contracts in Fit; the Core/Labels edits are additive contract-only exports and must not change their completed runtime behavior.
+
+**Approved continuation boundary:** The ledger/report already contain the observed Core/Labels contract RED/GREEN, normalization RED/GREEN, and partial legal-public-input solver RED/GREEN. Those cycles are historical completed evidence: do not revert, delete, recreate, or rerun them as implementation work. The correction's first new RED is the missing private-internals import and the absence of permanent production-guard/controller tests. The minimum GREEN creates only FitInternals and modifies the partial Fit/Fit.test so production and tests share that implementation. Afterward, re-run the relevant existing GREEN commands as regression evidence, then complete the remaining Task 5 verification/report/review.
 
 **Interfaces:**
-- Produces: `normalizeD1Rows`, `fitD1Representation`, `serializeD1FitDigest`.
+- Produces: `D1_LAMBDAS`, `D1Normalization`, `D1NormalizedRows`, `D1ModelFreezeRecord`, `D1FinalModel`, `D1FitInput`, `D1FitResult`, `normalizeD1Rows`, `fitD1Representation`, `serializeD1FitDigest`.
 - This Task receives only `D1FitSubset` feature rows/targets. It has no outcome, group, filesystem, worker, source-artifact, label-materialization, seed, or placement-selection dependency.
 
 ```ts
 export function normalizeD1Rows(
   subsets: readonly D1FitSubset[],
 ): D1NormalizedRows;
+export function serializeD1FitDigest(input: {
+  representationId: D1RepresentationId;
+  lambda: typeof D1_LAMBDAS[number];
+  normalization: D1Normalization;
+  weights: readonly number[];
+  gradientNorm: number;
+  iterationCount: number;
+}): string;
 ```
 
-- [ ] **Step 1: Write exact normalization REDs**
+- [x] **Step 1: Write exact normalization REDs — completed before the private-seam correction; do not redo**
 
 Use 24 rows `row[i]=[i, i<12?0:2, 5]`, representing two 12-placement subsets. Its frozen binary64 stats are `[11.5,6.922186552431729,1,1,5,+0]`. Assert train and train+validation row order, `N=M*12`, two-pass recurrence, zero-variance `+0`, little-endian interleaved `[mean0,std0,mean1,std1,...]` digest, and that test rows cannot be passed to fit normalization.
 
@@ -755,7 +803,7 @@ expect(normalized.stats.std).toEqual([6.922186552431729,1,0]);
 expect(normalized.digest).toBe('526e2eead3699199b12f86030f3e9c46b25c23315cbaffdfaf7f6df09d9f4c08');
 ```
 
-- [ ] **Step 2: Run normalization RED**
+- [x] **Step 2: Run normalization RED — completed before the private-seam correction; do not redo**
 
 ```powershell
 npx vitest run training/d1ActionConditionedHeldOutListwiseFit.test.ts --pool=threads --maxWorkers=1 --minWorkers=1 --fileParallelism=false
@@ -763,15 +811,53 @@ npx vitest run training/d1ActionConditionedHeldOutListwiseFit.test.ts --pool=thr
 
 Expected: FAIL because the fit module does not exist.
 
-- [ ] **Step 3: Implement frozen normalization and numeric primitives**
+- [x] **Step 3: Implement frozen normalization and numeric primitives — completed before the private-seam correction; preserve and regression-check**
 
-Process canonical subset then placement order. For every dimension: first pass `sum=+0; sum=sum+x`; `mean=sum/N`; second pass `squared=+0; delta=x-mean; squared=squared+delta*delta`; `variance=squared/N`; `std=Math.sqrt(variance)`. Ban compensated/parallel/reordered accumulation. Only `variance===0` maps std and normalized values to canonical `+0`; all non-finite/intermediate-negative variance cases throw `D1RuntimeError`.
+Process canonical subset then placement order. For every dimension: first pass `sum=+0; sum=sum+x`; `mean=sum/N`; second pass `squared=+0; delta=x-mean; squared=squared+delta*delta`; `variance=squared/N`; `std=Math.sqrt(variance)`. Ban compensated/parallel/reordered accumulation. Only `variance===0` maps std and normalized values to canonical `+0`; all non-finite/intermediate-negative variance cases throw the `D1RuntimeError` imported from FitInternals. FitInternals defines and exports that private-seam class; only Fit and Fit.test may import it, Fit must not re-export it, and downstream must not import or consume it. Its constructor accepts a concise detail string and the class itself prepends `runtime-fail:`.
 
 Implement one helper that writes each dimension's mean then std as binary64 little-endian and another that writes weights in dimension order. Canonicalize `-0` to `+0`; reject NaN/Infinity.
 
 - [ ] **Step 4: Write softmax/objective/Newton REDs**
 
-Create tiny D=2 hand-derived fixtures that distinguish ordinary ordered addition from compensated/reordered addition; exact-tie placement ID selection; full versus mirrored Hessian; minimum-index pivot tie; non-normalized pivot row; back-substitution order; non-descent direction; Armijo halving; singular pivot; non-convergence at update 200; and repeat-fit bit identity. Add this concrete zero-optimum end-to-end fixture for the 13-dimensional representation:
+Preserve the already-green legal-public-input zero-optimum and D=2 solver fixtures. Resume strict TDD by adding imports and permanent tests for the not-yet-created FitInternals module, then observe the focused RED because those symbols/file do not exist. The remaining tiny D=2 hand-derived fixtures must distinguish ordinary ordered addition from compensated/reordered addition; exact-tie placement ID selection; full versus mirrored Hessian; minimum-index pivot tie; non-normalized pivot row; back-substitution order; Armijo halving; and repeat-fit bit identity. Do not widen the frozen Fit exports, weaken lambda/input validation, cast an invalid lambda, or use mutable/getter inputs to claim valid-public-input coverage.
+
+Exercise the production singular-pivot and non-descent guards through the Task-5-private, production-used controller below. It lives only in `training/d1ActionConditionedHeldOutListwiseFitInternals.ts`; Fit imports it for the real solver, Fit.test imports it for permanent defensive-path tests, and Fit never re-exports it:
+
+```ts
+export class D1RuntimeError extends Error {
+  constructor(detail: string);
+}
+export interface D1NewtonSystem {
+  objective: number;
+  gradient: readonly number[];
+  hessian: readonly (readonly number[])[];
+}
+export interface D1NewtonControllerInput {
+  initialWeights: readonly number[];
+  evaluateSystem: (weights: readonly number[]) => D1NewtonSystem;
+  evaluateObjective: (weights: readonly number[]) => number;
+  solveDirection: (
+    hessian: readonly (readonly number[])[],
+    gradient: readonly number[],
+  ) => readonly number[];
+}
+export interface D1NewtonControllerResult {
+  weights: readonly number[];
+  gradientNorm: number;
+  iterationCount: number;
+}
+export function solveD1NewtonDirection(
+  hessian: readonly (readonly number[])[],
+  gradient: readonly number[],
+): readonly number[];
+export function runD1NewtonController(
+  input: D1NewtonControllerInput,
+): D1NewtonControllerResult;
+```
+
+The production Fit path must call `runD1NewtonController` with its real ordered objective/system evaluators and `solveD1NewtonDirection`. A singular literal matrix must make the real direction solver throw `runtime-fail:` at the frozen pivot guard. A controller fixture with finite gradient `[1]`, Hessian `[[1]]`, and an injected direction `[1]` must make the real controller reject the non-descent dot before line search. For update 200, first use an independently derived legal frozen `D1FitInput` fixture if one is available; otherwise use the same real controller with an injected deterministic system/objective whose step is accepted on every update while the gradient remains above `1e-9`, and prove exactly 200 accepted updates followed by `runtime-fail:`. Reversible mutation evidence may supplement but must not replace these permanent tests. These private-seam tests are the new RED/GREEN cycle; do not replay the completed normalization RED or the original missing-Fit-module RED.
+
+Add this concrete zero-optimum end-to-end fixture for the 13-dimensional representation:
 
 ```ts
 const fit = fitD1Representation({
@@ -790,11 +876,11 @@ expect(fit.iterationCount).toBe(0);
 expect(fit.weightDigest).toBe('39f37f8d1931b3bdf767e7510dd69509fbf23af1f7654933d0a4d291cbdd4418');
 ```
 
-The D=2 expected literals must be written directly in their tests from independently checked arithmetic; never call the production fit helper to create expectations.
+The D=2 expected literals must be written directly in their tests from independently checked arithmetic; never call the production fit helper to create expectations. Private-controller fixtures test only defensive guards and iteration control; all normalization, softmax, Hessian, public fit, digest, and repeatability claims still require legal frozen `D1FitInput` behavior tests.
 
 - [ ] **Step 5: Implement the deterministic damped Newton solver**
 
-Implement approved spec section 9.2 verbatim behind these APIs:
+Implement approved spec section 9.2 verbatim behind these APIs. Keep ordered normalization, softmax, objective, gradient, and full Hessian construction in Fit. Put the production Gaussian direction solve plus convergence/descent/Armijo/update controller in FitInternals, and make the public Fit path call that exact internal implementation; do not duplicate a test-only solver or controller:
 
 ```ts
 export interface D1FitInput {
@@ -828,7 +914,8 @@ Review must trace every normalization and numeric recurrence/loop order against 
 **Files:**
 - Extend: `training/d1ActionConditionedHeldOutListwiseFit.ts`
 - Extend: `training/d1ActionConditionedHeldOutListwiseFit.test.ts`
-- Use types from: `training/d1ActionConditionedHeldOutListwiseCore.ts`, `training/d1ActionConditionedHeldOutListwiseLabels.ts`
+
+Import `D1RepresentationId` from Core, `D1FitSubset` from Labels, and the Task-5-owned fit contracts from Fit. Define/export the Task-6-owned `D1ValidationSelection` and `D1FinalModelBundle` in Fit.
 
 **Interfaces:**
 - Produces: `selectD1Lambda`, `freezeD1FinalModels`, `assertD1FinalModelBundle`, `evaluateD1HeldOut`.
@@ -955,6 +1042,8 @@ Review must verify pure fit versus evaluation input separation, survival/oracle/
 
 Use an injected worker factory. Assert pool construction occurs only after source hashes, seeds, 160 fingerprints, 1,920 placements, manifest digest, and all 320 stream prefixes are frozen. Assert the worker receives one `D1ContextTask`, has no source path/seed/fit/verdict field, and returns the matching `D1ContextProjection`.
 
+`D1ContextTask` and `D1ContextProjection` here mean the exact sanitized Frozen Cross-Task Interface shapes. No Task-7-private transport type or provenance rehydration adapter is allowed. The source-side orchestrator may retain its own immutable taskId-to-source-coordinate association for label assembly and replay selection, but that association is never serialized to a worker.
+
 ```ts
 expect(dispatched).toHaveLength(7680);
 expect(dispatched[0]).toMatchObject({
@@ -1046,7 +1135,7 @@ Review must cover phase capabilities/order, exact counts, no early/optional beha
 ### Task 8: Run safe code gates, whole-change reviews, continuity closeout, and stop
 
 **Files:**
-- Review exact D1 spec, this plan, the thirteen source/test paths in the File Responsibility Map, and the single D1 package hunk.
+- Review exact D1 spec, this plan, the fourteen source/test paths in the File Responsibility Map, and the single D1 package hunk.
 - Scratch only: this plan's `.superpowers/sdd/2026-08-25-score-rate-v5-action-conditioned-held-out-listwise/` directory.
 
 **Interfaces:**
@@ -1068,7 +1157,7 @@ Record files/tests/skips/failures, exit code, and duration. Stop on the first fa
 - [ ] **Step 3: Run explicit-file ESLint**
 
 ```powershell
-npx eslint training/d1ActionConditionedHeldOutListwise.ts training/d1ActionConditionedHeldOutListwise.test.ts training/d1ActionConditionedHeldOutListwiseWorker.ts training/d1ActionConditionedHeldOutListwiseFit.ts training/d1ActionConditionedHeldOutListwiseFit.test.ts training/d1ActionConditionedHeldOutListwiseLabels.ts training/d1ActionConditionedHeldOutListwiseLabels.test.ts training/d1ActionConditionedHeldOutListwiseCore.ts training/d1ActionConditionedHeldOutListwiseCore.test.ts training/archivedRepresentativeAudit.ts training/archivedRepresentativeAudit.test.ts src/ai/simulate.ts src/ai/simulate.test.ts
+npx eslint training/d1ActionConditionedHeldOutListwise.ts training/d1ActionConditionedHeldOutListwise.test.ts training/d1ActionConditionedHeldOutListwiseWorker.ts training/d1ActionConditionedHeldOutListwiseFitInternals.ts training/d1ActionConditionedHeldOutListwiseFit.ts training/d1ActionConditionedHeldOutListwiseFit.test.ts training/d1ActionConditionedHeldOutListwiseLabels.ts training/d1ActionConditionedHeldOutListwiseLabels.test.ts training/d1ActionConditionedHeldOutListwiseCore.ts training/d1ActionConditionedHeldOutListwiseCore.test.ts training/archivedRepresentativeAudit.ts training/archivedRepresentativeAudit.test.ts src/ai/simulate.ts src/ai/simulate.test.ts
 ```
 
 Expected: exit 0 with no lint error. Do not run repository-wide lint.
@@ -1089,7 +1178,7 @@ Generate this plan's `safe-train-tsconfig.json` from tracked `.ts` roots returne
 git ls-files -- ':(glob)training/*.ts' ':(glob)src/ai/*.ts' ':(glob)src/engine/*.ts' src/types.ts src/constants.ts ':(exclude)training/searchProbe.ts' ':(exclude)training/searchProbeWorker.ts' ':(exclude)training/searchProbe.test.ts'
 ```
 
-Exclude `src/ai/loadWeights.ts`. Append only these untracked/plan-owned roots if not already tracked: the two archived audit files plus `training/d1ActionConditionedHeldOutListwiseCore.ts`, its test, the Labels source/test, the Fit source/test, `training/d1ActionConditionedHeldOutListwiseWorker.ts`, and the top-level D1 source/test. Set `extends` to the correct relative `tsconfig.train.json`, `include:[]`, and relative `files`. Before running, assert the list contains none of the three protected probe path names and none of the unrelated B1/B1.1/B1.2 untracked roots.
+Exclude `src/ai/loadWeights.ts`. Append only these untracked/plan-owned roots if not already tracked: the two archived audit files plus `training/d1ActionConditionedHeldOutListwiseCore.ts`, its test, the Labels source/test, `training/d1ActionConditionedHeldOutListwiseFitInternals.ts`, the Fit source/test, `training/d1ActionConditionedHeldOutListwiseWorker.ts`, and the top-level D1 source/test. Set `extends` to the correct relative `tsconfig.train.json`, `include:[]`, and relative `files`. Before running, assert the list contains none of the three protected probe path names and none of the unrelated B1/B1.1/B1.2 untracked roots.
 
 ```powershell
 npx tsc -p .superpowers/sdd/2026-08-25-score-rate-v5-action-conditioned-held-out-listwise/safe-train-tsconfig.json --pretty false
