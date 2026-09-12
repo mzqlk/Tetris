@@ -14,7 +14,7 @@
 - Competent candidates can survive to the piece cap, so raw lines cleared saturates near the arithmetic ceiling and cannot rank elites.
 - `meanLines - heightPenalty * meanHeight` was the retired `lines-height-v1` objective. Do not resume its checkpoint or describe it as the current fitness.
 - The active code/trainer contract is `score-rate-v5`: checkpoint schema version 6, exact 13 `FEATURE_NAMES` in the unchanged order, and `bag-expectimax-hold-v2` fixed depth 4 with root/child beams 64/32, frozen `maxWorkUnits = 3584`, and `budget-corpus-v1`. Scalar fitness is exactly `meanScore / maxPieces`, using the scheduled piece cap rather than survived pieces. `meanHeight` is diagnostic and only the tie-breaker when fixed-reevaluation scores are within the inclusive 0.1% tolerance.
-- The currently published bundled/runtime model remains the unchanged version 3, `score-rate-v2` gen-40 model. Compatibility loading may extend it only in memory; do not rewrite the published file.
+- Which model is currently published is live state, not a fact this file can pin. Read it from `docs/ai-training-handoff.md` and verify it on the spot; a stale claim here has already been wrong once. Compatibility loading may extend a shorter historical weight vector in memory only, and must never rewrite a published file as a side effect of loading it.
 - `score-rate-v1`/`score-rate-v2`/`score-rate-v3`/`score-rate-v4` checkpoints and logs are historical artifacts. The v5 trainer must never resume or append to them.
 - Judge training from the score-rate distribution and sigma, not only a generation's `bestScoreRate`.
 - Do not “fix” saturation by raising the piece cap. Confirm objective behavior with a short run before spending hours on training.
