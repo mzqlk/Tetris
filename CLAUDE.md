@@ -27,7 +27,7 @@ trainer lock。任何文档（包括那份交接文档和本文件）里写死�
 
 ## 验证命令（有坑）
 
-`npm run build` 与 `npm run typecheck:train` 直接跑，没有陷阱。
+`npm run build`、`npm run lint` 与 `npm run typecheck:train` 直接跑，没有陷阱。
 
 `npm test` 在默认并发下会 OOM（`FATAL ERROR: Zone Allocation failed`）。改用：
 
@@ -36,14 +36,6 @@ npx vitest run --maxWorkers=4
 ```
 
 约 12 分钟，60 个文件、1569 个用例。
-
-`npm run lint`（`eslint .`）在**已有工作区**上会失败，但这不是仓库的错：`.superpowers/sdd/`
-下堆着 gitignore 的 SDD 任务草稿（`.ts` / `.cjs`），而 `eslint.config.js` 没有配 `ignores`，
-于是 `eslint .` 走了进去。新 clone 上没有这些文件。只想看仓库自己的代码：
-
-```bash
-npx eslint src training
-```
 
 **失败集合每轮都不一样，不要按失败数量对账。** 稳定的既有失败只有两个，都不要修；其余是满载下
 撞 5 s 默认超时的 flake，单独跑那一个文件就会过。怀疑某个失败是自己改出来的，隔离重跑它，
