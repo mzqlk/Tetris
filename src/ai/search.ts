@@ -41,11 +41,6 @@ import {
 } from './horizonPolicy';
 
 export { SURVIVAL_EPSILON } from './searchCache';
-/** @deprecated Protected v1 probe compatibility only. */
-export {
-  MAX_PLACEMENT_CACHE_ENTRIES,
-  MAX_TRANSPOSITION_ENTRIES,
-} from './searchCache';
 
 export type SearchAction =
   | { kind: 'place'; placement: Placement }
@@ -73,21 +68,17 @@ export interface SearchDiagnostics {
   transpositionEntries: number;
   equivalentPlacementsRemoved: number;
   prunedChanceBranches: number;
-  /** @deprecated Protected probe compile compatibility only. */
+  /** Alias of `budgetExhausted`, kept for the fixed-search oracle. */
   aborted: boolean;
 }
 
-/** @deprecated Protected v1 probe compatibility only. */
+/** Parameter shape of the deprecated `searchFixed` oracle. */
 export interface LegacyFixedSearchBudget {
   maxRootPlacements: number;
   maxChildPlacements: number;
   maxLockedDepth: 1 | 2 | 3 | 4;
-  shouldAbort: () => boolean;
   cacheEnabled?: boolean;
 }
-
-/** @deprecated Protected v1 probe compatibility only. */
-export type SearchBudget = LegacyFixedSearchBudget;
 
 export interface SearchDecision {
   action: SearchAction;
@@ -158,7 +149,7 @@ export interface LegacySearchDecision {
   diagnostics: LegacySearchDiagnostics;
 }
 
-/** @deprecated Protected v1 probe compatibility only. */
+/** Beams and depth of the unbudgeted `searchFixed` oracle. */
 export const FIXED_SEARCH_LIMITS = Object.freeze({
   maxRootPlacements: 64,
   maxChildPlacements: 32,
@@ -680,10 +671,7 @@ function legacyLimits(budget: LegacyFixedSearchBudget): SearchLimits {
 export function searchFixed(
   state: PublicSearchState,
   weights: number[],
-  budget: LegacyFixedSearchBudget = {
-    ...FIXED_SEARCH_LIMITS,
-    shouldAbort: () => false,
-  },
+  budget: LegacyFixedSearchBudget = { ...FIXED_SEARCH_LIMITS },
 ): SearchDecision | null {
   const limits = legacyLimits(budget);
   return runBudgeted(state, weights, limits, budget.cacheEnabled !== false, {

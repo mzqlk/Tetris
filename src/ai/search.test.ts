@@ -69,7 +69,6 @@ function legacyFixedBudget(
     maxRootPlacements: 64,
     maxChildPlacements: 32,
     maxLockedDepth,
-    shouldAbort: () => false,
     cacheEnabled,
   };
 }

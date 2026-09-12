@@ -25,26 +25,29 @@ trainer lock。任何文档（包括那份交接文档和本文件）里写死�
 - 权重文件解析失败是**静默**的：`parseWeightsFile` 返回 `null` 时代码直接回退到内置权重，
   界面不报错。任何涉及权重文件的验收都必须显式确认没有走回退。
 
-## 验证命令（有坑，照抄）
+## 验证命令（有坑）
 
-`npm test` 与 `npm run lint` **不能直接跑**。`vitest.config.ts` 的 include 和 `eslint .`
-都会扫到 `training/searchProbe.ts` / `searchProbeWorker.ts` / `searchProbe.test.ts`，
-这三个是受保护文件。改用显式清单：
+`npm run build` 与 `npm run typecheck:train` 直接跑，没有陷阱。
+
+`npm test` 在默认并发下会 OOM（`FATAL ERROR: Zone Allocation failed`）。改用：
 
 ```bash
-npx vitest run $(find src training -name '*.test.ts' | grep -v searchProbe | sort | tr '\n' ' ')
-npx eslint src training --ignore-pattern 'training/searchProbe*.ts'
+npx vitest run --maxWorkers=4
 ```
 
-**不要**为此修改 `vitest.config.ts`——它是 tracked 文件，多条 WIP 线共用。
+约 12 分钟，60 个文件、1569 个用例。
 
-`npm run build` 安全（`tsc -b` 只 include `src`）。
-`npm run typecheck:train` **会连受保护文件一起 typecheck**（`tsconfig.train.json` 是
-`include: ["training", …]`）——需要时另建临时 tsconfig 排除。
+`npm run lint`（`eslint .`）在**已有工作区**上会失败，但这不是仓库的错：`.superpowers/sdd/`
+下堆着 gitignore 的 SDD 任务草稿（`.ts` / `.cjs`），而 `eslint.config.js` 没有配 `ignores`，
+于是 `eslint .` 走了进去。新 clone 上没有这些文件。只想看仓库自己的代码：
 
-全量测试在默认并发下会 OOM（`Zone Allocation failed`），加 `--maxWorkers=4`。
-失败集合每轮不同，**不要按失败数量对账**；怀疑某个失败是自己改出来的，就单独重跑那一个
-文件，隔离下通过即为 flake。哪些是稳定既有失败，见交接文档 §7。
+```bash
+npx eslint src training
+```
+
+**失败集合每轮都不一样，不要按失败数量对账。** 稳定的既有失败只有两个，都不要修；其余是满载下
+撞 5 s 默认超时的 flake，单独跑那一个文件就会过。怀疑某个失败是自己改出来的，隔离重跑它，
+不要数数。清单见 `docs/ai-training-handoff.md` §7。
 
 ## 需要单独授权的动作
 

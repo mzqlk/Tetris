@@ -86,6 +86,42 @@ fitness = meanScore / maxPieces
 
 消行数早已饱和（`meanLines = 1996.1`，理论上限 2000），唯一剩下的杠杆是每行单价。按 level-1 折算，T2 的消行得分 `311,026.67`，全四消天花板 `399,220`，即已吃到 **77.9%**。从 T2 播种再训 CEM 可作独立课题，但剩余空间只有约 22%，且会引入"成绩里多少是人类先验"的归因问题。
 
+### 无预算 depth-4：已测量，不可行（2026-09-12）
+
+**结论先行：不要再提"把冻结预算调大，好让 depth 4 真正跑满"。没有可达的目标。**
+
+2026-08-14 的 `training/searchProbe*.ts`（与当天的 bag-aware budget 设计同一批产出）问的就是这个：无 work-unit 预算的 depth-4 定深搜索到底跑不跑得完、要多少时间和内存。它写完从没被跑过，也从没提交。2026-09-12 补跑，结论是**它按写法永远不可能通过**：
+
+| 跑法 | 结果 |
+| --- | --- |
+| 原样（worker，512 MB old-gen 上限，30 s 超时） | 约 9 秒 V8 fatal，`Check failed: (location_) != nullptr` |
+| 进程内重跑（4 GB 堆，无 worker、无上限） | 约 7 分钟、RSS 2958 MB，仍未算完，人工杀掉 |
+
+两个数都是在**空盘开局**上测的——按 §5 的记载那是全局最便宜的局面，中后期堆高带井要贵几倍。所以这是**下界**。
+
+让它无界而不只是慢的，是两件事叠加：`search.ts` 的 `legacyLimits` 给 `searchFixed` 的是
+`maxWorkUnits = Number.MAX_SAFE_INTEGER`，等于没有预算；而接口上那个看起来像逃生口的
+`shouldAbort` **在 `search.ts` 里从来没有被调用过**，搜索一旦开始就无法中断。
+
+**因此要修正一个容易产生的误解。** `maxWorkUnits = 3584` 确实是
+`training/calibrateSearchBudget.ts` 按延迟选出来的——`selectBudgetFromLadder` 从 1536 起
+每步 +256 往上爬，取最坏 p95 ≤ 140 ms（`SELECTION_P95_LIMIT_MS`）里最大的那个，连续两次
+超过 160 ms 就停。但**不能**由此推论"预算只是个人为的交互上限，拿掉就有真 depth 4"。
+beams 64/32 × depth 4 × 精确 bag chance 的树是组合爆炸的：**work-unit 预算不是拧在一个
+本来就能收敛的搜索上的限流阀，它就是让 depth 4 能够终止的那个机制。** 加预算只能买到更深
+的**部分**搜索，成本线性上涨，不存在某个预算能让 depth 4 完成。
+
+还没有被否定的是一个窄得多的问题：同样 beams 下，只给离线（训练/bench）更大的预算，
+打得会不会更好。那是递减收益的问题，而且要付"浏览器和离线用不同预算 = 用浏览器付不起的
+搜索去调模型"这个代价。若真要提升搜索强度，**杠杆更可能在 beams 而不是 work units**，
+因为爆炸来自分支因子——但那同样是改冻结契约，要走自己的设计门。
+
+三个探针文件已由 `05e4d2a` 提交进历史留档，随后删除：结论属于本文档，不属于一个跑不得的
+脚本（`searchFixed` 挂着 `@deprecated Never import from production consumers or execute
+in verification`）。`searchFixed` 本身保留——`src/ai/search.test.ts` 拿它当精确 oracle
+校验有预算搜索，那是正当用法。探针退场后 `shouldAbort` 失去了唯一的存在理由（它只是为了
+让受保护文件能编译），已一并删除。
+
 ### gen-40 固定复评证据（历史基线，2026-09-12 起不再是已发布模型）
 
 - 固定复评：30 局 × 5000 pieces、depth 2、`fixed-reevaluation-v1` 种子策略；gen-40 `meanScore = 3,289,243.33`、`scoreRate = 657.8487`、`meanHeight = 4.07848`。
