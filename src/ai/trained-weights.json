@@ -1,31 +1,75 @@
 {
-  "version": 3,
+  "version": 6,
   "weights": {
-    "aggregateHeight": -0.03136702939998303,
-    "holes": -0.49514382541551616,
-    "bumpiness": 0.07930716210288993,
-    "maxHeight": -0.06480046456829196,
-    "linesCleared": 0.14840680564236144,
-    "landingHeight": -0.300289317086154,
-    "rowTransitions": -0.5541884383921293,
-    "colTransitions": -0.4223801328449683,
-    "wellDepth": -0.27054182855840314,
-    "lineClearValue": 0.2691450141912839
+    "aggregateHeight": -0.0377097546592488,
+    "holes": -0.7541950931849759,
+    "bumpiness": -0.0754195093184976,
+    "maxHeight": -0.0251398364394992,
+    "linesCleared": -0.25139836439499197,
+    "landingHeight": -0.0502796728789984,
+    "rowTransitions": -0.12569918219749598,
+    "colTransitions": -0.1005593457579968,
+    "wellDepth": 0,
+    "lineClearValue": 0.25139836439499197,
+    "cleanWellDepth": 0.25139836439499197,
+    "tetrisSetupProgress": 0.25139836439499197,
+    "tetrisReadyRows": 0.37709754659248795
   },
-  "objective": "score-rate-v2",
-  "meanScore": 3289243.3333333335,
+  "objective": "score-rate-v5",
+  "meanScore": 4501350,
   "evalMaxPieces": 5000,
-  "meanLines": 1998.0666666666666,
-  "meanHeight": 4.07848,
+  "meanLines": 1996.1,
+  "meanHeight": 5.355753333333333,
   "meanClearCounts": {
-    "singles": 1454.6,
-    "doubles": 264.76666666666665,
-    "triples": 4.6,
-    "tetrises": 0.03333333333333333
+    "singles": 498.6,
+    "doubles": 288.6333333333333,
+    "triples": 94.7,
+    "tetrises": 159.03333333333333
   },
-  "tetrisLineShare": 0.00006673117346768543,
+  "tetrisLineShare": 0.3186881084781992,
+  "strategyDiagnostics": {
+    "meanCleanWellDepth": 2.985373333333335,
+    "meanTetrisSetupProgress": 3.2962866666666386,
+    "meanTetrisReadyRows": 2.768206666666666
+  },
+  "survivalDiagnostics": {
+    "pieceCapGames": 30,
+    "gameoverGames": 0
+  },
   "evalGames": 30,
-  "gen": 40,
-  "searchDepth": 2,
-  "trainedAt": "2026-08-10T12:21:46.191Z"
+  "gen": -1,
+  "searchContract": "bag-expectimax-hold-v2",
+  "searchDepth": 4,
+  "rootBeamWidth": 64,
+  "childBeamWidth": 32,
+  "maxWorkUnits": 3584,
+  "budgetCorpus": "budget-corpus-v1",
+  "transpositionCacheEntries": 65536,
+  "placementCacheEntries": 16384,
+  "searchDiagnostics": {
+    "searchCalls": 207176,
+    "holdActions": 57176,
+    "holdRate": 0.2759779124995173,
+    "meanCompletedDepth": 1.915810711665444,
+    "minCompletedDepth": 1,
+    "completedDepthHistogram": [
+      0,
+      17442,
+      189734,
+      0,
+      0
+    ],
+    "totalWorkUnitsUsed": 742518784,
+    "meanWorkUnitsUsed": 3584,
+    "maxWorkUnitsUsed": 3584,
+    "budgetExhaustedSearches": 207176,
+    "budgetExhaustionRate": 1,
+    "placementEvaluationUnits": 627138288,
+    "chanceExpansionUnits": 63430918,
+    "cacheHitUnits": 51949578,
+    "expandedDecisionNodes": 31568958,
+    "expandedChanceNodes": 16605234,
+    "cacheHits": 49896867
+  },
+  "trainedAt": "2026-09-11T07:48:25.117Z"
 }

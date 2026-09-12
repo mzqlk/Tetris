@@ -489,14 +489,14 @@ describe('simulateGame', () => {
   }, SLOW);
 
   it.each([
-    [7, { lines: 6, score: 600, pieces: 20, meanHeight: 2.7 }],
-    [11, { lines: 6, score: 600, pieces: 20, meanHeight: 4.4 }],
-    [20260806, { lines: 6, score: 600, pieces: 20, meanHeight: 3.45 }],
+    [7, { lines: 6, score: 600, pieces: 20, meanHeight: 3.15 }],
+    [11, { lines: 6, score: 700, pieces: 20, meanHeight: 2.8 }],
+    [20260806, { lines: 4, score: 600, pieces: 20, meanHeight: 4.35 }],
   ])('keeps the bundled default model deterministic for seed %i', (seed, expected) => {
-    expect(DEFAULT_WEIGHTS.cleanWellDepth).toBe(0);
-    expect(DEFAULT_WEIGHTS.tetrisSetupProgress).toBe(0);
-    expect(DEFAULT_WEIGHTS.tetrisReadyRows).toBe(0);
-    expect(DEFAULT_WEIGHTS_META).toMatchObject({ version: 3, objective: 'score-rate-v2', gen: 40 });
+    expect(DEFAULT_WEIGHTS.cleanWellDepth).toBe(0.25139836439499197);
+    expect(DEFAULT_WEIGHTS.tetrisSetupProgress).toBe(0.25139836439499197);
+    expect(DEFAULT_WEIGHTS.tetrisReadyRows).toBe(0.37709754659248795);
+    expect(DEFAULT_WEIGHTS_META).toMatchObject({ version: 6, objective: 'score-rate-v5', gen: -1 });
     const result = simulateGame({
       weights: toVector(DEFAULT_WEIGHTS), seed, maxPieces: 20, search: TEST_SEARCH,
     });

@@ -31,14 +31,19 @@ export default function AiControls() {
 
   useAiPlayer({ enabled, speed, weights: active });
 
+  // A weight file carries `gen: -1` when it did not come out of CEM at all.
+  // Printing "gen -1" would undo the honesty that marker exists for, and
+  // falling through to "handcrafted" would name the Dellacherie priors.
+  const provenance = (gen: number) => (gen < 0 ? 'hand-tuned' : `gen ${gen}`);
+
   const source = usingRuntime
     // Height is shown alongside lines because lines alone saturate: any model
     // that survives its evaluation reports 0.4 x the piece cap, so two models
     // of quite different quality print the same line count.
-    ? `trained · gen ${runtime.gen} · ${Math.round(runtime.meanLines)} lines` +
+    ? `runtime · ${provenance(runtime.gen)} · ${Math.round(runtime.meanLines)} lines` +
       (runtime.meanHeight > 0 ? ` · height ${runtime.meanHeight.toFixed(1)}` : '')
-    : DEFAULT_WEIGHTS_META && DEFAULT_WEIGHTS_META.gen > 0
-      ? `bundled · gen ${DEFAULT_WEIGHTS_META.gen}`
+    : DEFAULT_WEIGHTS_META && DEFAULT_WEIGHTS_META.gen !== 0
+      ? `bundled · ${provenance(DEFAULT_WEIGHTS_META.gen)}`
       : 'bundled · handcrafted';
 
   return (
@@ -85,7 +90,7 @@ export default function AiControls() {
           onClick={() => setUseRuntime(true)}
           disabled={runtime === null}
         >
-          trained
+          runtime
         </button>
       </div>
       <div className={styles.source}>{source}</div>

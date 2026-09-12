@@ -1,6 +1,6 @@
 # Tetris AI 训练系统 — 交接文档
 
-**写于**：2026-07-28；**更新于**：2026-09-06（D1/D2 action-conditioned listwise 诊断已完结，裁决 FAIL；本次未运行训练、benchmark 或 paired benchmark，未改动任何已发布产物）
+**写于**：2026-07-28；**更新于**：2026-09-12（手调候选 T2 通过独立 paired 验收并已发布；已发布模型由 `score-rate-v2` gen-40 换为 `score-rate-v5` 手调 T2，本项目首次越过 20% 四消门）
 **当前状态的读取方式**：每次先运行 `git status` / `git log`，检查 `public/ai/` 产物与训练进程，再决定操作。旧 HEAD、未推送状态和固定测试数都只是历史快照，不是本交接的持久指令。
 **验证**：分别运行当前 `npm test`、`npm run lint`、`npm run build` 与 `npm run typecheck:train`；以实际输出为准。
 **当前 score-rate-v5 设计**：[`2026-08-14 bag-aware deterministic budget search design`](superpowers/specs/2026-08-14-bag-aware-deterministic-budget-search-design.md)
@@ -19,7 +19,7 @@
 
 当前实现契约为 **`score-rate-v5` / schema 6 / `bag-expectimax-hold-v2`**。搜索仅使用公开局面信息，采用标准 Hold、精确 bag chance、depth 4、beams 64/32、冻结 `maxWorkUnits = 3584` 与 `budget-corpus-v1`；fitness 仍严格为 `meanScore / scheduled maxPieces`。默认训练日志路径为 `public/ai/score-rate-v5/training-log.jsonl`。
 
-已发布模型保持 **version 3、`score-rate-v2` gen-40** 不变；历史产物保持原地未修改。本次交接未执行 search smoke、training、benchmark、paired acceptance、publication、push 或 browser/runtime acceptance，且未生成任何 v5 checkpoint、log、candidate 或权重文件。
+已发布模型于 2026-09-12 更新为 **version 6、`score-rate-v5`、手调 T2**（`gen: -1`，非训练产物），依据是独立 paired 验收四项全过；`score-rate-v2` gen-40 就此成为历史基线。详见下面的「2026-09-12 发布」一节。历史训练产物（`score-rate-v1`~`v5` 目录、D2 冻结源）保持原地未修改。
 
 代码与训练器的当前契约是 **`score-rate-v5`**：checkpoint schema version 6、`FEATURE_NAMES` 为精确 13 维且顺序不变。搜索契约为 `bag-expectimax-hold-v2`，只使用公开局面信息，采用标准 Hold、精确 bag chance、depth 4、beams 64/32、冻结预算 3584 与 `budget-corpus-v1`；仍在固定 piece schedule 下以
 
@@ -29,11 +29,64 @@ fitness = meanScore / maxPieces
 
 选择候选。分母是调度给每局的 `maxPieces`，不是候选实际存活的 pieces；提前死亡不会因为分母变小而得到虚高分。`lineClearValue` 继续表达引擎真实的非线性消行价值，三个新增特征连续表达干净四消井的深度、准备进度和完整行数。1/2/3/4 消直方图、四消消行占比、策略诊断、搜索诊断与存活诊断都不进入 fitness、精英排序或 CEM 分布更新。
 
-当前 tracked bundled 权重和 runtime 已发布权重仍是 **version 3、`score-rate-v2` 的 gen-40 模型**。2026-08-11 现场核验时，`src/ai/trained-weights.json` 与 `public/ai/best-weights.json` 的 SHA-256 均为 `062552496E7E1101502E62B8570DFDAF2A60B54EF4FEF1EA539723B910550D90`。加载这份十维模型时，代码仅在内存中对 v5 所需的三个尾维补 `0`；旧九维文件还会同时补 `lineClearValue = 0`，都不改写原文件。version 1–5 checkpoint/log（包括历史 v4 产物）不是 score-rate-v5 schema 6 可恢复或可追加产物。
+当前 tracked bundled 权重和 runtime 已发布权重是 **version 6、`score-rate-v5` 的手调 T2 模型**。2026-09-12 发布后现场核验，`src/ai/trained-weights.json` 与 `public/ai/best-weights.json` 的 SHA-256 均为 `B5D8E76DFE9D907260DE8B1B7AF7B9A9CE4760193B17053E0943EAC684B250B2`，与候选源文件逐字节相同；上一版 gen-40 十维模型的哈希是 `062552496E7E1101502E62B8570DFDAF2A60B54EF4FEF1EA539723B910550D90`。**注意 `core.autocrlf=true`**：git 里存的 blob 是 LF，全新 checkout 出来的工作副本会变成 CRLF，那时字节哈希与上面对不上——跨 checkout 核验请用 `git show HEAD:<path> | sha256sum`。加载旧十维文件时代码仅在内存中对三个尾维补 `0`，旧九维文件还会同时补 `lineClearValue = 0`，都不改写原文件。version 1–5 checkpoint/log（包括历史 v4 产物）不是 score-rate-v5 schema 6 可恢复或可追加产物。
 
-本次交付是**代码-only handoff**：实现期间没有运行训练、benchmark 或 paired benchmark，没有产出 `candidate-weights.json`，没有完成候选验收或发布，也没有进行浏览器/runtime 验收。`bench:paired` CLI 已实现，但本次没有运行；完整代码门只能证明实现契约，不能证明特征产生了训练信号、候选达标或模型可发布。
+（历史，已被取代）2026-09-06 那次是**代码-only handoff**：没有运行训练、benchmark 或 paired benchmark，没有产出 candidate，也没有发布。`bench:paired` CLI 当时已实现但未运行。这段话在 2026-09-12 起不再描述现状——paired 验收已跑完、模型已发布，见下一节。
 
-### 当前 gen-40 固定复评证据
+### 2026-09-12 发布：手调 T2，首次通过四消门
+
+**已发布模型现为手调候选 T2**（源文件 `public/ai/handtuned-tetris-T2-20260911/candidate-weights.json`，SHA-256 `B5D8E76DFE9D907260DE8B1B7AF7B9A9CE4760193B17053E0943EAC684B250B2`）。它**不是训练产物**：`gen: -1` 是诚实标记，权重由人手调出，CEM 未参与。
+
+#### 为什么是手调而不是训练
+
+2026-09-06~10 的 CEM 训练（gen 12→40，约 90 小时，12 workers）四消占比只有 **0.027%**、scoreRate 676.41，被 20% 四消门挡下。2026-09-11 的 spike 定位了原因：**不是搜索深度、不是特征、不是 fitness，是 CEM 卡在局部最优**。奖励是阶跃的——井挖到 1/2/3 层不给钱，只有满 4 层再等到 I 才付款，中间全是堆高与风险成本，高斯采样跨不过这道山谷。手调 20 分钟就到 31.87%。
+
+关键构造：`lineClearValue` 把 n 行映射到 `[1,3,5,8]`，所以 `w_linesCleared·n + w_lineClearValue·value(n)` 取 `(-1,+1)` 得 `{0,+1,+2,+4}`——单/双/三消不亏也不赚、四消独赚；再配强正的 `cleanWellDepth`/`tetrisSetupProgress`/`tetrisReadyRows` 与强负的 `holes`。取 `(-2,+1)`（`{-1,-1,-1,0}`，即"不到四消就别消"）的 T1 更教条，均值更低且遇到不配合的序列会掉到 10.83%。**"偏好但不禁止"优于"只等四消"。**
+
+#### 独立 paired 验收（唯一的验收依据）
+
+`seed 20260911`，与全部 500 个历史 seed（训练 gen 0-9、固定复评、历史 paired `20260803`、C0 `20260824`、D1 的 40 behavior + 320 label）以及调参用的 `20260910` 派生集合**零交集**。30 局 × 5000 手 × 2 个权重，`training/pairedBench.ts` 单线程串行，约 33 小时，由操作者执行。完整输出存于 `public/ai/handtuned-tetris-T2-20260911/paired-20260911.txt`；`public/ai/` 已 gitignore，所以 git 里的证据只有这份文档。
+
+| 门 | 判定 | 实测 |
+| --- | --- | --- |
+| `scoreQualified` | ✓ | 配对 scoreRate 差 95% 区间 `[+262.675, +267.877]`，均值 `+265.276` |
+| `tetrisQualified` | ✓ | 候选合计四消占比 `32.03%`，门限 20% |
+| `survivalQualified` | ✓ | 候选 30/30 pieceCap，基线 30/30 |
+| `pairedTetrisQualified` | ✓ | 配对四消占比差区间 `[+0.31471, +0.32593]`，均值 `+0.32032` |
+
+`accepted: true`。逐局 **30 胜 0 平 0 负**（两个指标都是）。基线四消占比是**精确的 0**：gen-40 在这 30 局共 150,000 个调度方块里一次四消都没打出来。从区间半宽反推，逐局 score-rate 差的样本标准差约 6.97，而均值 265.28。
+
+跨种子复现：污染过的复评上 `900.27 − 636.02 = +264.25`，独立种子上 `+265.28`，差 0.4%。
+
+#### 浏览器/runtime 验收（2026-09-12，已通过）
+
+`npm run build` 后 `vite preview` 起 `dist/`，用 Playwright 驱动真实 Chrome（headless）跑 90 秒 instant 自动游玩：
+
+- `/ai/best-weights.json` 返回 200，`dist/ai/best-weights.json` 哈希与已发布文件相同；控制台**没有** `[ai] … failed validation — falling back to built-in weights`。这条必须显式确认：`parseWeightsFile` 返回 `null` 时 `weights.ts` 会**静默**回退到 `HANDCRAFTED_WEIGHTS`，界面不会报错。
+- Weights 选择器停在 `runtime` 档（`usingRuntime === true`），说明驱动 AI 的确实是 fetch 来的发布文件而不是打包副本。
+- 说明文字显示 `runtime · hand-tuned · 1996 lines · height 5.4`。
+- 90 秒内消行 183 行 / 89 次消行事件，用页面内采样器按 `Δlines` 统计：单 37、双 26、三 10、**四消 16**（校验：`37+52+30+64 = 183`，无并档）。**浏览器内四消占比 34.97%**，与离线的 31.87% / 32.03% 同量级。最终 295,286 分 / level 15。
+
+唯一的控制台报错是 `/favicon.ico` 404——`index.html` 本来就没声明图标，`public/` 下只有 `ai/`。与本次发布无关，未处理。
+
+#### 必须诚实携带的限制
+
+- **T2 的"入选"曾用过固定复评种子。** 先在 800 手的其他种子上筛掉 T3，又用复评种子上的 4 局在 T1/T2 之间做选择。独立 paired 解毒的是"T2 够不够格"，**不是**"T2 是三个里最好的"。发布不需要最优，只需要合格且优于基线——但别把它讲成"最佳权重"。
+- **只有一个种子族的 30 个 piece schedule。** 搜索是确定性的，区间衡量的是 schedule 间差异而非运行噪声；跨种子族泛化未测。以约 38 个标准差的效应量看，种子族敏感性不是可信的替代解释，但它确实没被测过。
+- **基线是在当前 v5 契约（depth 4 / beams 64/32 / 预算 3584）下评的**，不是它原生的 `score-rate-v2` depth 2。这对"今天该发布什么"是正确口径，不等于 gen-40 在自己的训练契约下也这么差。
+- 候选自带诊断显示 `completedDepthHistogram = [0, 17442, 189734, 0, 0]`、`budgetExhaustionRate = 1`：3584 预算下实际几乎只跑满 depth 2，从没到 3/4。**31.87% 是在这个前提下拿到的**——深度不是当前瓶颈。
+
+#### 发布顺带改动
+
+`src/ai/simulate.test.ts` 的 `keeps the bundled default model deterministic` 是钉打包模型身份的回归测试，随发布更新（做法与上次发布 `99a796a` 一致）：三个尾维守卫由 `toBe(0)` 改为新模型的实际值，`DEFAULT_WEIGHTS_META` 由 `{version: 3, score-rate-v2, gen: 40}` 改为 `{version: 6, score-rate-v5, gen: -1}`，三个 seed 的金标准结果重新实测写入。**这些期望值是从实现测出来的，不是独立推导的**；该测试的用途是钉确定性，不是证明策略正确。
+
+`src/components/AiControls.tsx` 的模型来源标签也随发布修正。原逻辑会把 `gen: -1` 印成 `trained · gen -1`——正好抵消 `gen: -1` 这个诚实标记的用意——而回退分支的条件是 `gen > 0`，对 `-1` 为假，会落到 `bundled · handcrafted`，那是 Dellacherie 先验的标签而不是 T2。现在按 `gen < 0` 走 `hand-tuned`，并把运行时那一档的前缀与按钮由 `trained` 改为 `runtime`，与 `bundled` 成对。`weights.ts:188` 的 `integerAtLeast(d.gen, -1)` 本来就允许 `-1`，schema 侧无需改动。
+
+#### 剩余天花板
+
+消行数早已饱和（`meanLines = 1996.1`，理论上限 2000），唯一剩下的杠杆是每行单价。按 level-1 折算，T2 的消行得分 `311,026.67`，全四消天花板 `399,220`，即已吃到 **77.9%**。从 T2 播种再训 CEM 可作独立课题，但剩余空间只有约 22%，且会引入"成绩里多少是人类先验"的归因问题。
+
+### gen-40 固定复评证据（历史基线，2026-09-12 起不再是已发布模型）
 
 - 固定复评：30 局 × 5000 pieces、depth 2、`fixed-reevaluation-v1` 种子策略；gen-40 `meanScore = 3,289,243.33`、`scoreRate = 657.8487`、`meanHeight = 4.07848`。
 - 当时的 gen-20 已发布基线为 `meanScore = 3,104,830`、`scoreRate = 620.966`、`meanHeight = 3.35646`；gen-40 的固定复评 score rate 高约 5.61%，裁决为 `publish / higher-score`。
@@ -388,6 +441,9 @@ CEM 是搜索式演化，「模型」当前有 13 个浮点数，算力全花在
 - `training/pool.ts` 的 `'error'` 监听没有 `destroyed` 保护（`'exit'` 有）；在 Node 的 `terminate()` 语义下不可达，但属于不对称
 - 权重文件里的 `searchDepth` 元数据没有任何地方读取——它本来是为了防止「2 层练的权重拿去 1 层跑」这个已知失效模式
 - `simulate.ts` 的 `lockAndSpawn` 有一个不可达的 `preview ? ... : drawFromBag(state)` 兜底分支
+- 浏览器 `/favicon.ico` 404：`index.html` 没声明图标，`public/` 下只有 `ai/`。纯外观问题
+- **测试套件有 flake，失败集合每轮都不同。** 2026-09-12 两轮全量（一轮默认并发、一轮 `--maxWorkers=4`）失败集合不一致。稳定失败只有两个，都是既有且不要修的：`featureRepresentationChallengeGate > preserves the baseline package bytes`（package.json 字节断言，基线早于四个后加的 script，且 CRLF/LF 不一致）与 `featureRepresentationStructuralChallengeCorpus > discloses future I access as same-state-pair constant`。其余三个是满载下撞 5 s 默认超时：`simulate.test.ts > observes the first real pre-action decision`、`featureRepresentationStructuralChallengeBuilder > replays the frozen grammar`（实测 7242 ms）、`d2ShardedHeldOutListwise > takes over a dead lock with no predicate injected at all`。**这三个单独跑全过**——判断一个失败是不是真的，先隔离重跑那一个文件，不要按失败数对账
+- 默认并发下全量测试会 OOM（`FATAL ERROR: Zone Allocation failed`）。用 `--maxWorkers=4` 可跑完，代价是慢一点
 
 ---
 
@@ -396,10 +452,10 @@ CEM 是搜索式演化，「模型」当前有 13 个浮点数，算力全花在
 按价值排序：
 
 1. **先审计 Git、进程和全部 `public/ai/` 产物**——Git 干净不代表 ignored 产物没变；没有用户授权不要启动训练/benchmark，也不要归档、删除或覆盖产物。
-2. **把 gen-40 当作当前已发布基线，但不要把固定复评扩写成独立 paired 验收**——未来候选必须使用相同 seeds、depth、piece cap 的 paired 设计，且不能用训练 `bestScoreRate` 代替基线验收。
+2. **当前已发布基线是 2026-09-12 的手调 T2，不再是 gen-40**——未来候选必须与它做相同 seeds、depth、piece cap 的独立 paired 对比，且不能用训练 `bestScoreRate` 代替基线验收。注意新基线的 scoreRate 约 900、四消占比约 32%，门槛比 gen-40 时代高得多。
 3. **历史 v4 交接记录（不可作为当前指令）**：当时获准运行 v4 时须先明确 resume 或隔离新跑，默认 output dir 为 `public/ai/score-rate-v4/`；resume 仅可指向经完整校验的 score-rate-v4 schema 5 checkpoint。当前 v5 不恢复或追加此类产物。
 4. 运行当前 `npm run lint`、`npm test`、`npm run typecheck:train` 和 `npm run build`；不要继承旧测试数或成功结论。
 5. **按独立授权门推进**——两代信号 smoke、正式训练、固定复评 candidate 产出、独立 paired 验收、发布、push 与浏览器/runtime 验收不能合并；`bench:paired` CLI 已存在，但本次未运行。
 6. **action-conditioned 假设已按 §10.3(a) 关闭，不要重跑 D2**——也不要把它写成"已被证伪"。若要问一个**新的**问题，先修测量再谈假设：需要一个称职玩家真的会死的 horizon（抬 cap 无效）、按可达范围重新校准的阈值、以及事前而非事后的效力论证；这些都要走自己的设计门。
-6. 浏览器验收时区分 bundled 与 runtime：bundled 来自 tracked JSON，runtime 来自 `/ai/best-weights.json`；二者可以同内容但来源标签不同。当前 gen-40 v2 只在内存中补三个 v3 零值，未经过本次浏览器/runtime 验收。
+6. 浏览器验收时区分 bundled 与 runtime：bundled 来自 tracked JSON，runtime 来自 `/ai/best-weights.json`；二者可以同内容但来源标签不同。2026-09-12 的手调 T2 已完成浏览器/runtime 验收（见 §1）；核验时必须显式确认控制台没有 fallback 警告，因为 `parseWeightsFile` 失败是静默回退。
 7. 让 `searchDepth` 元数据真正起作用：权重文件的深度与 UI 当前深度不一致时给出提示。
